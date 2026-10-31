@@ -42,11 +42,16 @@ class MockUpstream:
                              + b"\n".join(f"{k}: {v}".encode() for k, v in request.headers.items()) + b"\n\n" + body)
         if request.url.path == "/v1/messages/count_tokens":
             return JSONResponse({"input_tokens": 42})
-        if request.url.path != "/v1/messages":
+        if request.url.path not in ("/v1/messages", "/v1/responses"):
             return JSONResponse({"ok": True})
         req = json.loads(body)
         found = PLACEHOLDER.findall(body.decode())
         ph = f"KEEPMUM_{found[0][0]}_{found[0][1]}" if found else "none"
+        if request.url.path == "/v1/responses":
+            if req.get("stream"):
+                return Response(self.responses_stream(ph), media_type="text/event-stream")
+            return JSONResponse({"id": "resp_selftest", "object": "response", "status": "completed",
+                                 "output": self.responses_items(ph)})
         if req.get("stream"):
             return Response(self.stream(ph), media_type="text/event-stream")
         return JSONResponse({
@@ -83,6 +88,46 @@ class MockUpstream:
         out.append(ev({"type": "message_stop"}))
         return "".join(out)
 
+    @staticmethod
+    def responses_items(ph: str) -> list[dict]:
+        """A Responses API answer: text, a function call, an MCP call and a shell call, each
+        holding the placeholder."""
+        return [
+            {"type": "message", "id": "msg_1", "role": "assistant", "content": [{"type": "output_text", "text": f"The token {ph} is set."}]},
+            {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "write_file",
+             "arguments": json.dumps({"path": "/tmp/x", "content": f"TOKEN={ph}\n"})},
+            {"type": "mcp_call", "id": "mcp_1", "server_label": "web", "name": "fetch",
+             "arguments": json.dumps({"url": f"https://example.com/?t={ph}"})},
+            {"type": "shell_call", "id": "sh_1", "call_id": "call_2", "action": {"commands": [f"echo {ph}"]}},
+        ]
+
+    @classmethod
+    def responses_stream(cls, ph: str) -> str:
+        """The same answer streamed, the placeholder split across text and argument deltas."""
+        def ev(data):
+            return f"event: {data['type']}\ndata: {json.dumps(data)}\n\n"
+
+        msg, fn, mcp, shell = cls.responses_items(ph)
+        cut = len(ph) // 2
+        out = [ev({"type": "response.created", "response": {"id": "resp_s", "output": []}}),
+               ev({"type": "response.output_item.added", "output_index": 0, "item": {**msg, "content": []}})]
+        for part in (f"The token {ph[:cut]}", f"{ph[cut:]} is set."):
+            out.append(ev({"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": part}))
+        out += [ev({"type": "response.output_text.done", "item_id": "msg_1", "output_index": 0, "content_index": 0,
+                    "text": msg["content"][0]["text"]}),
+                ev({"type": "response.output_item.done", "output_index": 0, "item": msg})]
+        for i, item, kind in ((1, fn, "function_call"), (2, mcp, "mcp_call")):
+            args = item["arguments"]
+            out.append(ev({"type": "response.output_item.added", "output_index": i, "item": {**item, "arguments": ""}}))
+            for part in (args[: len(args) // 2], args[len(args) // 2:]):
+                out.append(ev({"type": f"response.{kind}_arguments.delta", "item_id": item["id"], "output_index": i, "delta": part}))
+            out += [ev({"type": f"response.{kind}_arguments.done", "item_id": item["id"], "output_index": i, "arguments": args}),
+                    ev({"type": "response.output_item.done", "output_index": i, "item": item})]
+        out += [ev({"type": "response.output_item.added", "output_index": 3, "item": shell}),
+                ev({"type": "response.output_item.done", "output_index": 3, "item": shell}),
+                ev({"type": "response.completed", "response": {"id": "resp_s", "status": "completed", "output": [msg, fn, mcp, shell]}})]
+        return "".join(out)
+
 
 def _forms(canary: str) -> list[bytes]:
     return [canary.encode(), json.dumps(canary).strip('"').encode(), base64.b64encode(canary.encode()),
@@ -94,7 +139,7 @@ async def run(detector, verbose: bool = True) -> bool:
     mock = MockUpstream()
     upstream = httpx.AsyncClient(transport=httpx.ASGITransport(app=mock.app), base_url="http://upstream.test")
     proxy = Proxy(Redactor(detector, Vault(secrets.token_bytes(32))), upstream="http://upstream.test",
-                  client=upstream, stats_token="selftest")
+                  client=upstream, stats_token="selftest", openai_upstream="http://upstream.test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
     auth = {"x-api-key": "sk-ant-selftest-not-a-key", "anthropic-version": "2023-06-01"}
     body = {
@@ -129,6 +174,33 @@ async def run(detector, verbose: bool = True) -> bool:
     check("streamed Write input restored", canary in streamed.get(1, ""))
     check("streamed WebFetch input keeps the placeholder", canary not in streamed.get(2, canary) and PLACEHOLDER.search(streamed.get(2, "")))
 
+    # The Responses API (Codex, pi, opencode): a zstd body in two frames, as Codex may send it.
+    import zstandard
+
+    oauth = {"authorization": "Bearer sk-selftest-not-a-key"}
+    rbody = {"model": "gpt-5.5", "instructions": f"Environment: GITHUB_TOKEN={canary}",
+             "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": f"Why does {canary} fail?"}]}]}
+    raw = json.dumps(rbody).encode()
+    z = zstandard.ZstdCompressor()
+    r = await client.post("/openai/v1/responses", content=z.compress(raw[: len(raw) // 2]) + z.compress(raw[len(raw) // 2:]),
+                          headers={**oauth, "content-type": "application/json", "content-encoding": "zstd"})
+    items = r.json().get("output", []) if r.status_code == 200 else [{}] * 4
+    check("Responses API: zstd request in two frames forwarded (200)", r.status_code == 200)
+    check("Responses API: text restored", canary in json.dumps(items[0]))
+    check("Responses API: function call restored", canary in items[1].get("arguments", ""))
+    check("Responses API: MCP call keeps the placeholder", canary not in items[2].get("arguments", canary)
+          and PLACEHOLDER.search(items[2].get("arguments", "")))
+    check("Responses API: shell call restored", canary in json.dumps(items[3].get("action", {})))
+    r = await client.post("/openai/v1/responses", json={**rbody, "stream": True}, headers=oauth)
+    events = _responses_events(r.text) if r.status_code == 200 else []
+    deltas = "".join(e.get("delta", "") for e in events if e.get("type") == "response.output_text.delta")
+    done = {e["type"]: e for e in events if e.get("type", "").endswith("_arguments.done")}
+    check("Responses API: streamed text restored (placeholder split across deltas)", canary in deltas)
+    check("Responses API: streamed function call restored",
+          canary in done.get("response.function_call_arguments.done", {}).get("arguments", ""))
+    check("Responses API: streamed MCP call keeps the placeholder",
+          canary not in done.get("response.mcp_call_arguments.done", {}).get("arguments", canary))
+
     sent = len(mock.received)
     r = await client.post("/v1/messages", content=b'{"messages": [' + canary.encode(), headers=auth)
     check("malformed JSON rejected, not sent", r.status_code == 400 and len(mock.received) == sent)
@@ -162,6 +234,10 @@ async def run(detector, verbose: bool = True) -> bool:
         for name, ok in results:
             print(f"  {'✓' if ok else '✗'} {name}")
     return all(ok for _, ok in results)
+
+
+def _responses_events(text: str) -> list[dict]:
+    return [json.loads(line[5:].strip()) for line in text.splitlines() if line.startswith("data:")]
 
 
 def _assemble_stream(text: str) -> dict[int, str]:
