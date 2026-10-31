@@ -77,5 +77,5 @@ cat > "$APP/Contents/Library/LaunchAgents/app.keepmum.agent.plist" <<PLIST
 </plist>
 PLIST
 
-"$py" -I -B -c 'import keepmum, keepmum.cli, keepmum.proxy, keyring, uvicorn, httpx; print("runtime ok:", keepmum.__version__)'
+"$py" -I -B -c 'import keepmum, keepmum.cli, keepmum.proxy, uvicorn, httpx; print("runtime ok:", keepmum.__version__)'
 du -sh "$RES/python" "$RES/bin"

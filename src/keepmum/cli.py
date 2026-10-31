@@ -10,13 +10,6 @@ import typer
 app = typer.Typer(help="Local secret and PII redaction for Claude Code.", no_args_is_help=True, add_completion=False)
 
 
-@app.callback()
-def main() -> None:
-    from . import legacy
-
-    legacy.migrate_quietly()
-
-
 @app.command()
 def scan(
     paths: list[str] = typer.Argument(..., help="Files to scan, or - for stdin."),

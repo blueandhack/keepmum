@@ -15,22 +15,15 @@ from collections import Counter, deque
 from pathlib import Path
 from urllib.parse import urlsplit
 
-_IMPORT_HOME = Path.home()
-TOKEN_FILE = _IMPORT_HOME / ".config" / "keepmum" / "stats-token"
-# Every request's event (counts only), kept across restarts for the app's Activity page.
-HISTORY_FILE = _IMPORT_HOME / ".config" / "keepmum" / "history.jsonl"
 HISTORY_KEEP = 20_000  # events kept when the file is compacted
 
 
 def token_file() -> Path:
-    if TOKEN_FILE != _IMPORT_HOME / ".config" / "keepmum" / "stats-token":
-        return TOKEN_FILE
     return Path.home() / ".config" / "keepmum" / "stats-token"
 
 
 def history_file() -> Path:
-    if HISTORY_FILE != _IMPORT_HOME / ".config" / "keepmum" / "history.jsonl":
-        return HISTORY_FILE
+    """Every request's event (counts only), kept across restarts for the app's Activity page."""
     return Path.home() / ".config" / "keepmum" / "history.jsonl"
 
 

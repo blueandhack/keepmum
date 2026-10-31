@@ -16,20 +16,11 @@ from pathlib import Path
 from .config import Config
 from .proxy import Proxy
 
-_IMPORT_HOME = Path.home()
-RUNTIME_FILE = _IMPORT_HOME / ".config" / "keepmum" / "runtime.json"
-LOG_FILE = _IMPORT_HOME / ".config" / "keepmum" / "keepmum.log"
-
-
 def runtime_file() -> Path:
-    if RUNTIME_FILE != _IMPORT_HOME / ".config" / "keepmum" / "runtime.json":
-        return RUNTIME_FILE
     return Path.home() / ".config" / "keepmum" / "runtime.json"
 
 
 def log_file() -> Path:
-    if LOG_FILE != _IMPORT_HOME / ".config" / "keepmum" / "keepmum.log":
-        return LOG_FILE
     return Path.home() / ".config" / "keepmum" / "keepmum.log"
 
 # Settings or environment that would send Claude Code's traffic somewhere other than keepmum.
@@ -311,9 +302,6 @@ def wrap_main() -> int:
 
     if len(sys.argv) < 2:
         return refuse("usage: keepmum-claude-wrapper <claude binary> [args...]")
-    from . import legacy
-
-    legacy.migrate_quietly()
     command = sys.argv[1:]
     try:
         cfg = load()

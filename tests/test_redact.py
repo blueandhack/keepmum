@@ -13,10 +13,10 @@ from keepmum.detect.pipeline import Pipeline
 from keepmum.detect.rules import RulesDetector
 from keepmum.redact import Redactor
 from keepmum.restore import restore_text
-from keepmum.vault import PLACEHOLDER, Vault, _salt_from_file
+from keepmum.vault import PLACEHOLDER, Vault, install_salt, salt_file
 
 ROOT = Path(__file__).resolve().parents[1]
-SALT = bytes(range(32))  # fixed test salt; real installs use the Keychain
+SALT = bytes(range(32))  # fixed test salt; real installs use ~/.config/keepmum/salt
 # Synthetic only: a random string in GitHub's token format.
 FAKE_TOKEN = "ghp_" + "Zq8vX2mN4pL7kR9tY3wB6cF1hJ5dG0sAe7Qw"
 
@@ -117,11 +117,11 @@ def test_vault_never_shows_values():
     assert FAKE_TOKEN not in repr(v) and FAKE_TOKEN not in str(v)
 
 
-def test_salt_file_is_private(tmp_path):
-    path = tmp_path / "keepmum" / "salt"
-    salt = _salt_from_file(path)
-    assert len(salt) == 32 and _salt_from_file(path) == salt
-    assert path.stat().st_mode & 0o777 == 0o600
+def test_salt_file_is_private(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    salt = install_salt()
+    assert len(salt) == 32 and install_salt() == salt
+    assert salt_file().stat().st_mode & 0o777 == 0o600
 
 
 def test_known_values_mask_later_occurrences():

@@ -20,7 +20,6 @@ from keepmum.vault import Vault
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(launch, "RUNTIME_FILE", tmp_path / ".config" / "keepmum" / "runtime.json")
     for k in launch.BYPASS_KEYS:
         monkeypatch.delenv(k, raising=False)
     return tmp_path
@@ -116,7 +115,7 @@ def test_keepmum_claude_runs_claude_through_the_proxy(home, tmp_path, monkeypatc
     assert out["base"].startswith("http://127.0.0.1:") and out["args"] == ["-p", "hello", "--model", "x"]
     assert canary in out["reply"]["content"][0]["text"]  # restored on the way back
     assert not any(canary.encode() in b for b in mock.received)  # never sent upstream
-    assert not launch.RUNTIME_FILE.exists()  # cleaned up when Claude exits
+    assert not launch.runtime_file().exists()  # cleaned up when Claude exits
 
 
 def test_runtime_file_is_private_while_running(home):
@@ -126,13 +125,13 @@ def test_runtime_file_is_private_while_running(home):
     server = launch.BackgroundServer(proxy)
     server.start()
     try:
-        info = json.loads(launch.RUNTIME_FILE.read_text())
+        info = json.loads(launch.runtime_file().read_text())
         assert info["port"] == server.port and info["pid"] == os.getpid()
-        assert launch.RUNTIME_FILE.stat().st_mode & 0o777 == 0o600
+        assert launch.runtime_file().stat().st_mode & 0o777 == 0o600
         assert httpx.get(f"http://127.0.0.1:{server.port}/_keepmum/health").json() == {"ok": True}
     finally:
         server.stop()
-    assert not launch.RUNTIME_FILE.exists()
+    assert not launch.runtime_file().exists()
 
 
 WRAPPED_CLAUDE = """#!{python}
@@ -160,7 +159,7 @@ def wrapper_env(tmp_path, monkeypatch):
     from keepmum.detect.pfserve import find_binary, find_model
 
     model_env = {k: str(v) for k, v in (("KEEPMUM_PF_SERVE", find_binary()), ("KEEPMUM_PF_MODEL", find_model())) if v}
-    monkeypatch.setattr(launch, "RUNTIME_FILE", tmp_path / "test-runtime.json")
+    monkeypatch.setenv("HOME", str(tmp_path))  # the mock upstream's runtime.json goes here
     mock = selftest.MockUpstream()
     upstream = launch.BackgroundServer(_App(mock.app))
     upstream.start()

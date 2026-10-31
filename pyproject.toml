@@ -7,7 +7,6 @@ requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
     "typer>=0.12",
-    "keyring>=25",  # install salt in the macOS Keychain (Security framework, not the `security` CLI)
     "starlette>=0.45",
     "uvicorn>=0.32",
     "httpx>=0.28",

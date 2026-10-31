@@ -54,10 +54,6 @@ keepmum doctor                                # every line should be ✓
 keepmum selftest                              # sends a canary secret through keepmum to a local mock; fails if it leaks
 ```
 
-### Coming from sotto
-
-keepmum was called sotto before its first release. The first `keepmum` command moves `~/.config/sotto` and `~/.local/share/sotto` (settings, history, the placeholder key and the model) to keepmum's folders, and renames what `sotto protect` wrote into the Codex, pi and opencode configs. Remove the old command with `uv tool uninstall sotto`, and quit and delete Sotto.app if you built it.
-
 ## Use
 
 ### In the terminal

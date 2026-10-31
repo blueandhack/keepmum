@@ -85,7 +85,7 @@ def test_our_own_url_is_not_a_bypass(claude_dir, tmp_path):
 
 
 def test_upstream_pointing_at_ourselves_is_dropped(tmp_path, monkeypatch):
-    monkeypatch.setattr(launch, "RUNTIME_FILE", tmp_path / "runtime.json")
+    monkeypatch.setenv("HOME", str(tmp_path))
     cfg = config_mod.load(tmp_path / "none.toml")
     proxy = launch.build_proxy(cfg, rules_only=True, upstream=f"http://127.0.0.1:{cfg.port}")
     assert proxy.upstream == cfg.upstream

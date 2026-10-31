@@ -20,57 +20,15 @@ from pathlib import Path
 
 from .detect import TYPES
 
-KEYCHAIN_SERVICE = "sotto"  # where versions named sotto, before the salt file, kept it
-KEYCHAIN_ACCOUNT = "install-salt"
-_IMPORT_HOME = Path.home()
-SALT_FILE = _IMPORT_HOME / ".config" / "keepmum" / "salt"
-
 
 def salt_file() -> Path:
-    if SALT_FILE != _IMPORT_HOME / ".config" / "keepmum" / "salt":
-        return SALT_FILE
     return Path.home() / ".config" / "keepmum" / "salt"
+
 
 # Known values shorter than this are not re-masked by exact match: too likely to occur by chance.
 MIN_KNOWN = 4
 
 PLACEHOLDER = re.compile(r"KEEPMUM_(" + "|".join(TYPES) + r")_([0-9a-f]{8}(?:[0-9a-f]{4})?)")
-
-
-def _salt_from_file(path: Path, initial: bytes | None = None) -> bytes:
-    if path.exists():
-        return bytes.fromhex(path.read_text().strip())
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    salt = initial or secrets.token_bytes(32)
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:  # another keepmum created it first: use theirs
-        return bytes.fromhex(path.read_text().strip())
-    with os.fdopen(fd, "w") as f:
-        f.write(salt.hex())
-    return salt
-
-
-def _keychain_usable() -> bool:
-    """Whether the login Keychain may be used, without ever showing a Keychain dialog.
-
-    The Keychain belongs to the real user; with HOME pointed elsewhere (tests, sandboxes)
-    macOS cannot find it and would offer to "reset to defaults". keepmum never lets the
-    Security framework prompt: if the Keychain cannot be used silently, it uses the file.
-    """
-    import ctypes
-    import ctypes.util
-    import pwd
-
-    try:
-        real_home = pwd.getpwuid(os.getuid()).pw_dir
-        if os.path.realpath(Path.home()) != os.path.realpath(real_home):
-            return False
-        security = ctypes.CDLL(ctypes.util.find_library("Security"))
-        security.SecKeychainSetUserInteractionAllowed(ctypes.c_bool(False))
-        return True
-    except Exception:
-        return False
 
 
 def install_salt() -> bytes:
@@ -79,22 +37,20 @@ def install_salt() -> bytes:
     Every process must use the same salt: a placeholder made by one (the app's service, `keepmum
     claude`, the VS Code wrapper) is only restored by a process that derives the same one. The
     Keychain cannot be shared silently, since an item is readable without a prompt only by the
-    program that created it, and each install of keepmum is a different program. A salt that
-    earlier versions kept only in the Keychain is copied to the file once, when readable.
+    program that created it, and each install of keepmum is a different program.
     """
     path = salt_file()
     if path.exists():
-        return _salt_from_file(path)
-    legacy = None
-    if _keychain_usable():
-        try:
-            import keyring
-
-            stored = keyring.get_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-            legacy = bytes.fromhex(stored) if stored else None
-        except Exception:
-            legacy = None
-    return _salt_from_file(path, legacy)
+        return bytes.fromhex(path.read_text().strip())
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    salt = secrets.token_bytes(32)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:  # another keepmum created it first: use theirs
+        return bytes.fromhex(path.read_text().strip())
+    with os.fdopen(fd, "w") as f:
+        f.write(salt.hex())
+    return salt
 
 
 class Vault:

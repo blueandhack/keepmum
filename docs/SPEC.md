@@ -86,7 +86,7 @@ Every sensitive value becomes a deterministic placeholder, so the same secret al
 - `KEEPMUM_<TYPE>_<id>`, for example `KEEPMUM_SECRET_7f3a9c2e` or `KEEPMUM_EMAIL_01b44d90`. It looks like an identifier, so Claude copies it verbatim instead of "fixing" it.
 - `<id>` = first 8 hex chars of HMAC-SHA256(install salt, type + value). On a collision, extend to 12 chars.
 - Types: `SECRET`, `PERSON`, `EMAIL`, `PHONE`, `ADDRESS`, `ACCOUNT`, `URL`, `DATE`.
-- The install salt is generated once and stored in `~/.config/keepmum/salt` (mode 0600). It was kept in the macOS Keychain until Oct 26, 2026, but a Keychain item is readable without a prompt only by the program that created it, so the app, the CLI and the VS Code wrapper ended up with different salts, and a placeholder made by one could not be restored by another. A Keychain-only salt is copied to the file once.
+- The install salt is generated once and stored in `~/.config/keepmum/salt` (mode 0600). It was kept in the macOS Keychain until Oct 26, 2026, but a Keychain item is readable without a prompt only by the program that created it, so the app, the CLI and the VS Code wrapper ended up with different salts, and a placeholder made by one could not be restored by another.
 
 **Vault**
 

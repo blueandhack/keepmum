@@ -1,6 +1,5 @@
 """Tests run in a HOME of their own, so they never write the developer's salt, history or
-settings, and never move their sotto folders. pf-serve and the model are still found where
-this Mac keeps them, read only."""
+settings. pf-serve and the model are still found where this Mac keeps them, read only."""
 
 import os
 import tempfile
