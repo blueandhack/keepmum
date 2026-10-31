@@ -59,16 +59,25 @@ def _config():
         raise typer.Exit(2)
 
 
-def _audit_config(path, command: str) -> None:
-    """Record a settings change in the audit log, as made by `command`."""
+def _update_config(path, section: str, key: str, value, command: str) -> None:
+    """Write a setting and record its audit entry under the audit lock, so a running proxy polling
+    the file cannot record the change first as 'config file'."""
     from .audit import AuditLog, caller
-    from .config import ConfigError, load
+    from .config import ConfigError, load, set_value
 
+    log = AuditLog()
     try:
-        cfg = load(path)
-    except ConfigError:
-        return
-    AuditLog(keep_days=cfg.audit_keep_days).note_config(cfg, caller(command))
+        with log._locked():
+            set_value(section, key, value, path)
+            try:
+                cfg = load(path)
+            except ConfigError:
+                return
+            log.keep_days = cfg.audit_keep_days
+            log._note_config_unlocked(cfg, caller(command))
+    except OSError:
+        # Auditing never blocks a settings write: if only the lock/audit failed, ensure config wrote.
+        set_value(section, key, value, path)
 
 
 def _pipeline_or_exit(pii: bool, rules_only: bool, who: str):
@@ -289,16 +298,15 @@ def protect(
 @app.command()
 def observe(action: str = typer.Argument("status", help="on, off, or status")) -> None:
     """Observe only (on): count what would be masked, but send every request unchanged. Off: mask."""
-    from .config import ConfigError, set_detect_flag
+    from .config import ConfigError
 
     cfg = _config()
     if action in ("on", "off"):
         try:
-            set_detect_flag("observe", action == "on", cfg.path)
+            _update_config(cfg.path, "detect", "observe", action == "on", f"keepmum observe {action}")
         except (ConfigError, OSError) as e:
             typer.echo(f"keepmum observe: {e}", err=True)
             raise typer.Exit(1)
-        _audit_config(cfg.path, f"keepmum observe {action}")
         on = action == "on"
     elif action == "status":
         on = cfg.observe
@@ -315,7 +323,7 @@ def observe(action: str = typer.Argument("status", help="on, off, or status")) -
 def model(action: str = typer.Argument("status", help="on, off, or status")) -> None:
     """The local model after the rules (on, the default), or the rules alone (off): faster and about
     1.7 GB lighter, but they find only values with a known shape or a telling name."""
-    from .config import ConfigError, set_detect_flag
+    from .config import ConfigError
     from .detect.pfserve import find_binary, find_model
 
     cfg = _config()
@@ -324,11 +332,10 @@ def model(action: str = typer.Argument("status", help="on, off, or status")) -> 
         raise typer.Exit(2)
     if action in ("on", "off"):
         try:
-            set_detect_flag("model", action == "on", cfg.path)
+            _update_config(cfg.path, "detect", "model", action == "on", f"keepmum model {action}")
         except (ConfigError, OSError) as e:
             typer.echo(f"keepmum model: {e}", err=True)
             raise typer.Exit(1)
-        _audit_config(cfg.path, f"keepmum model {action}")
         on = action == "on"
     elif action == "status":
         on = cfg.model
@@ -351,7 +358,7 @@ def types(
     """Which types are masked. `pass` lets a type through unmasked (e.g. names); `mask` masks it again."""
     import json
 
-    from .config import ConfigError, set_value
+    from .config import ConfigError
     from .detect import TYPES
 
     cfg = _config()
@@ -367,11 +374,10 @@ def types(
     if action != "list":
         passed = passed | set(wanted) if action == "pass" else passed - set(wanted)
         try:
-            set_value("detect", "pass", [t for t in TYPES if t in passed], cfg.path)
+            _update_config(cfg.path, "detect", "pass", [t for t in TYPES if t in passed], f"keepmum types {action}")
         except (ConfigError, OSError) as e:
             typer.echo(f"keepmum types: {e}", err=True)
             raise typer.Exit(1)
-        _audit_config(cfg.path, f"keepmum types {action}")
     personal = [t for t in TYPES if t != "SECRET"]
     state = {t: ("pass" if t in passed else "mask" if t == "SECRET" or cfg.pii else "off: personal data is off")
              for t in TYPES}
@@ -414,14 +420,13 @@ def rules_list(as_json: bool = typer.Option(False, "--json", help="Print JSON.")
 
 
 def _save_rules(cfg, section: str, key: str, value, command: str) -> None:
-    from .config import ConfigError, set_value
+    from .config import ConfigError
 
     try:
-        set_value(section, key, value, cfg.path)
+        _update_config(cfg.path, section, key, value, f"keepmum rules {command}")
     except (ConfigError, OSError) as e:
         typer.echo(f"keepmum rules: {e}", err=True)
         raise typer.Exit(1)
-    _audit_config(cfg.path, f"keepmum rules {command}")
     typer.echo("saved; running proxies apply it on their next request", err=True)
 
 

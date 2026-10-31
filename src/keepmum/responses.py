@@ -47,10 +47,16 @@ def restore_item(item, vault: Vault, policy: dict = DEFAULT_POLICY, counts: Coun
         note_tool(counts, item.get("name", ""), policy, item["input"])
         if tool_policy(item.get("name", ""), policy) == "restore":
             return {**item, "input": restore_text(item["input"], vault, counts)}
-    if kind == "local_shell_call":
-        note_tool(counts, "local_shell", policy, item.get("action"))
-    if kind == "local_shell_call" and tool_policy("local_shell", policy) == "restore":
-        return {**item, "action": _values(item.get("action"), vault, counts)}
+    if kind in ("local_shell_call", "shell_call"):
+        tool = kind.removesuffix("_call")
+        note_tool(counts, tool, policy, item.get("action"))
+        if tool_policy(tool, policy) == "restore":
+            return {**item, "action": _values(item.get("action"), vault, counts)}
+    if kind == "mcp_call" and isinstance(item.get("arguments"), str):
+        label = item.get("server_label") or ""
+        fn = item.get("name") or ""
+        mcp_name = f"mcp__{label}__{fn}" if label else f"mcp__{fn}"
+        return {**item, "arguments": _restore_args(item["arguments"], mcp_name, vault, policy, counts)}
     return item
 
 
@@ -108,17 +114,22 @@ class ResponsesStreamRestorer(StreamRestorer):
 
         if kind == "response.output_item.added":
             item = data.get("item") or {}
-            if item.get("type") in ("function_call", "custom_tool_call"):
-                self._calls[item.get("id")] = {"name": item.get("name", ""), "parts": [], "last": None}
+            if item.get("type") in ("function_call", "custom_tool_call", "mcp_call"):
+                label = item.get("server_label") or ""
+                fn = item.get("name", "")
+                tool_name = (f"mcp__{label}__{fn}" if label else f"mcp__{fn}") if item.get("type") == "mcp_call" else fn
+                self._calls[item.get("id")] = {"name": tool_name, "parts": [], "last": None}
             return self._emit(name, {**data, "item": restore_item(item, v, p, again)})
-        if kind in ("response.function_call_arguments.delta", "response.custom_tool_call_input.delta"):
-            call = self._calls.setdefault(data.get("item_id"), {"name": "", "parts": [], "last": None})
+        if kind in ("response.function_call_arguments.delta", "response.custom_tool_call_input.delta",
+                    "response.mcp_call_arguments.delta"):
+            call = self._calls.setdefault(data.get("item_id"), {"name": "mcp__" if "mcp_call" in kind else "", "parts": [], "last": None})
             call["parts"].append(data.get("delta", ""))
             call["last"] = data
             return b""
-        if kind in ("response.function_call_arguments.done", "response.custom_tool_call_input.done"):
+        if kind in ("response.function_call_arguments.done", "response.custom_tool_call_input.done",
+                    "response.mcp_call_arguments.done"):
             field = "arguments" if "arguments" in kind else "input"
-            call = self._calls.pop(data.get("item_id"), {"name": "", "parts": [], "last": None})
+            call = self._calls.pop(data.get("item_id"), {"name": "mcp__" if "mcp_call" in kind else "", "parts": [], "last": None})
             whole = data.get(field) if isinstance(data.get(field), str) else "".join(call["parts"])
             if field == "arguments":
                 whole = _restore_args(whole, call["name"], v, p, c)
@@ -138,7 +149,9 @@ class ResponsesStreamRestorer(StreamRestorer):
                 return self._emit(name, {**data, "part": {**part, "text": restore_text(part["text"], v, again)}})
             return raw
         if kind == "response.output_item.done":
-            return self._emit(name, {**data, "item": restore_item(data.get("item"), v, p, again)})
+            item = data.get("item")
+            item_counts = c if isinstance(item, dict) and item.get("type") in ("local_shell_call", "shell_call") else again
+            return self._emit(name, {**data, "item": restore_item(item, v, p, item_counts)})
         if kind in ("response.completed", "response.done", "response.incomplete"):
             resp = data.get("response")
             if isinstance(resp, dict):

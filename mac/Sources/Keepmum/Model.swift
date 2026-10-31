@@ -10,7 +10,7 @@ struct Detection: Decodable, Sendable {
         var n: Int
         /// A built-in rule's type (SECRET, EMAIL…); nil for your own rules and older services.
         var type: String?
-        var id: String { rule }
+        var id: String { "\(user):\(rule)" }
     }
     var funnel: [String: Int] = [:]
     var types: [String: Stages] = [:]
@@ -96,7 +96,7 @@ struct Snapshot: Decodable, Sendable {
         /// Which coding agent sent it, and which provider it went to (absent in old history).
         var client: String? = nil
         var provider: String? = nil
-        var id: Double { ts }
+        var id: String { "\(ts):\(path):\(outcome):\(status)" }
 
         enum Kind: String, CaseIterable { case masked, clean, blocked, observed }
         /// Matches `event_kind` in keepmum's stats.py.
@@ -131,6 +131,7 @@ struct Snapshot: Decodable, Sendable {
     var modeLabel: String {
         switch mode {
         case "claude": "keepmum claude"
+        case "codex": "keepmum codex"
         case "vscode": "VS Code"
         case "serve": "keepmum serve"
         default: "—"
@@ -194,6 +195,7 @@ final class StatsStore {
     private var task: Task<Void, Never>?
     private let home = FileManager.default.homeDirectoryForCurrentUser
     private var lastEventTs: Double = 0
+    var configuredPort = 7788
     private(set) var port = 7788
 
     func start() {
@@ -224,9 +226,11 @@ final class StatsStore {
             flows = SampleFeed.flows(window: flowWindow)
             return
         }
+        port = discoverPort()
         guard let token = try? String(contentsOf: home.appending(path: ".config/keepmum/stats-token"), encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines) else { return }
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/_keepmum/flows?window=\(Int(flowWindow))")!)
+            .trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty,
+            let url = URL(string: "http://127.0.0.1:\(port)/_keepmum/flows?window=\(Int(flowWindow))") else { return }
+        var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 4
         guard let (data, response) = try? await URLSession.shared.data(for: request),
@@ -246,7 +250,11 @@ final class StatsStore {
             return
         }
         port = discoverPort()
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/_keepmum/stats")!)
+        guard let url = URL(string: "http://127.0.0.1:\(port)/_keepmum/stats") else {
+            connection = .offline("invalid proxy port")
+            return
+        }
+        var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 2
         do {
@@ -275,9 +283,11 @@ final class StatsStore {
             previewsOn = true
             return
         }
+        port = discoverPort()
         guard let token = try? String(contentsOf: home.appending(path: ".config/keepmum/stats-token"), encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines) else { return }
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/_keepmum/findings")!)
+            .trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty,
+            let url = URL(string: "http://127.0.0.1:\(port)/_keepmum/findings") else { return }
+        var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 4
         struct Page: Decodable { var findings: [Finding]; var previews: Bool? }
@@ -295,9 +305,12 @@ final class StatsStore {
     private(set) var history: [Snapshot.Event] = []
     private(set) var historyDone = false
     private(set) var historyKind: Snapshot.Event.Kind?
+    private var historyLoadId = 0
 
     /// Load the first page for a filter (nil: all), or the next older page.
     func loadHistory(kind: Snapshot.Event.Kind?, more: Bool = false) async {
+        historyLoadId &+= 1
+        let loadId = historyLoadId
         if sampleMode {
             history = snapshot.recent.reversed().filter { kind == nil || $0.kind == kind }
             historyDone = true
@@ -305,21 +318,25 @@ final class StatsStore {
             return
         }
         if !more || kind != historyKind { history = []; historyDone = false; historyKind = kind }
+        port = discoverPort()
         guard !historyDone, let token = try? String(contentsOf: home.appending(path: ".config/keepmum/stats-token"), encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines) else { return }
-        var c = URLComponents(string: "http://127.0.0.1:\(port)/_keepmum/history")!
+            .trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty,
+            var c = URLComponents(string: "http://127.0.0.1:\(port)/_keepmum/history") else { return }
         c.queryItems = [URLQueryItem(name: "limit", value: "100")]
-        if let last = history.last { c.queryItems!.append(URLQueryItem(name: "before", value: String(last.ts))) }
-        if let kind { c.queryItems!.append(URLQueryItem(name: "kind", value: kind.rawValue)) }
-        var request = URLRequest(url: c.url!)
+        if more, let last = history.last { c.queryItems?.append(URLQueryItem(name: "before", value: String(last.ts))) }
+        if let kind { c.queryItems?.append(URLQueryItem(name: "kind", value: kind.rawValue)) }
+        guard let url = c.url else { return }
+        var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 4
         struct Page: Decodable { var events: [Snapshot.Event] }
-        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return }
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              loadId == historyLoadId else { return }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         guard let page = try? decoder.decode(Page.self, from: data) else { return }
-        history += page.events
+        history = more ? history + page.events : page.events
         historyDone = page.events.count < 100
     }
 
@@ -329,14 +346,15 @@ final class StatsStore {
         return snapshot.recent.reversed().filter { $0.ts > newest && (kind == nil || $0.kind == kind) }
     }
 
-    /// The port of the running proxy: runtime.json (written by keepmum claude/serve) or 7788.
+    /// The port of the running proxy: runtime.json (written by keepmum claude/serve) or configuredPort.
     private func discoverPort() -> Int {
         struct Runtime: Decodable { var pid: Int32; var port: Int }
         if let data = try? Data(contentsOf: home.appending(path: ".config/keepmum/runtime.json")),
-           let rt = try? JSONDecoder().decode(Runtime.self, from: data), kill(rt.pid, 0) == 0 {
+           let rt = try? JSONDecoder().decode(Runtime.self, from: data),
+           rt.pid > 0, (1...65535).contains(rt.port), kill(rt.pid, 0) == 0 {
             return rt.port
         }
-        return 7788
+        return (1...65535).contains(configuredPort) ? configuredPort : 7788
     }
 
     private func apply(_ new: Snapshot, connection: Connection) {

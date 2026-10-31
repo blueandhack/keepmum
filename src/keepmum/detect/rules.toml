@@ -553,7 +553,7 @@ filters = "all"
 
 [[rule]]
 id = "secret-assignment"
-regex = '''(?i)[\w.-]*?(?:passw(?:or)?d|pwd|passphrase|secret|token|api[_.-]?key|apikey|access[_.-]?key|auth[_.-]?key|private[_.-]?key|client[_.-]?secret|credentials?)[\w.-]*["']?[ \t]*(?:=|:=|=>|:)[ \t]*["'`]?([^\s"'`,;]{6,200})'''
+regex = '''(?i)(?<![\w.-])(?>[\w.-]*?(?:passw(?:or)?d|pwd|passphrase|secret|token|api[_.-]?key|apikey|access[_.-]?key|auth[_.-]?key|private[_.-]?key|client[_.-]?secret|credentials?)[\w.-]*+)["']?[ \t]*(?:=|:=|=>|:)[ \t]*["'`]?([^\s"'`,;]{6,200})'''
 group = 1
 keywords = ["pass", "pwd", "secret", "token", "key", "credential"]
 filters = "all"

@@ -148,7 +148,6 @@ struct Switch: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.45)
-        .accessibilityLabel("Protect Claude Code")
         .accessibilityValue(isOn ? "on" : "off")
     }
 }

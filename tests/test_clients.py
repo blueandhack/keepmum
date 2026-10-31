@@ -180,3 +180,22 @@ def test_opencode_1x_chatgpt_login_is_reported(homes, monkeypatch):
 def test_jsonc_reader():
     text = '{"a": "http://x//y", /* note */ "b": [1, 2,], // end\n "c": "say \\"hi\\" // not a comment",}'
     assert clients._jsonc(text) == {"a": "http://x//y", "b": [1, 2], "c": 'say "hi" // not a comment'}
+
+
+def test_codex_warning_on_port_or_login_change_and_claude_other_gateway(homes, monkeypatch, tmp_path):
+    cfg = homes / "codex" / "config.toml"
+    cfg.write_text('[model_providers.keepmum]\nname = "old"\nbase_url = "http://127.0.0.1:9999/openai/v1"\n')
+    clients.codex_enable(PORT)
+    assert cfg.read_text().count("[model_providers.keepmum]") == 1
+    assert "warning" not in clients.codex_status(PORT)
+    # Switching login mode or port surfaces a warning so the user knows to re-run protect on.
+    (homes / "codex" / "auth.json").write_text(json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": "x"}))
+    assert "keepmum protect on" in clients.codex_status(PORT)["warning"]
+    assert "keepmum protect on" in clients.codex_status(8899)["warning"]
+
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text(json.dumps({"env": {"ANTHROPIC_BASE_URL": "https://gateway.corp.internal"}}))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
+    st = clients.protect_clients("status", PORT, ["claude"])["claude"]
+    assert not st["on"] and st["other"] == "https://gateway.corp.internal"

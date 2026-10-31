@@ -1,0 +1,30 @@
+diff --git a/src/pf.cpp b/src/pf.cpp
+index 7a0bc73..a4c3e21 100644
+--- a/src/pf.cpp
++++ b/src/pf.cpp
+@@ -14,6 +14,7 @@ struct pf_ctx {
+     pf::tokenizer        tok;
+     pf::ner::label_table lt;   // owns the category-name strings pf_entity points at
+     int32_t              max_forward_tokens = 4096;
++    bool                 loaded = false;
+     std::string          error;
+ };
+ 
+@@ -28,6 +29,7 @@ pf_ctx * pf_load(const char * gguf_path, const char * device, int n_threads) {
+         ctx->error = ctx->tok.error;
+     } else {
+         ctx->lt = pf::ner::build_label_table(ctx->m.file.labels);
++        ctx->loaded = true;
+     }
+     return ctx;
+ }
+@@ -48,7 +50,8 @@ int pf_classify(pf_ctx * ctx, const char * text, size_t len, float threshold,
+     if (out) *out = nullptr;
+     if (n_out) *n_out = 0;
+     if (!ctx || !text || !out || !n_out) return -1;
+-    if (!ctx->error.empty()) return -1;
++    if (!ctx->loaded) return -1;
++    ctx->error.clear();
+ 
+     const std::vector<pf::token_span> toks = ctx->tok.encode(text, len);
+     if (toks.empty()) return 0;

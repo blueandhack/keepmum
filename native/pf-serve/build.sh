@@ -4,7 +4,8 @@
 #
 # pf-serve runs OpenAI Privacy Filter on privacy-filter.cpp (ggml) for keepmum's L2 detector
 # (src/keepmum/detect/pfserve.py). pf-serve.cpp, CMakeLists.txt and patches/ come from magpie
-# (MIT, LICENSE-magpie) at commit MAGPIE_COMMIT; privacy-filter.cpp (MIT) is fetched at
+# (MIT, LICENSE-magpie) at commit MAGPIE_COMMIT, except patches/classify-reset-error.patch,
+# keepmum's own (one failed request no longer fails every later one); privacy-filter.cpp (MIT) is fetched at
 # PF_COMMIT with its pinned ggml submodule. cmake and ninja run through uvx, so nothing is
 # installed system-wide. Windows and Linux targets (Vulkan, CPU) come later; magpie's
 # build.sh shows how.
@@ -44,6 +45,7 @@ uvx --from cmake cmake -S "$here" -B "$b" -G Ninja -DCMAKE_MAKE_PROGRAM="$ninja"
   -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_BLAS=OFF
 uvx --from cmake cmake --build "$b" -j "$(getconf _NPROCESSORS_ONLN)" --target pf-serve
 
+rm -f "$out/pf-serve"
 cp "$b/pf-serve" "$out/pf-serve"
 cp "$src/LICENSE" "$out/LICENSE-privacy-filter.cpp"
 cp "$src/ggml/LICENSE" "$out/LICENSE-ggml"

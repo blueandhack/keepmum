@@ -160,7 +160,9 @@ def _save_registry(reg: dict[str, str]) -> None:
     f = excluded_file()
     f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps(reg, indent=2, sort_keys=True) + "\n")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        out.write(json.dumps(reg, indent=2, sort_keys=True) + "\n")
     tmp.replace(f)
 
 

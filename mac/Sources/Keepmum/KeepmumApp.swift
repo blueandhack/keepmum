@@ -39,6 +39,9 @@ struct MenuLabel: View {
             if unique > 0 { Text(unique.compact).monospacedDigit() }
         }
         .task { store.start(); engine.start() }
+        .onChange(of: engine.status?.port, initial: true) { _, p in
+            if let p { store.configuredPort = p }
+        }
     }
 }
 

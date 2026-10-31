@@ -170,7 +170,7 @@ class RulesDetector:
         filters = {"all": self._all_filters, "prose": self._prose_filters}.get(level, self._placeholder_filters)
         return any(p.search(value) for p in filters)
 
-    def detect(self, text: str, personal: bool = True) -> list[Span]:
+    def detect(self, text: str, personal: bool = True, allowlist: bool = True) -> list[Span]:
         """Spans over `text`. With `personal` off, only secrets and your own rules: the pipeline
         would drop personal data anyway."""
         lowered = text.lower()
@@ -198,7 +198,7 @@ class RulesDetector:
             spans.extend(self._card_spans(text))
         if personal and self.iban.get("enabled") and "iban" not in self.off:
             spans.extend(self._iban_spans(text))
-        return self.allowlist.filter(text, spans)
+        return self.allowlist.filter(text, spans) if allowlist else spans
 
     def _entropy_spans(self, text: str) -> list[Span]:
         e = self.entropy

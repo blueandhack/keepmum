@@ -26,6 +26,7 @@ struct ExclusionsCard: View {
                         }
                         Spacer(minLength: 8)
                         PillButton(title: "Include") { Task { await engine.include(p.path) } }
+                            .disabled(!engine.isBundled || engine.busy)
                     }
                     .padding(.vertical, 7)
                 }

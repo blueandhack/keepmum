@@ -87,9 +87,11 @@ def decode_body(raw: bytes, encoding: str) -> bytes:
     if encoding in ("", "identity"):
         return raw
     if encoding == "zstd":
+        import io
         import zstandard
 
-        return zstandard.ZstdDecompressor().decompressobj().decompress(raw)
+        with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(raw), read_across_frames=True) as reader:
+            return reader.read()
     if encoding in ("gzip", "x-gzip"):
         return gzip.decompress(raw)
     if encoding == "deflate":
@@ -206,8 +208,9 @@ class Proxy:
         if path == "/_keepmum/stats" and request.method == "GET":
             detector = self.redactor.detector
             detection = detector.report() if hasattr(detector, "report") else dict(getattr(detector, "funnel", {}))
-            # The detector can change while running (detect.model): report the current one.
-            info = {**self.info, "detector": getattr(detector, "name", self.info.get("detector"))}
+            # The detector and pii setting can change while running: report the current ones.
+            info = {**self.info, "detector": getattr(detector, "name", self.info.get("detector")),
+                    "pii": getattr(detector, "pii", self.info.get("pii"))}
             return JSONResponse(self.stats.snapshot(upstream=self.upstream, vault_size=len(self.redactor.vault),
                                                     detection=detection, **info, observe=self._observe()))
         return api_error(404, "not_found_error", "no such keepmum endpoint")
@@ -234,7 +237,7 @@ class Proxy:
             self._record(path, "blocked", 500, origin=origin)
             return api_error(500, "api_error", "could not scan this request, so it was not sent")
         scan_ms = (time.perf_counter() - started) * 1000
-        payload = json.dumps(masked, ensure_ascii=False).encode()
+        payload = json.dumps(masked, ensure_ascii=False).encode("utf-8", "replace")
         url = self._url(request, t)
         headers = self._headers(request)
         if t.base == self.prefixed["/chatgpt"]:
@@ -255,7 +258,8 @@ class Proxy:
         if t.path != "/v1/messages/count_tokens" and resp.status_code < 300:
             try:
                 data = json.loads(content)
-                content = json.dumps(await anyio.to_thread.run_sync(self._restore, data, restored, t.api), ensure_ascii=False).encode()
+                content = json.dumps(await anyio.to_thread.run_sync(self._restore, data, restored, t.api),
+                                     ensure_ascii=False).encode("utf-8", "replace")
             except ValueError:
                 pass  # not JSON: pass it through as it came
         self._warn_unresolved(path, restored)

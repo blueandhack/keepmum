@@ -61,20 +61,28 @@ def run() -> int:
             if pf:
                 pf.close()
 
-    from .vault import SALT_FILE
+    from .vault import salt_file
 
-    if SALT_FILE.exists():
-        mode = SALT_FILE.stat().st_mode & 0o777
-        _check(r, OK if mode == 0o600 else FAIL, f"install salt in {SALT_FILE} (mode {mode:o})")
+    sf = salt_file()
+    if sf.exists():
+        mode = sf.stat().st_mode & 0o777
+        _check(r, OK if mode == 0o600 else FAIL, f"install salt in {sf} (mode {mode:o})")
     else:
         _check(r, OK, "install salt not created yet (created on first run)")
 
     from . import audit
+    from .config import config_file
+    from .protect import excluded_file
+    from .stats import history_file, token_file
 
-    for f in (Path.home() / ".config" / "keepmum" / "stats-token", launch.LOG_FILE, launch.RUNTIME_FILE, audit.audit_file()):
+    af = audit.audit_file()
+    for f in (token_file(), launch.log_file(), launch.runtime_file(), af, af.with_name(af.stem + ".head.json"), history_file()):
         if f.exists() and f.stat().st_mode & 0o077:
             _check(r, FAIL, f"{f} is readable by other users (mode {f.stat().st_mode & 0o777:o})")
-    if audit.audit_file().exists():
+    for f in (config_file(), excluded_file()):
+        if f.exists() and f.stat().st_mode & 0o077:
+            _check(r, WARN, f"{f} is readable by other users (mode {f.stat().st_mode & 0o777:o}); chmod 600 recommended")
+    if af.exists():
         checked = audit.verify()
         _check(r, OK if checked["ok"] else FAIL, f"audit log intact ({checked['entries']} entries)" if checked["ok"]
                else f"audit log changed outside keepmum: {checked['problems'][0]} (`keepmum audit verify`)")
@@ -83,8 +91,13 @@ def run() -> int:
 
     claude = shutil.which("claude")
     if claude:
-        version = subprocess.run([claude, "--version"], capture_output=True, text=True, timeout=20).stdout.strip()
-        _check(r, OK, f"Claude Code {version or 'found'}")
+        try:
+            version = subprocess.run([claude, "--version"], capture_output=True, text=True, timeout=20).stdout.strip()
+            _check(r, OK, f"Claude Code {version or 'found'}")
+        except (subprocess.SubprocessError, OSError) as e:
+            _check(r, WARN, f"`claude --version` failed ({e})")
+    elif any(shutil.which(c) for c in ("codex", "pi", "opencode")):
+        _check(r, WARN, "`claude` not on PATH (other coding agents found)")
     else:
         _check(r, FAIL, "`claude` not on PATH")
 
@@ -107,7 +120,7 @@ def run() -> int:
     with socket.socket() as s:
         free = s.connect_ex(("127.0.0.1", port)) != 0
     try:
-        running = json.loads(launch.RUNTIME_FILE.read_text())
+        running = json.loads(launch.runtime_file().read_text())
     except (OSError, ValueError):
         running = None
     if running:

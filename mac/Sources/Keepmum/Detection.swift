@@ -92,6 +92,7 @@ private struct TypeTable: View {
                 Switch(isOn: masked, enabled: engine.isBundled && !engine.busy && (type == "SECRET" || piiOn)) { on in
                     if !on && type == "SECRET" { confirmSecrets = true } else { Task { await engine.setPass(type, !on) } }
                 }
+                .accessibilityLabel("Mask \(Theme.label(type))")
                 .frame(width: 70, alignment: .trailing)
             }
             .padding(.vertical, 7)
@@ -249,7 +250,7 @@ private struct RulesCard: View {
                 }
                 .frame(width: 340, alignment: .leading)
                 Rectangle().fill(Theme.border).frame(width: 1)
-                VStack(alignment: .leading, spacing: 0) {
+                let rows = VStack(alignment: .leading, spacing: 0) {
                     if rules.mask.isEmpty && rules.allowStrings.isEmpty && rules.allowPatterns.isEmpty {
                         Text("No rules yet. Built-in rules and the local model still apply.")
                             .font(.system(size: 12)).foregroundStyle(Theme.secondary)
@@ -266,6 +267,11 @@ private struct RulesCard: View {
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                if isSnapshot {
+                    rows
+                } else {
+                    ScrollView { rows }
+                }
             }
         }
     }
@@ -313,7 +319,7 @@ private struct RulesCard: View {
                 Button { Task { await remove() } } label: {
                     Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.secondary)
                 }
-                .buttonStyle(.plain).accessibilityLabel("Remove rule")
+                .buttonStyle(.plain).disabled(!engine.isBundled || engine.busy).accessibilityLabel("Remove rule")
             }
             .padding(.vertical, 7)
             Rectangle().fill(Theme.border).frame(height: 1)

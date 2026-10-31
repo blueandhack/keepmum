@@ -46,6 +46,9 @@ struct Dashboard: View {
         .onChange(of: engine.settingsRequested, initial: true) { _, requested in
             if requested { page = .settings; engine.settingsRequested = false }
         }
+        .onChange(of: engine.status?.port, initial: true) { _, p in
+            if let p { store.configuredPort = p }
+        }
     }
 }
 
@@ -244,8 +247,7 @@ struct ActivityPage: View {
                               footer: store.historyDone ? nil : { Task { await store.loadHistory(kind: filter, more: true) } })
             }
         }
-        .task(id: filter) { await store.loadHistory(kind: filter) }
-        .task(id: store.sampleMode) { await store.loadHistory(kind: filter) }
+        .task(id: "\(filter?.rawValue ?? ""):\(store.sampleMode)") { await store.loadHistory(kind: filter) }
     }
 
     private var subtitle: String {
@@ -286,30 +288,41 @@ struct SettingsPage: View {
     var store: StatsStore
     var engine: Engine
     @Binding var appearance: Appearance
+    @Environment(\.isSnapshot) private var isSnapshot
 
     var body: some View {
         let s = store.snapshot
         VStack(spacing: 16) {
             PageHeader(title: "Settings", subtitle: "Setup, appearance and connection") { EmptyView() }
-            HStack(alignment: .top, spacing: 12) {
-                VStack(spacing: 12) {
-                    SetupCard(engine: engine)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Card(title: "Display", subtitle: "Appearance, and preview data: synthetic numbers, clearly labeled") {
-                        HStack {
-                            Segmented(options: Appearance.allCases.map { ($0, $0.title) }, selection: $appearance)
-                            Spacer()
-                            PreviewToggle(store: store)
-                        }
-                    }
+            if isSnapshot {
+                columns(s)
+                Spacer()
+            } else {
+                ScrollView { columns(s) }
+            }
+        }
+    }
+
+    private func columns(_ s: Snapshot) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 12) {
+                SetupCard(engine: engine)
                     .fixedSize(horizontal: false, vertical: true)
-                    Card(title: "Privacy") {
-                        Text("This app reads keepmum's stats feed: counts, types and timestamps, and for the Logs page the first and last character of long masked values (turn that off with [log] previews = false). It never receives a whole value or a placeholder, talks only to 127.0.0.1, and sends no telemetry.")
-                            .font(.system(size: 12)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
+                Card(title: "Display", subtitle: "Appearance, and preview data: synthetic numbers, clearly labeled") {
+                    HStack {
+                        Segmented(options: Appearance.allCases.map { ($0, $0.title) }, selection: $appearance)
+                        Spacer()
+                        PreviewToggle(store: store)
                     }
-                    .fixedSize(horizontal: false, vertical: true)
                 }
-                VStack(spacing: 12) {
+                .fixedSize(horizontal: false, vertical: true)
+                Card(title: "Privacy") {
+                    Text("This app reads keepmum's stats feed: counts, types and timestamps, and for the Logs page the first and last character of long masked values (turn that off with [log] previews = false). It never receives a whole value or a placeholder, talks only to 127.0.0.1, and sends no telemetry.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(spacing: 12) {
                 Card(title: "Connection") {
                     VStack(spacing: 0) {
                         row("Status", { StatusDot(connection: store.connection) })
@@ -329,9 +342,7 @@ struct SettingsPage: View {
                     .fixedSize(horizontal: false, vertical: true)
                 ExclusionsCard(engine: engine)
                     .fixedSize(horizontal: false, vertical: true)
-                }
             }
-            Spacer()
         }
     }
 

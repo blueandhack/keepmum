@@ -15,7 +15,13 @@ DEFAULT_POLICY = {
     "default": "restore",
     "WebFetch": "keep",
     "WebSearch": "keep",
+    "webfetch": "keep",
+    "websearch": "keep",
+    "web_fetch": "keep",
+    "web_search": "keep",
+    "codesearch": "keep",
     "mcp__*": "keep",
+    "mcp_*": "keep",
 }
 
 
@@ -78,7 +84,8 @@ def _values(value, vault: Vault, counts: Counter | None):
     if isinstance(value, str):
         return restore_text(value, vault, counts)
     if isinstance(value, dict):
-        return {k: _values(v, vault, counts) for k, v in value.items()}
+        return {(restore_text(k, vault, counts) if isinstance(k, str) else k): _values(v, vault, counts)
+                for k, v in value.items()}
     if isinstance(value, list):
         return [_values(v, vault, counts) for v in value]
     return value
@@ -243,15 +250,19 @@ class StreamRestorer:
         except ValueError:
             # Not parseable as a whole: restore in place, JSON-escaping each value.
             def swap(m):
-                value = self.vault.value(m.group(0))
+                ph = m.group(0)
+                value, suffix = self.vault.value(ph), ""
+                if value is None and len(m.group(2)) == 12:
+                    value, suffix = self.vault.value(ph[:-4]), ph[-4:]
                 if value is None:
-                    return m.group(0)
+                    self.counts[UNRESOLVED] += 1
+                    return ph
                 self.counts[m.group(1)] += 1
-                return json.dumps(value, ensure_ascii=False)[1:-1]
+                return json.dumps(value + suffix, ensure_ascii=False)[1:-1]
 
             return PLACEHOLDER.sub(swap, partial)
 
     @staticmethod
     def _emit(name: str | None, data: dict) -> bytes:
         head = f"event: {name}\n" if name else ""
-        return f"{head}data: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
+        return f"{head}data: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8", "replace")

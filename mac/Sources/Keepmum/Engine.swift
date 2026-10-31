@@ -132,9 +132,11 @@ final class Engine {
     var serviceRunning: Bool { status?.serveRunning == true }
     var protected: Bool { status?.protect.on == true }
 
-    func client(_ id: String) -> Client? { id == "claude" ? Client(installed: true, on: protected) : status?.clients?[id] }
+    func client(_ id: String) -> Client? {
+        status?.clients?[id] ?? (id == "claude" ? Client(installed: true, on: protected, error: status?.protect.error) : nil)
+    }
     var anyProtected: Bool { protected || (status?.clients?.values.contains { $0.on == true } ?? false) }
-    var setupDone: Bool { canScan && serviceRunning && protected }
+    var setupDone: Bool { canScan && serviceRunning && anyProtected }
 
     func start() {
         guard task == nil, isBundled else { return }
@@ -243,11 +245,11 @@ final class Engine {
     }
 
     func addMaskRule(name: String, pattern: String, type: String) async {
-        await act { try await self.check(["rules", "mask", pattern, "--name", name, "--type", type]) }
+        await act { try await self.check(["rules", "mask", "--name", name, "--type", type, "--", pattern]) }
     }
 
     func addException(_ value: String, pattern: Bool) async {
-        await act { try await self.check(["rules", "allow", value] + (pattern ? ["--pattern"] : [])) }
+        await act { try await self.check(["rules", "allow"] + (pattern ? ["--pattern"] : []) + ["--", value]) }
     }
 
     /// Turn a built-in rule off, or back on. Rules that find secrets need `confirmed`.

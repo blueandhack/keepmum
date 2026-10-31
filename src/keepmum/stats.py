@@ -15,19 +15,36 @@ from collections import Counter, deque
 from pathlib import Path
 from urllib.parse import urlsplit
 
-TOKEN_FILE = Path.home() / ".config" / "keepmum" / "stats-token"
+_IMPORT_HOME = Path.home()
+TOKEN_FILE = _IMPORT_HOME / ".config" / "keepmum" / "stats-token"
 # Every request's event (counts only), kept across restarts for the app's Activity page.
-HISTORY_FILE = Path.home() / ".config" / "keepmum" / "history.jsonl"
+HISTORY_FILE = _IMPORT_HOME / ".config" / "keepmum" / "history.jsonl"
 HISTORY_KEEP = 20_000  # events kept when the file is compacted
 
 
-def stats_token(path: Path = TOKEN_FILE) -> str:
+def token_file() -> Path:
+    if TOKEN_FILE != _IMPORT_HOME / ".config" / "keepmum" / "stats-token":
+        return TOKEN_FILE
+    return Path.home() / ".config" / "keepmum" / "stats-token"
+
+
+def history_file() -> Path:
+    if HISTORY_FILE != _IMPORT_HOME / ".config" / "keepmum" / "history.jsonl":
+        return HISTORY_FILE
+    return Path.home() / ".config" / "keepmum" / "history.jsonl"
+
+
+def stats_token(path: Path | None = None) -> str:
     """A bearer token for the stats endpoint, in a file only this user can read."""
+    path = path or token_file()
     if path.exists():
         return path.read_text().strip()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     token = secrets.token_urlsafe(32)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return path.read_text().strip()
     with os.fdopen(fd, "w") as f:
         f.write(token)
     return token
@@ -37,8 +54,8 @@ class History:
     """An append-only JSONL file of events, shared by every keepmum process on this Mac (0600).
     Lines are small, so appends from several processes do not interleave."""
 
-    def __init__(self, path: Path = HISTORY_FILE, keep: int = HISTORY_KEEP):
-        self.path, self.keep = path, keep
+    def __init__(self, path: Path | None = None, keep: int = HISTORY_KEEP):
+        self.path, self.keep = path or history_file(), keep
         self._appended = 0
 
     def append(self, event: dict) -> None:

@@ -57,7 +57,7 @@ def test_user_rules_mask_even_with_personal_data_off_and_exceptions_win():
     spans = p.detect(text)
     assert values(text, spans) == ["123456"] and spans[0].source == "user:Employee ID"
     assert p.report()["rules"] == [{"rule": "Employee ID", "user": True, "n": 1, "type": None}]
-    assert p.report()["types"]["ACCOUNT"]["masked"] == 1  # the exception is dropped before counting
+    assert p.report()["types"]["ACCOUNT"] == {"found": 2, "allowed": 1, "passed": 0, "masked": 1}
 
 
 def test_settings_change_while_running(tmp_path):
@@ -342,3 +342,53 @@ def test_an_exception_or_a_removed_rule_releases_a_value_masked_earlier():
     assert "4155552671" not in r.redact_text("mobile: 4155552671")
     p.apply_settings(allow_strings=["4155552671"])
     assert r.redact_text("call 4155552671") == "call 4155552671"
+
+
+def test_pii_and_restore_policy_hot_reload_and_config_permissions(tmp_path):
+    import re
+
+    from keepmum import launch
+    from keepmum.restore import DEFAULT_POLICY
+
+    cfg_path = tmp_path / "config.toml"
+    config_mod.set_value("detect", "model", False, cfg_path)
+    assert cfg_path.stat().st_mode & 0o777 == 0o600
+    proxy = launch.build_proxy(config_mod.load(cfg_path), upstream="http://up")
+
+    def tool_upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/v1/messages":
+            return httpx.Response(200, json={"data": []})
+        m = re.search(r"KEEPMUM_SECRET_[0-9a-f]{8}", request.content.decode())
+        ph = m.group(0) if m else "none"
+        return httpx.Response(200, json={"id": "m", "type": "message", "role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "webfetch", "input": {"url": f"https://example.test/?q={ph}"}},
+        ]})
+
+    received: list[bytes] = []
+
+    def recording_upstream(request: httpx.Request) -> httpx.Response:
+        received.append(request.content)
+        return tool_upstream(request)
+
+    proxy.client = httpx.AsyncClient(transport=httpx.MockTransport(recording_upstream), base_url="http://up")
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
+    canary = selftest.make_canary()
+    body = {"model": "m", "max_tokens": 8, "messages": [{"role": "user", "content": f"mobile: 4155552671 GITHUB_TOKEN={canary}"}]}
+
+    async def send():
+        r = await client.post("/v1/messages", json=body)
+        st = await client.get("/_keepmum/stats", headers={"authorization": f"Bearer {proxy.stats_token}"})
+        return r, st.json()
+
+    r, st = anyio.run(send)
+    assert st["pii"] is False and b"4155552671" in received[-1] and canary not in r.text  # webfetch kept placeholder
+
+    config_mod.set_value("detect", "pii", True, cfg_path)
+    config_mod.set_value("restore", "webfetch", "restore", cfg_path)
+    r, st = anyio.run(send)
+    assert st["pii"] is True and b"4155552671" not in received[-1] and canary in r.text  # hot-reloaded pii + restore policy
+    assert proxy.policy["WebSearch"] == DEFAULT_POLICY["WebSearch"]
+
+    config_mod.set_value("detect", "pii", False, cfg_path)
+    r, st = anyio.run(send)
+    assert st["pii"] is False and b"4155552671" in received[-1]  # known PII released when pii turned back off

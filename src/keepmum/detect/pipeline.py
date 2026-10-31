@@ -82,7 +82,7 @@ class Pipeline:
     def detect(self, text: str) -> list[Span]:
         spans: list[Span] = []
         if self.rules:
-            found = self.rules.detect(text, personal=self.pii)
+            found = self.rules.detect(text, personal=self.pii, allowlist=False)
             self.funnel["candidates_rules"] += len(found)
             spans += found
         self.funnel["candidates_model"] += 0
@@ -101,7 +101,8 @@ class Pipeline:
         if self.allowlist:
             kept = self.allowlist.filter(text, spans)
             for s in merge([s for s in spans if s not in set(kept)]):
-                self.by_type[(s.type, "allowed")] += 1
+                if not any(k.start < s.end and s.start < k.end for k in kept):
+                    self.by_type[(s.type, "allowed")] += 1
             spans = kept
         allowed = len(spans)
         if self.pass_types:
@@ -125,26 +126,34 @@ class Pipeline:
 
     # --- Settings from the config, applied while running -------------------------------
 
-    def apply_settings(self, pass_types=(), mask_rules=(), allow_strings=(), allow_patterns=(), off_rules=()) -> None:
+    def apply_settings(self, pass_types=(), mask_rules=(), allow_strings=(), allow_patterns=(), off_rules=(),
+                       pii: bool | None = None) -> None:
         """Types never masked, your own rules, your allowlist, built-in rules turned off. Bumps
         `generation` so cached detections (the redactor's) are dropped."""
+        if pii is not None:
+            self.pii = pii
         self.pass_types = frozenset(pass_types)
         if self.rules:
             self.rules.set_user_rules(list(mask_rules))
             self.rules.allowlist.set_user(allow_strings, allow_patterns)
             self.rules.off = frozenset(off_rules)
+        self.name = self._label()
         self.generation += 1
 
-    def lets_through(self, value: str, sources: frozenset[str]) -> bool:
-        """A value masked earlier that the settings now let through: it has an exception, or every
-        detector that found it is turned off ([rules] off) or was your own rule and is gone."""
+    def lets_through(self, value: str, sources: frozenset[str], kind: str = "SECRET") -> bool:
+        """A value masked earlier that the settings now let through: it has an exception, it is
+        personal data and personal data is now off (unless your own rule found it), or every
+        detector that found it is turned off ([rules] off, or the model) or was your own rule and is gone."""
         if self.allowlist and self.allowlist.allows(value):
+            return True
+        mine = {f"user:{r.id}" for r in self.rules.user_rules} if self.rules else set()
+        if not self.pii and kind != "SECRET" and not any(x in mine for x in sources):
             return True
         if not self.rules or not sources:
             return False
         off = {f"rules:{r}" for r in self.rules.off}
-        mine = {f"user:{r.id}" for r in self.rules.user_rules}
-        return all(x in off or (x.startswith("user:") and x not in mine) for x in sources)
+        return all(x in off or (x.startswith("user:") and x not in mine)
+                   or (self.pf is None and not x.startswith(("rules:", "user:"))) for x in sources)
 
     def report(self) -> dict:
         """Counts for the stats feed: the funnel, then per type and per detector. Never values."""

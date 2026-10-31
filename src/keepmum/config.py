@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -201,7 +202,9 @@ def set_value(section: str, key: str, value, path: Path | None = None) -> None:
     new = "\n".join(lines) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(new)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(new)
     try:
         load(tmp)
     except ConfigError:

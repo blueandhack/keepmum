@@ -114,6 +114,20 @@ def test_unicode_survives_the_round_trip():
     assert r.status_code == 200 and json.loads(r.content)["content"][0]["text"].startswith("The token")
 
 
+def test_lone_surrogate_in_json_escape_does_not_500():
+    canary = selftest.make_canary()
+
+    async def go():
+        mock, client = make()
+        raw = ('{"model":"m","max_tokens":8,"messages":[{"role":"user","content":"\\ud800 export GITHUB_TOKEN='
+               + canary + '"}]}').encode()
+        r = await client.post("/v1/messages", content=raw, headers={"content-type": "application/json"})
+        return r, mock
+
+    r, mock = anyio.run(go)
+    assert r.status_code == 200 and not any(canary.encode() in b for b in mock.received)
+
+
 def test_a_request_is_clean_when_its_new_text_has_nothing_to_mask():
     canary = selftest.make_canary()
 

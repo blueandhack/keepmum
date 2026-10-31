@@ -92,8 +92,8 @@ def _codex_config() -> Path:
     return codex_home() / "config.toml"
 
 
-def _strip_codex(text: str) -> str:
-    out, skipping = [], False
+def _strip_codex(text: str, drop_keepmum_provider: bool = False) -> str:
+    out, skipping, in_keepmum_table = [], False, False
     for line in text.splitlines():
         if line.strip() == CODEX_BEGIN:
             skipping = True
@@ -102,7 +102,14 @@ def _strip_codex(text: str) -> str:
             if line.strip() == CODEX_END:
                 skipping = False
             continue
+        stripped = line.strip()
+        if drop_keepmum_provider and stripped.startswith("["):
+            in_keepmum_table = stripped == "[model_providers.keepmum]"
+        if in_keepmum_table:
+            continue
         if line.rstrip().endswith(CODEX_MARK) and line.lstrip().startswith("model_provider"):
+            continue
+        if drop_keepmum_provider and re.match(r'\s*model_provider\s*=\s*"keepmum"\s*(?:#.*)?$', line):
             continue
         out.append(line)
     return "\n".join(out).rstrip("\n") + "\n" if out else ""
@@ -119,24 +126,31 @@ def codex_status(port: int) -> dict:
     provider = (cfg.get("model_providers") or {}).get("keepmum") or {}
     on = cfg.get("model_provider") == "keepmum" and provider.get("base_url") == codex_base_url(port)
     other = cfg.get("model_provider") not in (None, "keepmum") and cfg.get("model_provider")
-    return {"installed": True, "on": on, "config": str(path), **({"other": other} if other else {})}
+    warning = ("Codex login mode or keepmum port changed; run `keepmum protect on --client codex` to update its URL"
+               if cfg.get("model_provider") == "keepmum" and not on else None)
+    return {"installed": True, "on": on, "config": str(path),
+            **({"other": other} if other else {}), **({"warning": warning} if warning else {})}
 
 
 def codex_enable(port: int) -> dict:
     path = _codex_config()
     text = path.read_text() if path.exists() else ""
     try:
-        current = tomllib.loads(text).get("model_provider")
+        parsed = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise ProtectError(f"{path} is not valid TOML ({e}); fix it first") from e
+    current = parsed.get("model_provider")
     if current not in (None, "keepmum") and CODEX_MARK not in text:
         raise ProtectError(f"{path} already selects model_provider {current!r}; keepmum leaves it alone")
-    base = _strip_codex(text)
+    base = _strip_codex(text, drop_keepmum_provider=True)
     block = [CODEX_BEGIN, "[model_providers.keepmum]"]
     block += [f"{k} = {_toml(v)}" for k, v in codex_provider(port).items()]
     block.append(CODEX_END)
     new = f'model_provider = "keepmum"  {CODEX_MARK}\n' + base + ("\n" if base else "") + "\n".join(block) + "\n"
-    tomllib.loads(new)  # never write a file Codex cannot read
+    try:
+        tomllib.loads(new)  # never write a file Codex cannot read
+    except tomllib.TOMLDecodeError as e:
+        raise ProtectError(f"could not update {path}: {e}") from e
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_text(path, new)
     return codex_status(port)
@@ -148,7 +162,10 @@ def codex_disable(port: int) -> dict:
         text = path.read_text()
         new = _strip_codex(text)
         if new != text:
-            tomllib.loads(new)
+            try:
+                tomllib.loads(new)
+            except tomllib.TOMLDecodeError as e:
+                raise ProtectError(f"could not update {path}: {e}") from e
             _write_text(path, new)
     return codex_status(port)
 
@@ -408,8 +425,9 @@ def protect_clients(action: str, port: int, only: list[str] | None = None) -> di
     from . import protect
 
     def claude(fn):
-        st = fn(port)
-        return {"installed": True, **st.as_dict()}
+        st = fn(port).as_dict()
+        other = st.get("base_url") if not st.get("on") and st.get("base_url") else None
+        return {"installed": True, **st, **({"other": other} if other else {})}
 
     table = {
         "claude": {"on": lambda: claude(protect.enable), "off": lambda: claude(protect.disable), "status": lambda: claude(protect.status)},

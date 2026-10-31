@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import select
+import selectors
 import struct
 import subprocess
 import threading
@@ -104,15 +104,19 @@ def download_model(progress=None) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(".part")
     h, done = hashlib.sha256(), 0
-    with httpx.stream("GET", MODEL_URL, follow_redirects=True, timeout=60) as r:
-        r.raise_for_status()
-        with open(part, "wb") as f:
-            for chunk in r.iter_bytes(1 << 20):
-                f.write(chunk)
-                h.update(chunk)
-                done += len(chunk)
-                if progress:
-                    progress(done, MODEL_SIZE)
+    try:
+        with httpx.stream("GET", MODEL_URL, follow_redirects=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(part, "wb") as f:
+                for chunk in r.iter_bytes(1 << 20):
+                    f.write(chunk)
+                    h.update(chunk)
+                    done += len(chunk)
+                    if progress:
+                        progress(done, MODEL_SIZE)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
     if done != MODEL_SIZE or h.hexdigest() != MODEL_SHA256:
         part.unlink(missing_ok=True)
         raise PfServeError("the downloaded model does not match its pinned size and SHA-256")
@@ -156,14 +160,14 @@ class PfServe:
     def detect(self, text: str) -> list[Span]:
         if not text.strip():
             return []
-        raw = text.encode("utf-8")
+        raw = text.encode("utf-8", "replace")
         with self._lock:
             found = self._classify(raw)
         spans = []
         for start, end, score, label in found:
             # Byte offsets to str offsets; a model span always ends on a character boundary.
-            a = len(raw[:start].decode("utf-8", "ignore"))
-            b = a + len(raw[start:end].decode("utf-8", "ignore"))
+            a = len(raw[:start].decode("utf-8", "replace"))
+            b = a + len(raw[start:end].decode("utf-8", "replace"))
             while a < b and text[a].isspace():
                 a += 1
             while b > a and text[b - 1].isspace():
@@ -208,23 +212,27 @@ class PfServe:
 
     def _read(self, n: int, deadline: float) -> bytes:
         fd, buf = self._proc.stdout.fileno(), b""
-        while len(buf) < n:
-            wait = deadline - time.monotonic()
-            if wait <= 0 or not select.select([fd], [], [], wait)[0]:
-                raise PfServeError("pf-serve timed out")
-            chunk = os.read(fd, n - len(buf))
-            if not chunk:
-                raise PfServeError("pf-serve closed its output")
-            buf += chunk
+        with selectors.DefaultSelector() as sel:
+            sel.register(fd, selectors.EVENT_READ)
+            while len(buf) < n:
+                wait = deadline - time.monotonic()
+                if wait <= 0 or not sel.select(wait):
+                    raise PfServeError("pf-serve timed out")
+                chunk = os.read(fd, n - len(buf))
+                if not chunk:
+                    raise PfServeError("pf-serve closed its output")
+                buf += chunk
         return buf
 
     def _write(self, data: bytes, deadline: float) -> None:
         fd, view = self._proc.stdin.fileno(), memoryview(data)
-        while view:
-            wait = deadline - time.monotonic()
-            if wait <= 0 or not select.select([], [fd], [], wait)[1]:
-                raise PfServeError("pf-serve timed out")
-            view = view[os.write(fd, view[: 1 << 16]):]
+        with selectors.DefaultSelector() as sel:
+            sel.register(fd, selectors.EVENT_WRITE)
+            while view:
+                wait = deadline - time.monotonic()
+                if wait <= 0 or not sel.select(wait):
+                    raise PfServeError("pf-serve timed out")
+                view = view[os.write(fd, view[: 1 << 16]):]
 
     def close(self) -> None:
         proc, self._proc = self._proc, None

@@ -14,6 +14,7 @@ from keepmum.detect.pipeline import Pipeline
 from keepmum.detect.rules import RulesDetector
 from keepmum.proxy import Proxy
 from keepmum.redact import Redactor
+from keepmum.restore import DEFAULT_POLICY
 from keepmum.vault import Vault
 
 
@@ -124,6 +125,31 @@ def test_pruning_keeps_the_chain_checkable(tmp_path):
     assert verify(log.path)["ok"]
 
 
+def test_pruning_all_entries_keeps_monotonic_seq_and_anchor(tmp_path):
+    log = AuditLog(tmp_path / "audit.jsonl", keep_days=30)
+    for _ in range(3):
+        log.append("request")
+    entries = read(log.path)
+    old = time.time() - 40 * 86400
+    prev = GENESIS
+    for e in entries:
+        e["ts"] = old
+        e["prev"] = prev
+        e["hash"] = entry_hash(e)
+        prev = e["hash"]
+    write(log.path, entries)
+    log._write_head({"seq": 3, "hash": prev})
+    anchor = f"3:{prev[:16]}"
+    assert log.prune() == 3
+    kept = read(log.path)
+    assert len(kept) == 1 and kept[0]["seq"] == 4 and kept[0]["event"] == "pruned"
+    assert kept[0]["prev"] == prev and kept[0]["through"] == {"seq": 3, "hash": prev}
+    assert verify(log.path, anchor)["ok"]
+    log.append("request")
+    assert [e["seq"] for e in read(log.path)] == [4, 5]
+    assert verify(log.path, anchor)["ok"]
+
+
 def test_a_torn_last_line_is_reported_and_appends_go_on(tmp_path):
     log = AuditLog(tmp_path / "audit.jsonl")
     log.append("request")
@@ -165,7 +191,7 @@ def test_config_changes_say_what_weakens():
     assert weak == {"detect.observe": True, "detect.model": True, "detect.pass": True, "rules.off": True}
     back = config_changes(state(observe=True), base)
     assert back == [{"setting": "detect.observe", "from": True, "to": False, "weakens": False}]
-    restore = config_changes(base, state(restore={"default": "restore", "WebFetch": "restore", "WebSearch": "keep", "mcp__*": "keep"}))
+    restore = config_changes(base, state(restore={**DEFAULT_POLICY, "WebFetch": "restore"}))
     assert restore == [{"setting": "restore.WebFetch", "from": "keep", "to": "restore", "weakens": True}]
     shorter = config_changes(base, state(audit_keep_days=7))
     assert shorter == [{"setting": "audit.keep_days", "from": 90, "to": 7, "weakens": True}]

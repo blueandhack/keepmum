@@ -50,7 +50,7 @@ def audit_file() -> Path:
 
 
 def _canonical(entry: dict) -> bytes:
-    return json.dumps(entry, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return json.dumps(entry, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8", "surrogatepass")
 
 
 def entry_hash(entry: dict) -> str:
@@ -95,8 +95,8 @@ class AuditLog:
             logging.getLogger("keepmum").error("audit log not written (%s): %s", type(e).__name__, e)
             return None
 
-    def _append(self, event: str, fields: dict, state: dict | None = None) -> dict:
-        last = self._last()
+    def _append(self, event: str, fields: dict, state: dict | None = None, after: dict | None = None) -> dict:
+        last = after if after is not None else self._last()
         entry = {"seq": (last["seq"] + 1) if last else 1, "ts": round(time.time(), 3), "event": event,
                  **{k: v for k, v in fields.items() if v is not None}, "prev": last["hash"] if last else GENESIS}
         entry["hash"] = entry_hash(entry)
@@ -114,21 +114,24 @@ class AuditLog:
         """Record what changed in the protection settings since the last recorded state. Every
         keepmum process calls this when it sees the file change; only the first records it."""
         try:
-            state = config_state(cfg)
             with self._locked():
-                old = self._head().get("config")
-                if old == state:
-                    return None
-                # The first record compares with keepmum's defaults: what was turned down before
-                # the log began still shows.
-                changes = config_changes(old if old is not None else config_state(_defaults()), state)
-                if old is None:
-                    return self._append("config", {"by": by, "baseline": True, "state": state, "changes": changes,
-                                                   "weakens": any(c["weakens"] for c in changes)}, state)
-                return self._append("config", {"by": by, "changes": changes,
-                                               "weakens": any(c["weakens"] for c in changes)}, state)
+                return self._note_config_unlocked(cfg, by)
         except OSError:
             return None
+
+    def _note_config_unlocked(self, cfg, by: str) -> dict | None:
+        state = config_state(cfg)
+        old = self._head().get("config")
+        if old == state:
+            return None
+        # The first record compares with keepmum's defaults: what was turned down before
+        # the log began still shows.
+        changes = config_changes(old if old is not None else config_state(_defaults()), state)
+        if old is None:
+            return self._append("config", {"by": by, "baseline": True, "state": state, "changes": changes,
+                                           "weakens": any(c["weakens"] for c in changes)}, state)
+        return self._append("config", {"by": by, "changes": changes,
+                                       "weakens": any(c["weakens"] for c in changes)}, state)
 
     def prune(self, now: float | None = None) -> int:
         """Drop entries older than keep_days, then record how many and the hash they ended with,
@@ -154,7 +157,7 @@ class AuditLog:
                     f.write(b"".join(line + b"\n" for line in lines[drop:]))
                 tmp.replace(self.path)
                 self._append("pruned", {"dropped": drop, "through": {"seq": last["seq"], "hash": last["hash"]},
-                                        "keep_days": self.keep_days})
+                                        "keep_days": self.keep_days}, after=None if lines[drop:] else last)
                 return drop
         except OSError:
             return 0
@@ -231,7 +234,7 @@ def _fingerprint(kind: str, value: str) -> str:
     shows that an entry was added or removed, and which, without what it says."""
     from .vault import install_salt
 
-    return hmac.new(install_salt(), f"audit\0{kind}\0{value}".encode(), hashlib.sha256).hexdigest()[:12]
+    return hmac.new(install_salt(), f"audit\0{kind}\0{value}".encode("utf-8", "surrogatepass"), hashlib.sha256).hexdigest()[:12]
 
 
 def _defaults():

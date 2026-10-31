@@ -22,7 +22,14 @@ from .detect import TYPES
 
 KEYCHAIN_SERVICE = "sotto"  # where versions named sotto, before the salt file, kept it
 KEYCHAIN_ACCOUNT = "install-salt"
-SALT_FILE = Path.home() / ".config" / "keepmum" / "salt"
+_IMPORT_HOME = Path.home()
+SALT_FILE = _IMPORT_HOME / ".config" / "keepmum" / "salt"
+
+
+def salt_file() -> Path:
+    if SALT_FILE != _IMPORT_HOME / ".config" / "keepmum" / "salt":
+        return SALT_FILE
+    return Path.home() / ".config" / "keepmum" / "salt"
 
 # Known values shorter than this are not re-masked by exact match: too likely to occur by chance.
 MIN_KNOWN = 4
@@ -75,8 +82,9 @@ def install_salt() -> bytes:
     program that created it, and each install of keepmum is a different program. A salt that
     earlier versions kept only in the Keychain is copied to the file once, when readable.
     """
-    if SALT_FILE.exists():
-        return _salt_from_file(SALT_FILE)
+    path = salt_file()
+    if path.exists():
+        return _salt_from_file(path)
     legacy = None
     if _keychain_usable():
         try:
@@ -86,7 +94,7 @@ def install_salt() -> bytes:
             legacy = bytes.fromhex(stored) if stored else None
         except Exception:
             legacy = None
-    return _salt_from_file(SALT_FILE, legacy)
+    return _salt_from_file(path, legacy)
 
 
 class Vault:
@@ -109,7 +117,7 @@ class Vault:
         key = (kind, value)
         if key in self._placeholders:
             return self._placeholders[key]
-        digest = hmac.new(self._salt, f"{kind}\0{value}".encode(), hashlib.sha256).hexdigest()
+        digest = hmac.new(self._salt, f"{kind}\0{value}".encode("utf-8", "surrogatepass"), hashlib.sha256).hexdigest()
         ph = f"KEEPMUM_{kind}_{digest[:8]}"
         if self._values.get(ph, value) != value:  # collision with a different value
             ph = f"KEEPMUM_{kind}_{digest[:12]}"

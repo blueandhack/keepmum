@@ -98,13 +98,94 @@ def test_stream_restores_split_text_and_buffered_tool_calls_and_counts_once():
 
 
 def test_network_tools_keep_placeholders():
+    from keepmum.restore import take_tools
+
     canary = selftest.make_canary()
     r = redactor()
     ph = masked(r, canary)
-    body = {"output": [{"type": "function_call", "name": "mcp__web__fetch", "arguments": json.dumps({"url": f"https://x/?t={ph}"})},
-                       {"type": "message", "content": [{"type": "output_text", "text": ph}]}]}
-    out = restore_responses(body, r.vault)
-    assert ph in out["output"][0]["arguments"] and out["output"][1]["content"][0]["text"] == canary
+    counts = Counter()
+    body = {"output": [
+        {"type": "function_call", "name": "mcp__web__fetch", "arguments": json.dumps({"url": f"https://x/?t={ph}"})},
+        {"type": "function_call", "name": "mcp_github_search", "arguments": json.dumps({"q": ph})},
+        {"type": "function_call", "name": "webfetch", "arguments": json.dumps({"url": f"https://x/?t={ph}"})},
+        {"type": "function_call", "name": "websearch", "arguments": json.dumps({"q": ph})},
+        {"type": "function_call", "name": "web_fetch", "arguments": json.dumps({"url": f"https://x/?t={ph}"})},
+        {"type": "function_call", "name": "web_search", "arguments": json.dumps({"q": ph})},
+        {"type": "function_call", "name": "codesearch", "arguments": json.dumps({"q": ph})},
+        {"type": "mcp_call", "server_label": "docs", "name": "search", "arguments": json.dumps({"q": ph})},
+        {"type": "shell_call", "action": {"commands": [f"echo {ph}"]}},
+        {"type": "message", "content": [{"type": "output_text", "text": ph}]},
+    ]}
+    out = restore_responses(body, r.vault, counts=counts)
+    for item in out["output"][:8]:
+        assert ph in item["arguments"] and canary not in item["arguments"]
+    assert out["output"][8]["action"]["commands"] == [f"echo {canary}"]
+    assert out["output"][9]["content"][0]["text"] == canary
+    tools = {t["tool"]: t["action"] for t in take_tools(counts)}
+    assert tools["mcp__docs__search"] == "keep" and tools["shell"] == "restore" and tools["webfetch"] == "keep"
+
+
+def test_stream_mcp_call_keeps_placeholder_and_records_tool():
+    from keepmum.restore import take_tools
+
+    canary = selftest.make_canary()
+    r = redactor()
+    ph = masked(r, canary)
+    args = json.dumps({"q": ph})
+    events = [
+        {"type": "response.output_item.added", "item": {"type": "mcp_call", "id": "m1", "server_label": "docs", "name": "search",
+                                                         "arguments": ""}, "output_index": 0},
+        {"type": "response.mcp_call_arguments.delta", "item_id": "m1", "delta": args[:8]},
+        {"type": "response.mcp_call_arguments.delta", "item_id": "m1", "delta": args[8:]},
+        {"type": "response.mcp_call_arguments.done", "item_id": "m1", "arguments": args},
+        {"type": "response.output_item.done", "item": {"type": "mcp_call", "id": "m1", "server_label": "docs", "name": "search",
+                                                        "arguments": args}},
+    ]
+    counts = Counter()
+    rs = ResponsesStreamRestorer(r.vault, counts=counts)
+    out = (rs.feed(sse(*events)) + rs.close()).decode()
+    assert canary not in out and ph in out
+    assert take_tools(counts) == [{"tool": "mcp__docs__search", "action": "keep", "values": 1}]
+
+
+def test_responses_request_masks_mcp_call_error_and_refusal():
+    canary = selftest.make_canary()
+    r = redactor()
+    body = {
+        "model": "m",
+        "input": [
+            {"type": "mcp_call", "id": "m1", "server_label": "s", "name": "call",
+             "arguments": json.dumps({"token": f"GITHUB_TOKEN={canary}"}),
+             "error": f"failed with GITHUB_TOKEN={canary}"},
+            {"type": "function_call_output", "call_id": "c1", "error": f"GITHUB_TOKEN={canary}"},
+            {"type": "message", "role": "assistant", "content": [{"type": "refusal", "refusal": f"GITHUB_TOKEN={canary}"}]},
+        ],
+    }
+    out = r.redact_responses_request(body)
+    assert canary not in json.dumps(out)
+    assert len(PLACEHOLDER.findall(json.dumps(out))) == 4
+
+
+def test_multiframe_and_truncated_zstd_bodies():
+    canary = selftest.make_canary()
+    mock = ResponsesMock()
+    payload = json.dumps(codex_body(canary)).encode()
+    mid = len(payload) // 2
+    comp = zstandard.ZstdCompressor()
+    multiframe = comp.compress(payload[:mid]) + comp.compress(payload[mid:])
+    truncated = comp.compress(payload)[:-4]
+
+    async def go():
+        _, client = make(mock)
+        headers = {"content-encoding": "zstd", "content-type": "application/json", "x-keepmum-client": "codex"}
+        ok = await client.post("/chatgpt/backend-api/codex/responses", content=multiframe, headers=headers)
+        bad = await client.post("/chatgpt/backend-api/codex/responses", content=truncated, headers=headers)
+        return ok, bad
+
+    ok, bad = anyio.run(go)
+    assert ok.status_code == 200 and canary in ok.text
+    assert bad.status_code == 400 and len(mock.received) == 1
+    assert canary.encode() not in mock.received[0]
 
 
 class ResponsesMock:

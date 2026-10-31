@@ -16,8 +16,21 @@ from pathlib import Path
 from .config import Config
 from .proxy import Proxy
 
-RUNTIME_FILE = Path.home() / ".config" / "keepmum" / "runtime.json"
-LOG_FILE = Path.home() / ".config" / "keepmum" / "keepmum.log"
+_IMPORT_HOME = Path.home()
+RUNTIME_FILE = _IMPORT_HOME / ".config" / "keepmum" / "runtime.json"
+LOG_FILE = _IMPORT_HOME / ".config" / "keepmum" / "keepmum.log"
+
+
+def runtime_file() -> Path:
+    if RUNTIME_FILE != _IMPORT_HOME / ".config" / "keepmum" / "runtime.json":
+        return RUNTIME_FILE
+    return Path.home() / ".config" / "keepmum" / "runtime.json"
+
+
+def log_file() -> Path:
+    if LOG_FILE != _IMPORT_HOME / ".config" / "keepmum" / "keepmum.log":
+        return LOG_FILE
+    return Path.home() / ".config" / "keepmum" / "keepmum.log"
 
 # Settings or environment that would send Claude Code's traffic somewhere other than keepmum.
 BYPASS_KEYS = ("ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
@@ -36,6 +49,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
 
     from .protect import is_keepmum_url
 
+    fixed_pii = pii is not None
     pii = cfg.pii if pii is None else pii
     if upstream and is_keepmum_url(upstream, cfg.port):
         upstream = None  # protection points Claude Code at keepmum: never forward to ourselves
@@ -56,14 +70,20 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     # Settings changed while no keepmum was running show up now; later ones as the file changes.
     audit.note_config(cfg, "config file")
 
-    def apply(new) -> None:  # the config file changed: detection settings apply on the next request
+    def apply(new) -> None:  # the config file changed: settings apply on the next request
+        audit.keep_days = new.audit_keep_days
         audit.note_config(new, "config file")
-        pipeline.apply_settings(new.pass_types, new.mask_rules, new.allow_strings, new.allow_patterns, new.off_rules)
+        pipeline.apply_settings(new.pass_types, new.mask_rules, new.allow_strings, new.allow_patterns, new.off_rules,
+                                pii=None if fixed_pii else new.pii)
+        if not fixed_pii:
+            info["pii"] = new.pii
+        info["detector"] = pipeline.name
+        proxy.policy = new.restore
         if not rules_only:
             switch.want(new.model)
 
     observe = LiveConfig(cfg.path, cfg, on_change=apply)
-    history = History(Path.home() / ".config" / "keepmum" / "history.jsonl")
+    history = History()
     proxy = Proxy(Redactor(pipeline, Vault()), upstream=upstream or cfg.upstream, policy=cfg.restore,
                   stats=Stats(history=history), stats_token=stats_token(), info=info, observe=observe,
                   previews=lambda: observe.config.log_previews, audit=audit)
@@ -99,19 +119,40 @@ def bypass_risks(cwd: Path, port: int | None = None) -> list[str]:
     return risks
 
 
-def _write_runtime(port: int) -> None:
-    RUNTIME_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    tmp = RUNTIME_FILE.with_suffix(".tmp")
+def _pid_alive(pid: int) -> bool:
+    if isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _write_runtime(port: int, mode: str | None = None) -> None:
+    rf = runtime_file()
+    if mode != "serve" and rf.exists():
+        try:
+            old = json.loads(rf.read_text())
+            if old.get("mode") == "serve" and isinstance(old.get("pid"), int) and _pid_alive(old["pid"]):
+                return  # keepmum serve is running: keep runtime.json pointed at the service
+        except (OSError, ValueError):
+            pass
+    rf.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = rf.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        json.dump({"pid": os.getpid(), "port": port, "started": time.time()}, f)
-    tmp.replace(RUNTIME_FILE)
+        json.dump({"pid": os.getpid(), "port": port, "started": time.time(), **({"mode": mode} if mode else {})}, f)
+    tmp.replace(rf)
 
 
 def _clear_runtime() -> None:
+    rf = runtime_file()
     try:
-        if json.loads(RUNTIME_FILE.read_text()).get("pid") == os.getpid():
-            RUNTIME_FILE.unlink()
+        if json.loads(rf.read_text()).get("pid") == os.getpid():
+            rf.unlink()
     except (OSError, ValueError):
         pass
 
@@ -138,12 +179,22 @@ class BackgroundServer:
             if not self.thread.is_alive() or time.monotonic() > deadline:
                 raise RuntimeError("the proxy did not start")
             time.sleep(0.02)
-        _write_runtime(self.port)
+        _write_runtime(self.port, getattr(self.proxy, "info", {}).get("mode"))
         self._audit("start")
 
     def stop(self) -> None:
         self.server.should_exit = True
         self.thread.join(timeout=5)
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+        redactor = getattr(self.proxy, "redactor", None)
+        if redactor is not None:
+            redactor.vault.clear()
+            pf = getattr(redactor.detector, "pf", None)
+            if pf is not None and hasattr(pf, "close"):
+                pf.close()
         _clear_runtime()
         self._audit("stop")
 
@@ -161,10 +212,11 @@ class BackgroundServer:
 
 def log_to_file(level: str) -> None:
     """In `keepmum claude` the terminal belongs to Claude Code; keepmum logs to a private file."""
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if not LOG_FILE.exists():
-        os.close(os.open(LOG_FILE, os.O_WRONLY | os.O_CREAT, 0o600))
-    handler = logging.FileHandler(LOG_FILE)
+    lf = log_file()
+    lf.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not lf.exists():
+        os.close(os.open(lf, os.O_WRONLY | os.O_CREAT, 0o600))
+    handler = logging.FileHandler(lf)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     root = logging.getLogger()
     root.handlers[:] = [handler]
@@ -228,10 +280,10 @@ def shared_serve_port(cfg: Config, need: str = "messages") -> int | None:
     the port gets nothing."""
     import httpx
 
-    from .stats import TOKEN_FILE
+    from .stats import token_file
 
     try:
-        token = TOKEN_FILE.read_text().strip()
+        token = token_file().read_text().strip()
         r = httpx.get(f"http://127.0.0.1:{cfg.port}/_keepmum/stats", headers={"authorization": f"Bearer {token}"}, timeout=1.5)
         info = r.json() if r.status_code == 200 else {}
         # A service started before Responses API support only scans the Messages API.

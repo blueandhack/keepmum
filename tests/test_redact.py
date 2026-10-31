@@ -217,3 +217,91 @@ def test_placeholder_hint_is_appended_last_and_stable(system):
     if isinstance(system, list):
         assert first["system"][:-1] == system  # cache breakpoint untouched
     assert not PLACEHOLDER.search(PLACEHOLDER_HINT)  # its examples can never collide with a real placeholder
+
+
+def test_document_metadata_search_result_and_dict_key_restore():
+    from collections import Counter
+
+    from keepmum.restore import UNRESOLVED, StreamRestorer, restore_response
+
+    r = Redactor(Pipeline(RulesDetector(), None), Vault(SALT))
+    body = {
+        "model": "m",
+        "messages": [{"role": "user", "content": [
+            {"type": "document", "title": f"GITHUB_TOKEN={FAKE_TOKEN}", "context": f"ctx GITHUB_TOKEN={FAKE_TOKEN}",
+             "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}},
+            {"type": "search_result", "title": f"GITHUB_TOKEN={FAKE_TOKEN}", "source": f"https://x/?k={FAKE_TOKEN}",
+             "content": [{"type": "text", "text": f"GITHUB_TOKEN={FAKE_TOKEN}"}]},
+        ]}],
+    }
+    out = r.redact_request(body)
+    assert FAKE_TOKEN not in json.dumps(out)
+    ph = next(iter(r.vault._values))
+    reply = {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {ph: f"val {ph}"}}]}
+    restored = restore_response(reply, r.vault)
+    assert restored["content"][0]["input"] == {FAKE_TOKEN: f"val {FAKE_TOKEN}"}
+
+    # Unparseable tool JSON fallback handles 8-digit + hex suffix and counts unresolved placeholders.
+    counts = Counter()
+    sr = StreamRestorer(r.vault, counts=counts)
+    events = (
+        f'event: content_block_start\ndata: {{"type":"content_block_start","index":0,"content_block":{{"type":"tool_use","name":"Bash"}}}}\n\n'
+        f'event: content_block_delta\ndata: {{"type":"content_block_delta","index":0,"delta":{{"type":"input_json_delta","partial_json":"{{{ph}abcd KEEPMUM_SECRET_deadbeef"}}}}\n\n'
+        f'event: content_block_stop\ndata: {{"type":"content_block_stop","index":0}}\n\n'
+    ).encode()
+    text = (sr.feed(events) + sr.close()).decode()
+    assert f"{FAKE_TOKEN}abcd" in text and counts["SECRET"] == 1 and counts[UNRESOLVED] == 1
+
+
+def test_secret_assignment_rule_has_no_quadratic_backtracking():
+    import time
+
+    det = RulesDetector()
+    t0 = time.monotonic()
+    assert det.detect("prefix_" + "token_" * 8000) == []
+    assert time.monotonic() - t0 < 0.25
+
+
+def test_lone_surrogates_do_not_crash_or_shift_offsets(tmp_path):
+    from keepmum.audit import AuditLog
+    from keepmum.config import Config
+    from keepmum.detect.pfserve import PfServe
+
+    r = Redactor(Pipeline(RulesDetector(), None), Vault(SALT))
+    text = f"prefix \ud800 export GITHUB_TOKEN={FAKE_TOKEN}"
+    masked = r.redact_text(text)
+    assert FAKE_TOKEN not in masked and restore_text(masked, r.vault) == text
+
+    log = AuditLog(tmp_path / "audit.jsonl")
+    entry = log.note_config(Config(allow_strings=["bad\ud800secret"]), "test")
+    assert entry is not None
+
+    # PfServe.detect replaces lone surrogates 1-for-1 so later character spans stay aligned.
+    import struct
+    import threading
+
+    pf = PfServe.__new__(PfServe)
+    pf.name = "pf-serve"
+    pf._lock = threading.Lock()
+    pf._proc = type("P", (), {"poll": lambda self: None})()
+    sent: list[bytes] = []
+
+    def fake_write(data: bytes, deadline: float):
+        sent.append(data)
+
+    def fake_read(n: int, deadline: float) -> bytes:
+        if fake_read.buf is None:
+            raw = sent[0][8:]
+            b_start = raw.index(FAKE_TOKEN.encode())
+            b_end = b_start + len(FAKE_TOKEN)
+            label = b"secret"
+            fake_read.buf = struct.pack("<IIiifB", 0, 1, b_start, b_end, 0.99, len(label)) + label
+        out, fake_read.off = fake_read.buf[fake_read.off:fake_read.off + n], fake_read.off + n
+        return out
+
+    fake_read.buf = None
+    fake_read.off = 0
+    pf._write = fake_write
+    pf._read = fake_read
+    spans = pf.detect(text)
+    assert len(spans) == 1 and text[spans[0].start:spans[0].end] == FAKE_TOKEN

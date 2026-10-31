@@ -14,7 +14,7 @@ from .vault import Vault
 PASS_THROUGH = frozenset({"thinking", "redacted_thinking", "image"})
 # For block types keepmum does not know, only these fields are scanned. Ids, names, signatures
 # and every other protocol field stay as they are.
-CONTENT_KEYS = ("text", "content", "input")
+CONTENT_KEYS = ("text", "content", "input", "title", "context", "source", "output", "error")
 
 # Appended to every request's system prompt, always the same text, so the prompt cache stays
 # valid. Without it Claude sees KEEPMUM_SECRET_... and concludes the file holds a fake value.
@@ -102,7 +102,7 @@ class Redactor:
             released = getattr(self.detector, "lets_through", None)
             spans += [Span(m.start(), m.end(), kind, 1.0, "known") for m in known.finditer(text)
                       if (kind := self.vault.kind_of(m.group())) not in passed
-                      and not (released and released(m.group(), self.vault.sources_of(m.group())))]
+                      and not (released and released(m.group(), self.vault.sources_of(m.group()), kind))]
         return merge(spans), seen
 
     def redact_text(self, text: str) -> str:
@@ -174,14 +174,19 @@ class Redactor:
             if isinstance(content, str):
                 return {**item, "content": self.redact_text(content)}
             if isinstance(content, list):
-                return {**item, "content": [{**c, "text": self.redact_text(c["text"])}
-                                            if isinstance(c, dict) and isinstance(c.get("text"), str) else c
-                                            for c in content]}
+                def _part(c):
+                    if not isinstance(c, dict):
+                        return c
+                    if isinstance(c.get("text"), str):
+                        return {**c, "text": self.redact_text(c["text"])}
+                    if isinstance(c.get("refusal"), str):
+                        return {**c, "refusal": self.redact_text(c["refusal"])}
+                    return c
+
+                return {**item, "content": [_part(c) for c in content]}
             return item
-        if kind == "function_call" and isinstance(item.get("arguments"), str):
-            return {**item, "arguments": self._json_string(item["arguments"])}
-        out = dict(item)
-        for key in ("output", "input", "content", "text", "action"):
+        out = {**item, "arguments": self._json_string(item["arguments"])} if isinstance(item.get("arguments"), str) else dict(item)
+        for key in ("output", "input", "content", "text", "action", "error"):
             if key in out:
                 out[key] = self._values(out[key])
         return out
@@ -225,12 +230,16 @@ class Redactor:
         if kind == "tool_result":
             return {**block, "content": self._content(block.get("content"))}
         if kind == "document":
-            source = block.get("source")
+            out = dict(block)
+            for meta in ("title", "context"):
+                if isinstance(out.get(meta), str):
+                    out[meta] = self.redact_text(out[meta])
+            source = out.get("source")
             if isinstance(source, dict) and source.get("type") == "text":
-                return {**block, "source": {**source, "data": self.redact_text(source.get("data", ""))}}
-            if isinstance(source, dict) and source.get("type") == "content":
-                return {**block, "source": {**source, "content": self._content(source.get("content"))}}
-            return block  # PDFs and other binary sources pass through (a v1 risk)
+                out["source"] = {**source, "data": self.redact_text(source.get("data", ""))}
+            elif isinstance(source, dict) and source.get("type") == "content":
+                out["source"] = {**source, "content": self._content(source.get("content"))}
+            return out  # PDFs and other binary sources pass through (a v1 risk)
         # Unknown block type: scan its content fields, leave protocol fields alone.
         return {k: (self._values(v) if k in CONTENT_KEYS else v) for k, v in block.items()}
 
