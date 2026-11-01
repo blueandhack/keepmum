@@ -392,3 +392,43 @@ def test_pii_and_restore_policy_hot_reload_and_config_permissions(tmp_path):
     config_mod.set_value("detect", "pii", False, cfg_path)
     r, st = anyio.run(send)
     assert st["pii"] is False and b"4155552671" in received[-1]  # known PII released when pii turned back off
+
+
+class CountingModel(FakeModel):
+    def __init__(self):
+        self.calls = 0
+
+    def detect(self, text):
+        self.calls += 1
+        return super().detect(text)
+
+
+def test_a_settings_change_does_not_send_the_conversation_through_the_model_again():
+    model = CountingModel()
+    p = Pipeline(RulesDetector(), model, pii=True)
+    r = Redactor(p, Vault(secrets.token_bytes(32)))
+    text = "ask Priya Raman about the build"
+    assert "Priya" not in r.redact_text(text) and model.calls == 1
+    p.apply_settings(pass_types=["PERSON"])  # the redactor drops its cache; the model's output is kept
+    assert r.redact_text(text) == text and model.calls == 1
+    p.apply_settings()
+    assert "Priya" not in r.redact_text(text) and model.calls == 1
+    p.set_model(model)  # a model (re)loaded: its output is new
+    r.redact_text(text)
+    assert model.calls == 2
+
+
+def test_a_model_failure_is_not_cached():
+    class Flaky(FakeModel):
+        calls = 0
+
+        def detect(self, text):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("pf-serve timed out")
+            return super().detect(text)
+
+    p = Pipeline(RulesDetector(), Flaky(), pii=True)
+    with pytest.raises(RuntimeError):
+        p.detect("ask Priya Raman")
+    assert values("ask Priya Raman", p.detect("ask Priya Raman")) == ["Priya Raman"]

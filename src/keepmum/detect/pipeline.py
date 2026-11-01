@@ -6,10 +6,11 @@ neither cleared anything the refinement rules did not already remove (bench/resu
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import threading
-from collections import Counter
+from collections import Counter, OrderedDict
 
 from . import Span
 from .merge import merge
@@ -46,6 +47,9 @@ _PII_EDGE = "/\\:;,.'\"`()[]{}<>|="
 
 log = logging.getLogger("keepmum")
 
+# Texts whose raw model output is kept: as many as the redactor caches.
+MODEL_CACHE = 4096
+
 
 class Pipeline:
     def __init__(self, rules: RulesDetector | None, pf=None, pii: bool = False, refine: bool = True,
@@ -64,6 +68,9 @@ class Pipeline:
         self.by_rule: Counter[str] = Counter()  # rules:<id> or user:<name>
         self.pass_types: frozenset[str] = frozenset()  # types never masked ([detect] pass)
         self.generation = 0
+        # The model's raw spans per text. Settings only filter them, so they outlive a settings
+        # change: the redactor scans the resent conversation again, but only the rules rerun.
+        self._model_cache: OrderedDict[bytes, tuple[Span, ...]] = OrderedDict()
         self.model_error: str | None = None  # why the model asked for (detect.model) is not running
         self.name = self._label()
 
@@ -76,6 +83,7 @@ class Pipeline:
         """Turn the model on (a started PfServe) or off (None) while running. Bumps `generation`,
         so text scanned without the model is scanned again with it."""
         self.pf = pf
+        self._model_cache.clear()
         self.name = self._label()
         self.generation += 1
 
@@ -178,7 +186,7 @@ class Pipeline:
         pf = self.pf
         if not pf:
             return out
-        for s in pf.detect(text):
+        for s in self._model_detect(pf, text):
             if s.type == "ACCOUNT" and self.refine and self.credential_not_account(text, s):
                 s = Span(s.start, s.end, "SECRET", s.confidence, s.source)
             if s.type != "SECRET" and not self.pii:
@@ -186,6 +194,18 @@ class Pipeline:
             self.funnel["candidates_model"] += 1
             out += self.refine_secret(text, s) if self.refine and s.type == "SECRET" else [s]
         return out
+
+    def _model_detect(self, pf, text: str) -> tuple[Span, ...]:
+        key = hashlib.sha256(text.encode("utf-8", "surrogatepass")).digest()
+        hit = self._model_cache.get(key)
+        if hit is not None:
+            self._model_cache.move_to_end(key)
+            return hit
+        spans = tuple(pf.detect(text))  # a failure raises: nothing is cached, the request is blocked
+        self._model_cache[key] = spans
+        if len(self._model_cache) > MODEL_CACHE:
+            self._model_cache.popitem(last=False)
+        return spans
 
     @staticmethod
     def credential_not_account(text: str, span: Span) -> bool:
