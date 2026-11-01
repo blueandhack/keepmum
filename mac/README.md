@@ -29,10 +29,12 @@ open build/Keepmum.app
 
 **What the app bundles** (`bundle-runtime.sh`, about 95 MB): a relocatable CPython 3.12 with keepmum and its locked dependencies, pf-serve built from pinned sources, the `keepmum` command the app runs for setup and protection, and a LaunchAgent (`Contents/Library/LaunchAgents/app.keepmum.agent.plist`) that runs `keepmum serve` at login, registered with SMAppService. The bundled Python runs isolated (`-I`) and never writes into the signed bundle (`-B`; everything is compiled at build time). The model (1.6 GB) is downloaded on first use into `~/.local/share/keepmum`, which the command line shares. The app and the command line share one placeholder key, `~/.config/keepmum/salt` (0600), so a placeholder made by either is restored by the other.
 
-**Setup**, in Settings, takes three steps, each also available on the command line: download the model (`keepmum setup`; not needed with Detector set to rules only), start the background service (macOS may ask you to allow it in System Settings › Login Items), and **Protect your coding agents**, one switch each for Claude Code, Codex, pi and opencode (`keepmum protect on --client …`). A switch turns on only while the service runs, and stopping the service turns protection off for every agent first, so no agent is pointed at a proxy that is not there.
+**Setup**, in Settings, takes three steps, each also available on the command line: download the model (`keepmum setup`; not needed with Detector set to rules only), start the background service (macOS may ask you to allow it in System Settings › Login Items), and, under **Coding agents**, one switch each for Claude Code, Codex, pi and opencode (`keepmum protect on --client …`). A switch turns on only while the service runs, and stopping the service turns protection off for every agent first, so no agent is pointed at a proxy that is not there.
 
-- **Preview** shows animated sample data, clearly labeled, when keepmum is not running.
-- `Keepmum --snapshot dir` renders every page in light and dark to PNGs and exits; with `--live` it renders the overview from the running proxy.
+- **Observe only** (Settings › Masking) asks before it turns masking off, and while it is on every page opens with a red banner and a **Mask again** button.
+- **Preview data** (Settings › Display) shows animated sample data on every page, under a banner that says so.
+- `Keepmum --snapshot dir` renders every page in light and dark to PNGs and exits, with the Settings page in full and the overview in observe mode; with `--live` it renders the overview from the running proxy.
+- **Design.** Every color, text style, space and radius comes from the tokens in `Sources/Keepmum/Tokens.swift`; the controls built on them are in `Components.swift`. Coral, keepmum's own, marks what is selected or pressable; blue is masked, green restored, crimson blocked, amber let through.
 - Development-signed builds run only on this Mac. For other Macs, see Releasing.
 
 ## Releasing

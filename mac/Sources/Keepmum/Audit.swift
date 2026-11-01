@@ -11,10 +11,8 @@ struct AuditPage: View {
 
     var body: some View {
         let shown = engine.audit.filter { !onlyWeakening || $0.weakens }
-        VStack(spacing: 16) {
-            PageHeader(title: "Audit", subtitle: "A record keepmum cannot quietly change: every setting that turned protection down, and when keepmum ran.") {
-                EmptyView()
-            }
+        VStack(spacing: Space.l) {
+            PageHeader(title: "Audit", subtitle: "A record keepmum cannot quietly change: every setting that turned protection down, and when keepmum ran.")
             chain
             Card(title: "Changes and coverage", subtitle: engine.audit.isEmpty ? "Nothing recorded yet" : "\(shown.count) of \(engine.audit.count), newest first") {
                 PillButton(title: onlyWeakening ? "Show everything" : "Only what weakened protection",
@@ -27,10 +25,8 @@ struct AuditPage: View {
                         ScrollView { LazyVStack(spacing: 0) { ForEach(shown) { row($0) } } }
                     }
                     if shown.isEmpty {
-                        Text(engine.audit.isEmpty ? "Changes to keepmum's settings, protection and exclusions appear here, with each start and stop of the service."
-                                                  : "Nothing weakened protection in this period.")
-                            .font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 12)
+                        EmptyNote(text: engine.audit.isEmpty ? "Changes to keepmum's settings, protection and exclusions appear here, with each start and stop of the service."
+                                                             : "Nothing weakened protection in this period.")
                     }
                     Spacer(minLength: 0)
                 }
@@ -48,29 +44,29 @@ struct AuditPage: View {
     @ViewBuilder private var chain: some View {
         let check = engine.auditCheck
         let ok = check?.ok ?? true
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: Space.m) {
             Image(systemName: check == nil ? "seal" : ok ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                .font(.system(size: 22)).foregroundStyle(check == nil ? Theme.secondary : ok ? Theme.success : Theme.danger)
-            VStack(alignment: .leading, spacing: 4) {
+                .font(.km(.metric)).foregroundStyle(check == nil ? Theme.textSecondary : ok ? Theme.restored : Theme.blocked)
+            VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(check == nil ? "Not checked yet" : ok ? "Log intact" : "Log changed outside keepmum")
-                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                    .font(.km(.headline)).foregroundStyle(Theme.text)
                 if let check, ok {
                     Text("\(check.entries.formatted()) entries chain together, and the log still holds what it held at the last check.")
-                        .font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                        .font(.km(.callout)).foregroundStyle(Theme.textSecondary)
                 } else if let check {
                     ForEach(check.problems.prefix(4), id: \.self) { p in
-                        Text(p).font(.system(size: 12)).foregroundStyle(Theme.text)
+                        Text(p).font(.km(.callout)).foregroundStyle(Theme.text)
                     }
-                    Text("Run `keepmum audit verify` for the full list.").font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+                    Text("Run `keepmum audit verify` for the full list.").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
                 } else {
-                    Text("The Audit page checks the log each time it opens.").font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                    Text("The Audit page checks the log each time it opens.").font(.km(.callout)).foregroundStyle(Theme.textSecondary)
                 }
             }
             Spacer()
             if let last = check?.last {
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Head").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondary)
-                    Text(verbatim: "\(last.seq):\(last.hash.prefix(16))").font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.text)
+                VStack(alignment: .trailing, spacing: Space.xs) {
+                    Text("Head").font(.km(.caption).weight(.medium)).foregroundStyle(Theme.textSecondary)
+                    Text(verbatim: "\(last.seq):\(last.hash.prefix(16))").font(.km(.mono)).foregroundStyle(Theme.text)
                         .textSelection(.enabled)
                     PillButton(title: "Copy head", icon: "doc.on.doc") {
                         NSPasteboard.general.clearContents()
@@ -80,38 +76,29 @@ struct AuditPage: View {
                 }
             }
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(ok ? Theme.surface : Theme.danger.opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(ok ? Theme.border : Theme.danger.opacity(0.3)))
+        .padding(Space.l)
+        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(ok ? Theme.surface : Theme.soft(Theme.blocked)))
     }
 
     private func row(_ e: Engine.AuditEntry) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Text(e.date, format: .dateTime.month(.abbreviated).day().hour().minute())
-                    .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Theme.secondary).frame(width: 110, alignment: .leading)
-                HStack(spacing: 6) {
-                    Image(systemName: icon(e.event)).font(.system(size: 11)).frame(width: 14)
-                    Text(label(e.event))
-                }
-                .font(.system(size: 12)).foregroundStyle(Theme.text).frame(width: 110, alignment: .leading)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(e.summary).font(.system(size: 12)).foregroundStyle(Theme.text).lineLimit(2)
-                    if let by = e.by {
-                        Text(by).font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(1)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                if e.weakens {
-                    Text("Weakened").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.danger)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(Theme.danger.opacity(0.1)))
-                }
-                Text(verbatim: "#\(e.seq)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.secondary)
-                    .frame(width: 56, alignment: .trailing)
+        TableRow {
+            Text(e.date, format: .dateTime.month(.abbreviated).day().hour().minute())
+                .font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary).frame(width: 110, alignment: .leading)
+            HStack(spacing: Space.s - Space.xxs) {
+                Image(systemName: icon(e.event)).font(.km(.caption)).foregroundStyle(Theme.textSecondary).frame(width: 14)
+                Text(label(e.event))
             }
-            .padding(.vertical, 8)
-            Rectangle().fill(Theme.border).frame(height: 1)
+            .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 110, alignment: .leading)
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                Text(e.summary).font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(2)
+                if let by = e.by {
+                    Text(by).font(.km(.caption)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if e.weakens { Chip(text: "Weakened", tone: Theme.warning) }
+            Text(verbatim: "#\(e.seq)").font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary)
+                .frame(width: 56, alignment: .trailing)
         }
     }
 

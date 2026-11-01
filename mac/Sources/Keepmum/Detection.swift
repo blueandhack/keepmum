@@ -5,28 +5,38 @@ import SwiftUI
 struct DetectionPage: View {
     var store: StatsStore
     var engine: Engine
+    @Environment(\.isSnapshot) private var isSnapshot
 
     var body: some View {
+        if isSnapshot {
+            content
+        } else {
+            // Taller than the window once a notice shows at the top.
+            ScrollView { content.padding(.bottom, Space.xl) }
+        }
+    }
+
+    private var content: some View {
         let d = store.snapshot.detection
-        VStack(spacing: 16) {
-            PageHeader(title: "Detection", subtitle: "What keepmum finds, and what you let through. Counts only.") { PreviewToggle(store: store) }
-            HStack(alignment: .top, spacing: 12) {
-                Card(title: "By type", subtitle: "Found in newly scanned text, then allowed by an exception, passed by your settings, or masked") {
+        return VStack(spacing: Space.l) {
+            PageHeader(title: "Detection", subtitle: "What keepmum finds, and what you let through. Counts only.")
+            HStack(alignment: .top, spacing: Space.m) {
+                Card(title: "By type", subtitle: "Found in new text, then allowed by an exception, passed by your settings, or masked") {
                     TypeTable(detection: d, engine: engine)
                 }
-                VStack(spacing: 12) {
+                VStack(spacing: Space.m) {
                     Card(title: "Who found it", subtitle: "Masked values by detector") {
                         SourceBars(sources: d.sources)
                     }
                     .fixedSize(horizontal: false, vertical: true)
-                    Card(title: "Top rules", subtitle: "Masked values per rule; turn off a built-in rule that masks what it should not") {
+                    Card(title: "Top rules", subtitle: "Masked values per rule") {
                         RuleList(rules: d.rules, engine: engine)
                     }
                 }
                 .frame(width: 330)
             }
             RulesCard(engine: engine)
-                .frame(maxHeight: .infinity)
+                .frame(minHeight: 280, maxHeight: .infinity)
         }
     }
 }
@@ -43,7 +53,7 @@ private struct TypeTable: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
+            ColumnHeader {
                 Text("Type").frame(maxWidth: .infinity, alignment: .leading)
                 Text("Found").frame(width: 56, alignment: .trailing)
                 Text("Allowed").frame(width: 60, alignment: .trailing)
@@ -51,16 +61,14 @@ private struct TypeTable: View {
                 Text("Masked").frame(width: 60, alignment: .trailing)
                 Text("Mask it").frame(width: 70, alignment: .trailing)
             }
-            .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondary).padding(.bottom, 6)
-            Rectangle().fill(Theme.border).frame(height: 1)
             ForEach(Theme.typeOrder, id: \.self) { type in row(type) }
             if !piiOn {
                 Text("Personal data is off, so only secrets and your own rules are masked. Turn it on in config: [detect] pii = true.")
-                    .font(.system(size: 11.5)).foregroundStyle(Theme.secondary).padding(.top, 10)
+                    .font(.km(.caption)).foregroundStyle(Theme.textSecondary).padding(.top, Space.s + Space.xxs)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let error = engine.error {
-                Text(error).font(.system(size: 11.5)).foregroundStyle(Theme.danger).padding(.top, 6)
+                Text(error).font(.km(.caption)).foregroundStyle(Theme.blocked).padding(.top, Space.s - Space.xxs)
             }
         }
         .alert("Let secrets through unmasked?", isPresented: $confirmSecrets) {
@@ -74,35 +82,28 @@ private struct TypeTable: View {
     private func row(_ type: String) -> some View {
         let c = detection.types[type] ?? .init()
         let masked = !pass.contains(type) && (type == "SECRET" || piiOn)
-        return VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                HStack(spacing: 8) {
-                    Image(systemName: Theme.icon(type)).font(.system(size: 11)).foregroundStyle(Theme.secondary).frame(width: 16)
-                    Text(Theme.label(type)).font(.system(size: 12.5)).foregroundStyle(Theme.text)
-                    if pass.contains(type) {
-                        Text("passes through").font(.system(size: 10.5, weight: .medium)).foregroundStyle(Theme.secondary)
-                            .padding(.horizontal, 6).padding(.vertical, 2).background(Capsule().fill(Theme.faint))
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                number(c.found, width: 56)
-                number(c.allowed, width: 60)
-                number(c.passed, width: 56)
-                number(c.masked, width: 60, color: c.masked > 0 ? Theme.accent : Theme.secondary)
-                Switch(isOn: masked, enabled: engine.isBundled && !engine.busy && (type == "SECRET" || piiOn)) { on in
-                    if !on && type == "SECRET" { confirmSecrets = true } else { Task { await engine.setPass(type, !on) } }
-                }
-                .accessibilityLabel("Mask \(Theme.label(type))")
-                .frame(width: 70, alignment: .trailing)
+        return TableRow {
+            HStack(spacing: Space.s) {
+                Image(systemName: Theme.icon(type)).font(.km(.caption)).foregroundStyle(Theme.textSecondary).frame(width: 16)
+                Text(Theme.label(type)).font(.km(.body)).foregroundStyle(Theme.text)
+                if pass.contains(type) { Chip(text: "passes through", tone: Theme.warning) }
             }
-            .padding(.vertical, 7)
-            Rectangle().fill(Theme.border).frame(height: 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            number(c.found, width: 56)
+            number(c.allowed, width: 60)
+            number(c.passed, width: 56, color: Theme.warning)
+            number(c.masked, width: 60, color: Theme.masked)
+            Switch(isOn: masked, enabled: engine.isBundled && !engine.busy && (type == "SECRET" || piiOn)) { on in
+                if !on && type == "SECRET" { confirmSecrets = true } else { Task { await engine.setPass(type, !on) } }
+            }
+            .accessibilityLabel("Mask \(Theme.label(type))")
+            .frame(width: 70, alignment: .trailing)
         }
     }
 
     private func number(_ n: Int, width: CGFloat, color: Color = Theme.text) -> some View {
-        Text(n > 0 ? n.compact : "—").font(.system(size: 12.5, design: .rounded)).monospacedDigit()
-            .foregroundStyle(n > 0 ? color : Theme.secondary).frame(width: width, alignment: .trailing)
+        Text(n > 0 ? n.compact : "—").font(.km(.body)).monospacedDigit()
+            .foregroundStyle(n > 0 ? color : Theme.textSecondary).frame(width: width, alignment: .trailing)
     }
 }
 
@@ -112,20 +113,20 @@ private struct SourceBars: View {
     var sources: [String: Int]
 
     var body: some View {
-        let rows: [(String, String, Color)] = [("rules", "Built-in rules", Theme.accent), ("model", "Local model", Theme.success),
-                                               ("user", "Your rules", Color(light: NSColor(hex: 0xD97706), dark: NSColor(hex: 0xF59E0B)))]
+        let rows: [(String, String, Color)] = [("rules", "Built-in rules", Theme.series[0]), ("model", "Local model", Theme.series[1]),
+                                               ("user", "Your rules", Theme.series[2])]
         let total = max(rows.reduce(0) { $0 + (sources[$1.0] ?? 0) }, 1)
-        VStack(spacing: 10) {
+        VStack(spacing: Space.s + Space.xxs) {
             ForEach(rows, id: \.0) { key, label, color in
                 let n = sources[key] ?? 0
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Space.xs) {
                     HStack {
-                        Text(label).font(.system(size: 12)).foregroundStyle(Theme.text)
+                        Text(label).font(.km(.callout)).foregroundStyle(Theme.text)
                         Spacer()
-                        Text("\(n.compact) · \(percent(n, of: total))").font(.system(size: 11.5)).monospacedDigit().foregroundStyle(Theme.secondary)
+                        Text("\(n.compact) · \(percent(n, of: total))").font(.km(.caption)).monospacedDigit().foregroundStyle(Theme.textSecondary)
                     }
                     GeometryReader { geo in
-                        Capsule().fill(Theme.faint)
+                        Capsule().fill(Theme.fill)
                             .overlay(alignment: .leading) { Capsule().fill(color).frame(width: geo.size.width * CGFloat(n) / CGFloat(total)) }
                     }
                     .frame(height: 6)
@@ -147,41 +148,36 @@ private struct RuleList: View {
         VStack(spacing: 0) {
             let shown = rules.filter { !off.contains($0.rule) || $0.user }
             if shown.isEmpty {
-                Text("No rule has masked anything yet").font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                EmptyNote(text: "No rule has masked anything yet")
             }
             ForEach(shown) { r in
-                HStack(spacing: 8) {
-                    Text(r.rule).font(.system(size: 12, design: r.user ? .default : .monospaced)).foregroundStyle(Theme.text).lineLimit(1)
-                    if r.user {
-                        Text("yours").font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.accent)
-                            .padding(.horizontal, 5).padding(.vertical, 1).background(Capsule().fill(Theme.accentSoft))
-                    }
+                HStack(spacing: Space.s) {
+                    Text(r.rule).font(r.user ? .km(.callout) : .km(.mono)).foregroundStyle(Theme.text).lineLimit(1)
+                    if r.user { Chip(text: "yours", tone: Theme.series[2]) }
                     Spacer()
-                    Text(r.n.compact).font(.system(size: 12)).monospacedDigit().foregroundStyle(Theme.secondary)
-                    if !r.user {
-                        Button {
+                    Text(r.n.compact).font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                    if r.user {
+                        Color.clear.frame(width: 22, height: 22)
+                    } else {
+                        IconButton(symbol: "nosign", help: "Turn off \(r.rule)") {
                             if r.type == "SECRET" || r.type == nil { confirming = r.rule } else { Task { await engine.setRuleOff(r.rule, true) } }
-                        } label: {
-                            Image(systemName: "nosign").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.secondary)
                         }
-                        .buttonStyle(.plain).disabled(!engine.isBundled || engine.busy)
-                        .help("Turn off this built-in rule").accessibilityLabel("Turn off \(r.rule)")
+                        .disabled(!engine.isBundled || engine.busy)
                     }
                 }
-                .padding(.vertical, 5)
+                .padding(.vertical, Space.xxs)
             }
             if !off.isEmpty {
-                Text("Turned off").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 10).padding(.bottom, 2)
+                Text("Turned off").eyebrow()
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.top, Space.m).padding(.bottom, Space.xs)
                 ForEach(off, id: \.self) { rule in
-                    HStack(spacing: 8) {
-                        Text(rule).font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.secondary).strikethrough().lineLimit(1)
+                    HStack(spacing: Space.s) {
+                        Text(rule).font(.km(.mono)).foregroundStyle(Theme.textSecondary).strikethrough().lineLimit(1)
                         Spacer()
                         PillButton(title: "Turn on") { Task { await engine.setRuleOff(rule, false) } }
                             .disabled(!engine.isBundled || engine.busy)
                     }
-                    .padding(.vertical, 3)
+                    .padding(.vertical, Space.xxs)
                 }
             }
             Spacer(minLength: 0)
@@ -213,17 +209,17 @@ private struct RulesCard: View {
 
     var body: some View {
         let rules = engine.status?.rules ?? .init()
-        Card(title: "Your rules", subtitle: "Always mask a pattern, or never mask something keepmum flags. Applies to new requests, no restart.") {
-            HStack(alignment: .top, spacing: 20) {
-                VStack(alignment: .leading, spacing: 10) {
+        Card(title: "Your rules", subtitle: "Always mask a pattern, or never mask something keepmum flags. Applies to the next request.") {
+            HStack(alignment: .top, spacing: Space.l + Space.xs) {
+                VStack(alignment: .leading, spacing: Space.s + Space.xxs) {
                     Segmented(options: [(0, "Always mask"), (1, "Never mask")], selection: $kind)
                     if kind == 0 {
-                        HStack(alignment: .bottom, spacing: 10) {
+                        HStack(alignment: .bottom, spacing: Space.s + Space.xxs) {
                             field("Name", text: $name, prompt: "Employee ID")
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Mask as").font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+                            VStack(alignment: .leading, spacing: Space.xs) {
+                                Text("Mask as").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
                                 if isSnapshot {
-                                    stand(Theme.label(type))
+                                    FieldStandIn(text: Theme.label(type))
                                 } else {
                                     Picker("Mask as", selection: $type) {
                                         ForEach(Theme.typeOrder, id: \.self) { Text(Theme.label($0)).tag($0) }
@@ -238,22 +234,21 @@ private struct RulesCard: View {
                         field(isPattern ? "Pattern" : "Exact text", text: $value, prompt: isPattern ? "^demo-[a-z]+$" : "sk_test_docs_example", mono: true)
                         if !isSnapshot {
                             Toggle("Treat as a pattern (matches the whole value)", isOn: $isPattern)
-                                .toggleStyle(.checkbox).font(.system(size: 12))
+                                .toggleStyle(.checkbox).font(.km(.callout))
                         }
                     }
-                    HStack(spacing: 10) {
+                    HStack(spacing: Space.s + Space.xxs) {
                         PillButton(title: kind == 0 ? "Add rule" : "Add exception", icon: "plus", prominent: true) { add() }
-                            .disabled(value.isEmpty || !engine.isBundled || engine.busy).opacity(value.isEmpty ? 0.5 : 1)
+                            .disabled(value.isEmpty || !engine.isBundled || engine.busy)
                         Text("Regular expressions; with a group, only group 1 is masked.")
-                            .font(.system(size: 11)).foregroundStyle(Theme.secondary).fixedSize(horizontal: false, vertical: true)
+                            .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .frame(width: 340, alignment: .leading)
-                Rectangle().fill(Theme.border).frame(width: 1)
+                Hairline(vertical: true)
                 let rows = VStack(alignment: .leading, spacing: 0) {
                     if rules.mask.isEmpty && rules.allowStrings.isEmpty && rules.allowPatterns.isEmpty {
-                        Text("No rules yet. Built-in rules and the local model still apply.")
-                            .font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                        EmptyNote(text: "No rules yet. Built-in rules and the local model still apply.")
                     }
                     ForEach(Array(rules.mask.enumerated()), id: \.offset) { i, r in
                         ruleRow("Always mask", r.name, "/\(r.pattern)/ → \(Theme.label(r.type))") { await engine.removeRule("mask", i) }
@@ -285,44 +280,27 @@ private struct RulesCard: View {
     }
 
     private func field(_ label: String, text: Binding<String>, prompt: String, mono: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(label).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
             if isSnapshot {
-                stand(prompt, mono: mono)
+                FieldStandIn(text: prompt, mono: mono)
             } else {
                 TextField(label, text: text, prompt: Text(prompt))
-                    .textFieldStyle(.roundedBorder).font(.system(size: 12, design: mono ? .monospaced : .default))
+                    .textFieldStyle(.roundedBorder).font(mono ? .km(.mono) : .km(.callout))
             }
         }
     }
 
-    /// A drawn stand-in for a native control, which snapshots cannot render.
-    private func stand(_ text: String, mono: Bool = false) -> some View {
-        Text(text).font(.system(size: 12, design: mono ? .monospaced : .default)).foregroundStyle(Theme.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 7).frame(height: 22)
-            .background(RoundedRectangle(cornerRadius: 5).fill(Theme.surface))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.border))
-    }
-
     private func ruleRow(_ kind: String, _ title: String, _ detail: String, remove: @escaping () async -> Void) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Text(kind).font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(kind == "Always mask" ? Theme.accent : Theme.secondary)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill(kind == "Always mask" ? Theme.accentSoft : Theme.faint))
-                    .frame(width: 92, alignment: .leading)
-                Text(title).font(.system(size: 12.5)).foregroundStyle(Theme.text).frame(width: 110, alignment: .leading).lineLimit(1)
-                Text(detail).font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.secondary)
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer()
-                Button { Task { await remove() } } label: {
-                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.secondary)
-                }
-                .buttonStyle(.plain).disabled(!engine.isBundled || engine.busy).accessibilityLabel("Remove rule")
-            }
-            .padding(.vertical, 7)
-            Rectangle().fill(Theme.border).frame(height: 1)
+        TableRow {
+            Chip(text: kind, tone: kind == "Always mask" ? Theme.masked : Theme.warning)
+                .frame(width: 92, alignment: .leading)
+            Text(title).font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 110, alignment: .leading).lineLimit(1)
+            Text(detail).font(.km(.mono)).foregroundStyle(Theme.textSecondary)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer()
+            IconButton(symbol: "xmark", help: "Remove rule") { Task { await remove() } }
+                .disabled(!engine.isBundled || engine.busy)
         }
     }
 }

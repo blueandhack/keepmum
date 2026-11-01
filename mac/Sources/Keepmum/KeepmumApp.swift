@@ -50,61 +50,73 @@ struct MenuPanel: View {
     var engine: Engine
     @AppStorage("appearance") private var appearance: Appearance = .system
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.isSnapshot) private var isSnapshot
 
     var body: some View {
         let s = store.snapshot
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                KeepmumBadge(size: 24)
-                Text("keepmum").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+        let observing = s.observe == true && store.connection == .live
+        VStack(alignment: .leading, spacing: Space.m) {
+            HStack(spacing: Space.s) {
+                KeepmumBadge(size: 22)
+                Text("keepmum").font(.km(.headline)).foregroundStyle(Theme.text)
                 Spacer()
-                StatusDot(connection: store.connection)
+                StatusDot(connection: store.connection, observing: observing)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text((s.vaultSize ?? 0).compact).font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit()
+            if observing {
+                HStack(spacing: Space.s) {
+                    Image(systemName: "eye.trianglebadge.exclamationmark")
+                    Text("Sending unmasked").font(.km(.callout).weight(.medium)).fixedSize()
+                    Spacer(minLength: Space.s)
+                    PillButton(title: "Mask again", onSolid: true) { Task { await engine.setObserve(false) } }
+                        .disabled(!engine.isBundled || engine.busy)
+                }
+                .foregroundStyle(Theme.onAccent)
+                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
+                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.blockedFill))
+            }
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                Text((s.vaultSize ?? 0).compact).font(.km(.display)).monospacedDigit()
                     .foregroundStyle(Theme.text).contentTransition(.numericText())
-                Text("unique values kept on this Mac").font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                Text("unique values kept on this Mac").font(.km(.callout)).foregroundStyle(Theme.textSecondary)
             }
             HStack(spacing: 0) {
                 stat("Requests", s.contentRequests.compact)
                 stat("Sensitive", s.funnel.withFindings.compact)
-                stat("Blocked", s.blocked.compact, color: s.blocked > 0 ? Theme.danger : Theme.text)
-                stat("p95", s.scanMs.p95.map { String(format: "%.0f ms", $0) } ?? "—")
+                stat("Blocked", s.blocked.compact, color: s.blocked > 0 ? Theme.blocked : Theme.text)
+                stat("p95", milliseconds(s.scanMs.p95))
             }
-            .padding(.vertical, 12)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.faint))
+            .padding(.vertical, Space.s + Space.xxs)
+            .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
             ProtectionRow(engine: engine) {
                 engine.settingsRequested = true
                 openWindow(id: "dashboard")
                 NSApp.activate()
             }
             if case .offline(let reason) = store.connection {
-                Text("\(reason). \(engine.isBundled ? "Start the background service in Setup." : "Run keepmum claude to start.")")
-                    .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+                Text("\(reason.sentence). \(engine.isBundled ? "Start the background service in Settings." : "Run keepmum claude to start.")")
+                    .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
             }
-            HStack(spacing: 8) {
+            HStack(spacing: Space.s) {
                 PillButton(title: "Open dashboard", icon: "macwindow", prominent: true) {
                     openWindow(id: "dashboard")
                     NSApp.activate()
-                }
-                PillButton(title: store.sampleMode ? "Live" : "Preview", icon: store.sampleMode ? "dot.radiowaves.left.and.right" : "sparkles") {
-                    store.sampleMode.toggle()
                 }
                 Spacer()
                 PillButton(title: "Quit") { NSApp.terminate(nil) }
             }
         }
-        .padding(16)
-        .frame(width: 330)
+        .padding(Space.l)
+        .frame(width: 320)
         .task { await engine.refresh() }
-        .background(Theme.background)
+        // The menu bar window brings its own material; snapshots need a surface to draw on.
+        .background(isSnapshot ? Theme.canvas : .clear)
         .preferredColorScheme(appearance.scheme)
     }
 
     private func stat(_ title: String, _ value: String, color: Color = Theme.text) -> some View {
-        VStack(spacing: 2) {
-            Text(value).font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(color)
-            Text(title).font(.system(size: 10.5)).foregroundStyle(Theme.secondary)
+        VStack(spacing: Space.xxs) {
+            Text(value).font(.km(.headline)).monospacedDigit().foregroundStyle(color)
+            Text(title).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
         }
         .frame(maxWidth: .infinity)
     }
@@ -163,6 +175,16 @@ enum Snapshotter {
         }
         for dark in [false, true] {
             render(MenuPanel(store: store, engine: .preview()), to: "\(dir)/menu-\(dark ? "dark" : "light").png", dark: dark)
+            // Settings in full: the window scrolls it, a snapshot cannot.
+            render(Dashboard(store: store, engine: .preview(), page: .settings).frame(width: 1200, height: 1640),
+                   to: "\(dir)/settings-full-\(dark ? "dark" : "light").png", dark: dark)
+        }
+        // Observe mode, live: the one state where values leave this Mac unmasked.
+        store.snapshot.observe = true
+        store.connection = .live
+        for dark in [false, true] {
+            render(window(store, .overview), to: "\(dir)/observe-\(dark ? "dark" : "light").png", dark: dark)
+            render(MenuPanel(store: store, engine: .preview()), to: "\(dir)/menu-observe-\(dark ? "dark" : "light").png", dark: dark)
         }
         exit(0)
     }

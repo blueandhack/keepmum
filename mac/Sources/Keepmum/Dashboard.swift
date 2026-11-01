@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum Page: String, CaseIterable, Identifiable {
-    case overview, activity, logs, audit, detection, performance, settings
+    case overview, activity, logs, performance, detection, audit, settings
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
     var icon: String {
@@ -9,12 +9,16 @@ enum Page: String, CaseIterable, Identifiable {
         case .overview: "square.grid.2x2"
         case .activity: "list.bullet.rectangle"
         case .logs: "text.magnifyingglass"
-        case .audit: "checkmark.seal"
-        case .detection: "line.3.horizontal.decrease.circle"
         case .performance: "speedometer"
+        case .detection: "line.3.horizontal.decrease.circle"
+        case .audit: "checkmark.seal"
         case .settings: "gearshape"
         }
     }
+
+    /// The sidebar's groups: what keepmum saw, and what it does about it.
+    static let groups: [(String, [Page])] = [("Monitor", [.overview, .activity, .logs, .performance]),
+                                             ("Protection", [.detection, .audit])]
 }
 
 struct Dashboard: View {
@@ -25,23 +29,31 @@ struct Dashboard: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Sidebar(store: store, page: $page).frame(width: 196)
-            Rectangle().fill(Theme.border).frame(width: 1)
-            Group {
-                switch page {
-                case .overview: OverviewPage(store: store)
-                case .activity: ActivityPage(store: store)
-                case .logs: LogsPage(store: store)
-                case .audit: AuditPage(engine: engine)
-                case .detection: DetectionPage(store: store, engine: engine)
-                case .performance: PerformancePage(store: store)
-                case .settings: SettingsPage(store: store, engine: engine, appearance: $appearance)
+            Sidebar(store: store, page: $page).frame(width: 208)
+            Hairline(vertical: true)
+            VStack(spacing: Space.l) {
+                Notices(store: store, engine: engine, page: $page)
+                Group {
+                    switch page {
+                    case .overview: OverviewPage(store: store)
+                    case .activity: ActivityPage(store: store)
+                    case .logs: LogsPage(store: store)
+                    case .performance: PerformancePage(store: store)
+                    case .detection: DetectionPage(store: store, engine: engine)
+                    case .audit: AuditPage(engine: engine)
+                    case .settings: SettingsPage(store: store, engine: engine, appearance: $appearance)
+                    }
                 }
+                // Both bounds set, so the frame keeps its offered height and a taller page runs off
+                // the bottom rather than pushing the notices off the top.
+                .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
             }
-            .padding(24)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(Space.xl)
         }
-        .background(Theme.background)
+        // Up under the hidden title bar, so the sidebar's material reaches the top of the window.
+        .ignoresSafeArea(.container, edges: .top)
+        .background(Theme.canvas)
         .preferredColorScheme(appearance.scheme)
         .onChange(of: engine.settingsRequested, initial: true) { _, requested in
             if requested { page = .settings; engine.settingsRequested = false }
@@ -52,142 +64,114 @@ struct Dashboard: View {
     }
 }
 
+// MARK: - Sidebar
+
 struct Sidebar: View {
     var store: StatsStore
     @Binding var page: Page
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 10) {
-                KeepmumBadge(size: 30)
+        VStack(alignment: .leading, spacing: Space.xxs) {
+            HStack(spacing: Space.s + Space.xxs) {
+                KeepmumBadge(size: 28)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("keepmum").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
-                    Text("privacy proxy").font(.system(size: 10.5)).foregroundStyle(Theme.secondary)
+                    Text("keepmum").font(.km(.headline)).foregroundStyle(Theme.text)
+                    Text("privacy proxy").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
                 }
             }
-            .padding(.horizontal, 8).padding(.top, 40).padding(.bottom, 18)
-            ForEach(Page.allCases) { p in
-                Button { page = p } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: p.icon).font(.system(size: 13)).frame(width: 18)
-                        Text(p.title).font(.system(size: 13, weight: page == p ? .semibold : .regular))
-                        Spacer()
-                    }
-                    .foregroundStyle(page == p ? Theme.accent : Theme.text)
-                    .padding(.horizontal, 10).padding(.vertical, 7)
-                    .background(Capsule().fill(page == p ? Theme.accentSoft : .clear))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+            .padding(.horizontal, Space.s).padding(.top, 44).padding(.bottom, Space.l)
+            ForEach(Page.groups, id: \.0) { title, pages in
+                Text(title).eyebrow().padding(.horizontal, Space.s).padding(.top, Space.m).padding(.bottom, Space.xs)
+                ForEach(pages) { SidebarItem(page: $0, selection: $page) }
             }
             Spacer()
-            VStack(alignment: .leading, spacing: 6) {
-                StatusDot(connection: store.connection)
-                Text(sessionLine).font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(2)
+            SidebarItem(page: .settings, selection: $page)
+            Hairline().padding(.vertical, Space.s)
+            VStack(alignment: .leading, spacing: Space.xs) {
+                StatusDot(connection: store.connection, observing: store.snapshot.observe == true)
+                Text(sessionLine).font(.km(.caption)).foregroundStyle(Theme.textSecondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.faint))
+            .padding(.horizontal, Space.s).padding(.bottom, Space.xs)
         }
-        .padding(12)
+        .padding(.horizontal, Space.s + Space.xxs).padding(.bottom, Space.m)
         .frame(maxHeight: .infinity)
-        .background(Theme.sidebar)
+        .background(SidebarBackground())
     }
 
     private var sessionLine: String {
         let s = store.snapshot
         switch store.connection {
-        case .offline(let reason): return reason
+        case .offline(let reason): return reason.sentence
         case .connecting: return "Looking for keepmum…"
         default:
-            return "\(s.modeLabel) · PII \(s.pii == true ? "on" : "off") · up \(durationText(s.uptime))"
+            return "\(s.modeLabel) · PII \(s.pii == true ? "on" : "off")\nUp \(durationText(s.uptime))"
         }
     }
 }
 
-// MARK: - Shared pieces
-
-struct PageHeader<Trailing: View>: View {
-    var title: String
-    var subtitle: String
-    @ViewBuilder var trailing: Trailing
+private struct SidebarItem: View {
+    var page: Page
+    @Binding var selection: Page
+    @State private var hovering = false
 
     var body: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 20, weight: .semibold)).foregroundStyle(Theme.text)
-                Text(subtitle).font(.system(size: 12)).foregroundStyle(Theme.secondary)
+        let on = selection == page
+        Button { selection = page } label: {
+            HStack(spacing: Space.s) {
+                Image(systemName: page.icon).font(.km(.body)).frame(width: 18)
+                    .foregroundStyle(on ? Theme.accent : Theme.textSecondary)
+                Text(page.title).font(.km(.body).weight(on ? .medium : .regular)).foregroundStyle(Theme.text)
+                Spacer(minLength: 0)
             }
-            Spacer()
-            trailing
+            .padding(.horizontal, Space.s).padding(.vertical, Space.xs + 1)
+            .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+                .fill(on ? Theme.fillStrong : hovering ? Theme.fill : .clear))
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 
-struct KPI: View {
-    var title: String
-    var value: String
-    var icon: String
-    var footnote: String
-    var tint: Color = Theme.accent
+// MARK: - Notices
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 11, weight: .semibold)).foregroundStyle(tint)
-                Text(title).font(.system(size: 11.5, weight: .medium)).foregroundStyle(Theme.secondary)
-            }
-            Text(value).font(.system(size: 24, weight: .semibold, design: .rounded)).monospacedDigit()
-                .foregroundStyle(Theme.text).contentTransition(.numericText())
-            Text(footnote).font(.system(size: 10.5)).foregroundStyle(Theme.secondary).lineLimit(1)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.surface))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Theme.border))
-    }
-}
-
-struct OfflineBanner: View {
-    var reason: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "bolt.horizontal.circle").foregroundStyle(Theme.danger)
-            Text("\(reason). Start the background service in Settings, or run ").foregroundStyle(Theme.text)
-                + Text("keepmum claude").font(.system(size: 12.5, design: .monospaced)).foregroundStyle(Theme.accent)
-                + Text(", to see live data.").foregroundStyle(Theme.text)
-            Spacer()
-        }
-        .font(.system(size: 12.5))
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(Capsule().fill(Theme.danger.opacity(0.08)))
-        .overlay(Capsule().strokeBorder(Theme.danger.opacity(0.2)))
-    }
-}
-
-/// Observe mode is a choice, but never a quiet one.
-struct ObserveBanner: View {
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "eye.trianglebadge.exclamationmark").foregroundStyle(Theme.danger)
-            Text("Observe only: requests go to Anthropic unmasked. keepmum counts what it would mask. Switch back in Settings.")
-                .foregroundStyle(Theme.text)
-            Spacer()
-        }
-        .font(.system(size: 12.5))
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(Capsule().fill(Theme.danger.opacity(0.08)))
-        .overlay(Capsule().strokeBorder(Theme.danger.opacity(0.2)))
-    }
-}
-
-struct PreviewToggle: View {
+/// What the dashboard must say before anything else, on every page: values are leaving unmasked
+/// (observe mode), keepmum is not running, or the numbers are synthetic.
+private struct Notices: View {
     var store: StatsStore
+    var engine: Engine
+    @Binding var page: Page
+
     var body: some View {
-        PillButton(title: store.sampleMode ? "Exit preview" : "Preview", icon: store.sampleMode ? "xmark" : "sparkles") {
-            store.sampleMode.toggle()
+        let observing = store.snapshot.observe == true && !isOffline
+        if observing || isOffline || store.sampleMode {
+            VStack(spacing: Space.s) {
+                if observing {
+                    Banner(tone: .danger, icon: "eye.trianglebadge.exclamationmark", title: "Observe only.",
+                           message: "Requests leave this Mac unmasked; keepmum only counts what it would mask.") {
+                        PillButton(title: "Mask again", icon: "eye.slash", onSolid: true) { Task { await engine.setObserve(false) } }
+                            .disabled(!engine.isBundled || engine.busy)
+                    }
+                }
+                if case .offline(let reason) = store.connection {
+                    Banner(tone: .warning, icon: "bolt.horizontal.circle", title: "Not connected.",
+                           message: "\(reason.sentence). Start the background service in Settings, or run keepmum claude.") {
+                        if page != .settings { PillButton(title: "Open Settings") { page = .settings } }
+                    }
+                }
+                if store.sampleMode {
+                    Banner(tone: .info, icon: "sparkles", title: "Preview data.",
+                           message: "Synthetic numbers that show every page; nothing here happened on this Mac.") {
+                        PillButton(title: "Exit preview") { store.sampleMode = false }
+                    }
+                }
+            }
         }
+    }
+
+    private var isOffline: Bool {
+        if case .offline = store.connection { return true }
+        return false
     }
 }
 
@@ -198,28 +182,26 @@ struct OverviewPage: View {
 
     var body: some View {
         let s = store.snapshot
-        VStack(spacing: 16) {
-            PageHeader(title: "Overview", subtitle: "What left this Mac, and what stayed") { PreviewToggle(store: store) }
-            if case .offline(let reason) = store.connection { OfflineBanner(reason: reason) }
-            if s.observe == true { ObserveBanner() }
-            HStack(spacing: 12) {
-                KPI(title: "Unique values masked", value: (s.vaultSize ?? 0).compact, icon: "lock.fill",
-                    footnote: "\(s.maskedTotal.compact) masks applied, incl. resends")
-                KPI(title: "Requests scanned", value: s.funnel.scanned.compact, icon: "doc.text.magnifyingglass",
-                    footnote: s.funnel.withNew.map { "\($0.compact) brought new sensitive values" }
-                        ?? "\(percent(s.funnel.withFindings, of: s.funnel.scanned)) carried sensitive data")
-                KPI(title: "Blocked before leaving", value: s.blocked.compact, icon: "hand.raised.fill",
-                    footnote: "fail-closed: never sent raw", tint: s.blocked > 0 ? Theme.danger : Theme.accent)
-                KPI(title: "Scan time (p95)", value: s.scanMs.p95.map { String(format: "%.0f ms", $0) } ?? "—", icon: "timer",
-                    footnote: "budget 150 ms",
-                    tint: (s.scanMs.p95 ?? 0) > LatencyChart.budget ? Theme.danger : Theme.accent)
+        VStack(spacing: Space.l) {
+            PageHeader(title: "Overview", subtitle: "What left this Mac, and what stayed")
+            HStack(spacing: Space.m) {
+                Metric(title: "Unique values masked", value: (s.vaultSize ?? 0).compact, icon: "lock.fill",
+                       footnote: "\(s.maskedTotal.compact) masks applied, incl. resends")
+                Metric(title: "Requests scanned", value: s.funnel.scanned.compact, icon: "doc.text.magnifyingglass",
+                       footnote: s.funnel.withNew.map { "\($0.compact) brought new sensitive values" }
+                           ?? "\(percent(s.funnel.withFindings, of: s.funnel.scanned)) carried sensitive data")
+                Metric(title: "Blocked before leaving", value: s.blocked.compact, icon: "hand.raised.fill",
+                       footnote: "fail-closed: never sent raw", tone: s.blocked > 0 ? Theme.blocked : nil)
+                Metric(title: "Scan time (p95)", value: milliseconds(s.scanMs.p95), icon: "timer",
+                       footnote: "budget \(Int(LatencyChart.budget)) ms",
+                       tone: (s.scanMs.p95 ?? 0) > LatencyChart.budget ? Theme.warning : nil)
             }
-            Card(title: "Live flow", subtitle: "Requests out on top, replies back below. Band width is the number of requests.") {
+            Card(title: "Live flow", subtitle: "Requests out on top, replies back below; band width is the number of requests") {
                 Segmented(options: [(3600.0, "Last hour"), (86400.0, "24 hours"), (604800.0, "7 days")],
                           selection: Binding(get: { store.flowWindow }, set: { store.flowWindow = $0 }))
             } content: {
                 FlowBandsView(flows: store.flows, pulses: store.pulses, live: store.connection == .live || store.connection == .sample)
-                    .frame(minHeight: 360, maxHeight: .infinity)
+                    .frame(minHeight: 320, maxHeight: .infinity)
             }
         }
     }
@@ -232,10 +214,10 @@ struct ActivityPage: View {
 
     var body: some View {
         let s = store.snapshot
-        VStack(spacing: 16) {
-            PageHeader(title: "Activity", subtitle: "Every request, newest first. Counts only: keepmum never shows a value.") { PreviewToggle(store: store) }
-            Card(title: "Last hour", subtitle: "Masked values per minute · red dot: a blocked request") {
-                MaskedTimeline(minutes: s.timeline).frame(height: 120)
+        VStack(spacing: Space.l) {
+            PageHeader(title: "Activity", subtitle: "Every request, newest first. Counts only: keepmum never shows a value.")
+            Card(title: "Last hour", subtitle: "Masked values per minute; a red dot is a blocked request") {
+                MaskedTimeline(minutes: s.timeline).frame(height: 110)
             }
             .fixedSize(horizontal: false, vertical: true)
             Card(title: "Requests", subtitle: subtitle) {
@@ -267,15 +249,15 @@ struct PerformancePage: View {
     var body: some View {
         let s = store.snapshot
         let over = s.recent.compactMap(\.scanMs).filter { $0 > LatencyChart.budget }.count
-        VStack(spacing: 16) {
-            PageHeader(title: "Performance", subtitle: "Time keepmum adds before a request leaves") { PreviewToggle(store: store) }
-            HStack(spacing: 12) {
-                KPI(title: "Median (p50)", value: s.scanMs.p50.map { String(format: "%.0f ms", $0) } ?? "—", icon: "timer", footnote: "half of scans are faster")
-                KPI(title: "p95", value: s.scanMs.p95.map { String(format: "%.0f ms", $0) } ?? "—", icon: "gauge.with.dots.needle.67percent",
-                    footnote: "budget 150 ms", tint: (s.scanMs.p95 ?? 0) > LatencyChart.budget ? Theme.danger : Theme.accent)
-                KPI(title: "Scans measured", value: s.scanMs.n.compact, icon: "number", footnote: "only new text is scanned")
-                KPI(title: "Over budget", value: over.compact, icon: "exclamationmark.triangle", footnote: "of recent requests",
-                    tint: over > 0 ? Theme.danger : Theme.accent)
+        VStack(spacing: Space.l) {
+            PageHeader(title: "Performance", subtitle: "Time keepmum adds before a request leaves")
+            HStack(spacing: Space.m) {
+                Metric(title: "Median (p50)", value: milliseconds(s.scanMs.p50), icon: "timer", footnote: "half of scans are faster")
+                Metric(title: "p95", value: milliseconds(s.scanMs.p95), icon: "gauge.with.dots.needle.67percent",
+                       footnote: "budget \(Int(LatencyChart.budget)) ms", tone: (s.scanMs.p95 ?? 0) > LatencyChart.budget ? Theme.warning : nil)
+                Metric(title: "Scans measured", value: s.scanMs.n.compact, icon: "number", footnote: "only new text is scanned")
+                Metric(title: "Over budget", value: over.compact, icon: "exclamationmark.triangle", footnote: "of recent requests",
+                       tone: over > 0 ? Theme.warning : nil)
             }
             Card(title: "Scan time", subtitle: "Recent requests") { LatencyChart(events: s.recent) }
             Card(title: "Distribution", subtitle: "Requests per 25 ms bucket") { LatencyHistogram(events: s.recent) }
@@ -284,6 +266,8 @@ struct PerformancePage: View {
     }
 }
 
+/// Settings as one column of groups, as in System Settings: setup and the agents first, then
+/// what gets masked, exclusions, display, and the connection.
 struct SettingsPage: View {
     var store: StatsStore
     var engine: Engine
@@ -291,74 +275,63 @@ struct SettingsPage: View {
     @Environment(\.isSnapshot) private var isSnapshot
 
     var body: some View {
-        let s = store.snapshot
-        VStack(spacing: 16) {
-            PageHeader(title: "Settings", subtitle: "Setup, appearance and connection") { EmptyView() }
+        VStack(spacing: Space.l) {
+            PageHeader(title: "Settings", subtitle: "Setup, masking, exclusions and display")
             if isSnapshot {
-                columns(s)
-                Spacer()
+                form
+                Spacer(minLength: 0)
             } else {
-                ScrollView { columns(s) }
+                ScrollView { form.padding(.bottom, Space.xl) }.scrollIndicators(.automatic)
             }
         }
     }
 
-    private func columns(_ s: Snapshot) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(spacing: 12) {
-                SetupCard(engine: engine)
-                    .fixedSize(horizontal: false, vertical: true)
-                Card(title: "Display", subtitle: "Appearance, and preview data: synthetic numbers, clearly labeled") {
-                    HStack {
-                        Segmented(options: Appearance.allCases.map { ($0, $0.title) }, selection: $appearance)
-                        Spacer()
-                        PreviewToggle(store: store)
-                    }
+    private var form: some View {
+        let s = store.snapshot
+        return VStack(alignment: .leading, spacing: Space.xl) {
+            SetupSection(engine: engine)
+            MaskingSection(engine: engine, observing: s.observe == true, modelError: s.detection.modelError)
+            ExclusionsSection(engine: engine)
+            FormSection(title: "Display") {
+                FormRow(title: "Appearance") {
+                    Segmented(options: Appearance.allCases.map { ($0, $0.title) }, selection: $appearance)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-                Card(title: "Privacy") {
-                    Text("This app reads keepmum's stats feed: counts, types and timestamps, and for the Logs page the first and last character of long masked values (turn that off with [log] previews = false). It never receives a whole value or a placeholder, talks only to 127.0.0.1, and sends no telemetry.")
-                        .font(.system(size: 12)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
+                Hairline()
+                FormRow(title: "Preview data", detail: "Synthetic numbers on every page, clearly labeled, to see the dashboard without real traffic") {
+                    Switch(isOn: store.sampleMode) { store.sampleMode = $0 }.accessibilityLabel("Preview data")
                 }
-                .fixedSize(horizontal: false, vertical: true)
             }
-            VStack(spacing: 12) {
-                Card(title: "Connection") {
-                    VStack(spacing: 0) {
-                        row("Status", { StatusDot(connection: store.connection) })
-                        row("Endpoint", "127.0.0.1:\(store.port)")
-                        row("Mode", s.modeLabel)
-                        row("Personal data", s.pii.map { $0 ? "masked" : "not masked" } ?? "—")
-                        row("Detector", s.detector ?? "—")
-                        row("Upstream", s.upstream ?? "—")
-                        row("Version", s.version ?? "—")
-                        row("Token", "~/.config/keepmum/stats-token")
-                    }
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                ModeCard(engine: engine, observing: store.snapshot.observe == true)
-                    .fixedSize(horizontal: false, vertical: true)
-                DetectorCard(engine: engine, modelError: store.snapshot.detection.modelError)
-                    .fixedSize(horizontal: false, vertical: true)
-                ExclusionsCard(engine: engine)
-                    .fixedSize(horizontal: false, vertical: true)
+            FormSection(title: "Connection",
+                        footer: "This app reads keepmum's stats feed: counts, types and timestamps, and for the Logs page the first and last character of long masked values (turn that off with [log] previews = false). It never receives a whole value or a placeholder, talks only to 127.0.0.1, and sends no telemetry.") {
+                row("Status") { StatusDot(connection: store.connection, observing: s.observe == true) }
+                row("Endpoint", "127.0.0.1:\(store.port)")
+                row("Mode", s.modeLabel)
+                row("Personal data", s.pii.map { $0 ? "masked" : "not masked" } ?? "—")
+                row("Detector", s.detector ?? "—")
+                row("Upstream", s.upstream ?? "—")
+                row("Version", s.version ?? "—")
+                row("Token", "~/.config/keepmum/stats-token", last: true)
             }
+        }
+        .frame(maxWidth: 760, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func row(_ key: String, _ value: String, last: Bool = false) -> some View {
+        row(key, last: last) {
+            Text(value).font(.km(.mono)).foregroundStyle(Theme.textSecondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
         }
     }
 
-    private func row(_ key: String, _ value: String) -> some View {
-        row(key, { Text(value).font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle) })
-    }
-
-    private func row(_ key: String, @ViewBuilder _ value: () -> some View) -> some View {
+    private func row(_ key: String, last: Bool = false, @ViewBuilder _ value: () -> some View) -> some View {
         VStack(spacing: 0) {
             HStack {
-                Text(key).font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                Spacer()
+                Text(key).font(.km(.body)).foregroundStyle(Theme.text)
+                Spacer(minLength: Space.m)
                 value()
             }
-            .padding(.vertical, 8)
-            Rectangle().fill(Theme.border).frame(height: 1)
+            .padding(.vertical, Space.s)
+            if !last { Hairline() }
         }
     }
 }
@@ -375,7 +348,7 @@ struct ActivityTable: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
+            ColumnHeader {
                 Text("Time").frame(width: 70, alignment: .leading)
                 Text("Outcome").frame(width: 90, alignment: .leading)
                 if !compact { Text("Endpoint").frame(width: 170, alignment: .leading) }
@@ -383,74 +356,56 @@ struct ActivityTable: View {
                 if !compact { Text("Restored").frame(width: 60, alignment: .trailing) }
                 Text("Scan").frame(width: 56, alignment: .trailing)
             }
-            .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondary)
-            .padding(.bottom, 6)
-            Rectangle().fill(Theme.border).frame(height: 1)
             let shown = newestFirst ? Array(events.prefix(rows)) : Array(events.suffix(rows).reversed())
             if newestFirst && !isSnapshot {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(shown) { e in row(e) }
                         if let footer {
-                            PillButton(title: "Load older", icon: "arrow.down", action: footer).padding(.vertical, 10)
+                            PillButton(title: "Load older", icon: "arrow.down", action: footer).padding(.vertical, Space.s + Space.xxs)
                         }
                     }
                 }
             } else {
                 ForEach(shown) { e in row(e) }
             }
-            if events.isEmpty {
-                Text("No requests yet").font(.system(size: 12)).foregroundStyle(Theme.secondary).padding(.top, 12)
-            }
+            if events.isEmpty { EmptyNote(text: "No requests yet") }
             Spacer(minLength: 0)
         }
     }
 
     private func row(_ e: Snapshot.Event) -> some View {
-        let kind = e.kind
-        let (label, icon, tint): (String, String, Color) = switch kind {
-        case .blocked: ("Blocked", "hand.raised.fill", Theme.danger)
-        case .observed: ("Observed", "eye", Theme.secondary)
-        case .masked: ("Masked", "eye.slash", Theme.accent)
-        case .clean: ("Clean", "checkmark.circle", Theme.secondary)
-        }
         // Clean, but carrying values masked in earlier turns.
-        let earlier = kind == .clean && !e.redacted.isEmpty
-        return VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Text(e.date, format: .dateTime.hour().minute().second())
-                    .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Theme.secondary).frame(width: 70, alignment: .leading)
-                HStack(spacing: 5) {
-                    Image(systemName: icon)
-                    Text(label)
-                }
+        let earlier = e.kind == .clean && !e.redacted.isEmpty
+        let restored = e.restored.values.reduce(0, +)
+        return TableRow {
+            Text(e.date, format: .dateTime.hour().minute().second())
+                .font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary).frame(width: 70, alignment: .leading)
+            OutcomeLabel(kind: e.kind)
                 .help(earlier ? "Nothing new to mask; earlier turns, which Claude Code resends, still held masked values" : "")
-                .font(.system(size: 11.5)).foregroundStyle(tint)
                 .frame(width: 90, alignment: .leading)
-                if !compact {
-                    Text(e.path).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Theme.text).lineLimit(1)
-                        .frame(width: 170, alignment: .leading)
-                }
-                HStack(spacing: 10) {
-                    ForEach(e.redacted.sorted { $0.key < $1.key }, id: \.key) { type, n in
-                        HStack(spacing: 4) {
-                            Image(systemName: Theme.icon(type)).font(.system(size: 9.5)).foregroundStyle(Theme.secondary)
-                            Text("\(Theme.label(type)) \(n)").font(.system(size: 11.5)).foregroundStyle(earlier ? Theme.secondary : Theme.text)
-                        }
+            if !compact {
+                Text(e.path).font(.km(.monoSmall)).foregroundStyle(Theme.text).lineLimit(1)
+                    .frame(width: 170, alignment: .leading)
+            }
+            HStack(spacing: Space.s + Space.xxs) {
+                ForEach(e.redacted.sorted { $0.key < $1.key }, id: \.key) { type, n in
+                    HStack(spacing: Space.xs) {
+                        Image(systemName: Theme.icon(type)).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                        Text("\(Theme.label(type)) \(n)").font(.km(.callout)).foregroundStyle(earlier ? Theme.textSecondary : Theme.text)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                if !compact {
-                    Text(e.restored.values.reduce(0, +) > 0 ? "\(e.restored.values.reduce(0, +))" : "—")
-                        .font(.system(size: 11.5)).monospacedDigit().foregroundStyle(Theme.secondary).frame(width: 60, alignment: .trailing)
-                }
-                Text(e.scanMs.map { String(format: "%.0f ms", $0) } ?? "—")
-                    .font(.system(size: 11.5)).monospacedDigit()
-                    .foregroundStyle((e.scanMs ?? 0) > LatencyChart.budget ? Theme.danger : Theme.secondary)
-                    .frame(width: 56, alignment: .trailing)
             }
-            .padding(.vertical, 7)
-            Rectangle().fill(Theme.border).frame(height: 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if !compact {
+                Text(restored > 0 ? "\(restored)" : "—")
+                    .font(.km(.callout)).monospacedDigit().foregroundStyle(restored > 0 ? Theme.restored : Theme.textSecondary)
+                    .frame(width: 60, alignment: .trailing)
+            }
+            Text(milliseconds(e.scanMs))
+                .font(.km(.callout)).monospacedDigit()
+                .foregroundStyle((e.scanMs ?? 0) > LatencyChart.budget ? Theme.warning : Theme.textSecondary)
+                .frame(width: 56, alignment: .trailing)
         }
     }
 }

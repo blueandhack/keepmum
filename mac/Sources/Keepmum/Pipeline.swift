@@ -198,20 +198,20 @@ private struct FlowBands {
 
         // Replies back, right to left: providers, restore, clients.
         var bnodes = providers.map { BandLayout.Node(id: "p:" + $0, col: 3, color: Self.providerColor($0)) }
-        bnodes += [BandLayout.Node(id: "restored", col: 1, color: Theme.success),
+        bnodes += [BandLayout.Node(id: "restored", col: 1, color: Theme.restored),
                    BandLayout.Node(id: "plain", col: 1, color: Self.resultColor("clean"))]
         bnodes += clients.map { BandLayout.Node(id: "c:" + $0, col: 0, color: Self.clientColor($0)) }
         var blinks: [BandLayout.Link] = []
         for p in providers {
             for (node, r) in [("restored", true), ("plain", false)] {
                 let n = flows.back.filter { $0.provider == p && $0.restored == r }.reduce(0) { $0 + $1.n }
-                blinks.append(.init(from: "p:" + p, to: node, value: n, color: r ? Theme.success : Self.resultColor("clean")))
+                blinks.append(.init(from: "p:" + p, to: node, value: n, color: r ? Theme.restored : Self.resultColor("clean")))
             }
         }
         for c in clients {
             for (node, r) in [("restored", true), ("plain", false)] {
                 let n = flows.back.filter { $0.client == c && $0.restored == r }.reduce(0) { $0 + $1.n }
-                blinks.append(.init(from: node, to: "c:" + c, value: n, color: r ? Theme.success : Self.resultColor("clean")))
+                blinks.append(.init(from: node, to: "c:" + c, value: n, color: r ? Theme.restored : Self.resultColor("clean")))
             }
         }
         back = BandLayout(nodes: bnodes, links: blinks, xs: xs, top: backTop, height: half)
@@ -219,15 +219,7 @@ private struct FlowBands {
 
     // MARK: Colors
 
-    static func clientColor(_ id: String) -> Color {
-        switch id {
-        case "claude-code": Color(light: NSColor(hex: 0xC8775A), dark: NSColor(hex: 0xD98B6E))
-        case "codex": Color(light: NSColor(hex: 0x5B6270), dark: NSColor(hex: 0x9AA1AE))
-        case "pi": Color(light: NSColor(hex: 0x6E78E0), dark: NSColor(hex: 0x8F98F0))
-        case "opencode": Color(light: NSColor(hex: 0xB7791F), dark: NSColor(hex: 0xE0A458))
-        default: Color(light: NSColor(hex: 0x2A9D8F), dark: NSColor(hex: 0x4FC3B5))
-        }
-    }
+    static func clientColor(_ id: String) -> Color { Theme.client(id) }
 
     static func providerColor(_ id: String) -> Color {
         switch id {
@@ -239,11 +231,11 @@ private struct FlowBands {
 
     static func resultColor(_ kind: String) -> Color {
         switch kind {
-        case "masked": Theme.accent
-        case "observed": Color(light: NSColor(hex: 0xD97706), dark: NSColor(hex: 0xF59E0B))
-        case "blocked": Theme.danger
-        case "failed": Theme.secondary
-        default: Color(light: NSColor(hex: 0xA6AEBB), dark: NSColor(hex: 0x5D6573))
+        case "masked": Theme.masked
+        case "observed": Theme.warning
+        case "blocked": Theme.blocked
+        case "failed": Theme.textSecondary
+        default: Theme.neutral
         }
     }
 
@@ -341,7 +333,7 @@ private struct FlowBands {
 
     func draw(_ ctx: inout GraphicsContext, now: Date, pulses: [Pulse], hover: CGPoint? = nil) {
         if flows.clients.isEmpty {
-            ctx.draw(Text("No requests in this window yet").font(.system(size: 13)).foregroundStyle(Theme.secondary),
+            ctx.draw(Text("No requests in this window yet").font(.km(.body)).foregroundStyle(Theme.textSecondary),
                      at: CGPoint(x: size.width / 2, y: size.height / 2))
             return
         }
@@ -349,11 +341,11 @@ private struct FlowBands {
         var dash = Path()
         dash.move(to: CGPoint(x: dashX, y: outTop - 8))
         dash.addLine(to: CGPoint(x: dashX, y: size.height))
-        ctx.stroke(dash, with: .color(Theme.secondary.opacity(0.5)), style: StrokeStyle(lineWidth: 1, dash: [4, 5]))
+        ctx.stroke(dash, with: .color(Theme.textSecondary.opacity(0.5)), style: StrokeStyle(lineWidth: 1, dash: [4, 5]))
         var rule = Path()
         rule.move(to: CGPoint(x: 0, y: backTop - 44))
         rule.addLine(to: CGPoint(x: size.width, y: backTop - 44))
-        ctx.stroke(rule, with: .color(Theme.border), lineWidth: 1)
+        ctx.stroke(rule, with: .color(Theme.separator), lineWidth: 1)
 
         let focus = hover.map { self.focus(at: $0) } ?? FlowFocus()
         for (k, layout) in [out, back].enumerated() {
@@ -363,7 +355,7 @@ private struct FlowBands {
             }
             for (id, n) in layout.nodes {
                 let lit = focus.isEmpty || (focus.nodes[k]?.contains(id) ?? false)
-                ctx.fill(Path(roundedRect: n.rect, cornerRadius: 3), with: .color(n.color.opacity(lit ? 1 : 0.3)))
+                ctx.fill(Path(roundedRect: n.rect, cornerRadius: Radius.s / 2), with: .color(n.color.opacity(lit ? 1 : 0.3)))
             }
         }
         headers(&ctx)
@@ -374,7 +366,7 @@ private struct FlowBands {
 
     private func headers(_ ctx: inout GraphicsContext) {
         func h(_ s: String, _ x: CGFloat, _ y: CGFloat, _ anchor: UnitPoint) {
-            ctx.draw(Text(s.uppercased()).font(.system(size: 10, weight: .semibold)).kerning(0.4).foregroundStyle(Theme.secondary),
+            ctx.draw(Text(s.uppercased()).font(.km(.label)).kerning(0.4).foregroundStyle(Theme.textSecondary),
                      at: CGPoint(x: x, y: y), anchor: anchor)
         }
         for (top, a, b, c, d) in [(outTop, "Requests out →", "keepmum scans", "Result", "leaves this Mac"),
@@ -386,8 +378,8 @@ private struct FlowBands {
             h(d, dashX + 8, y, .leading)
         }
         if flows.unresolved > 0 {
-            ctx.draw(Text("\(flows.unresolved) placeholders could not be restored").font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.danger), at: CGPoint(x: size.width, y: backTop - 14), anchor: .trailing)
+            ctx.draw(Text("\(flows.unresolved) placeholders could not be restored").font(.km(.caption).weight(.semibold))
+                .foregroundStyle(Theme.blocked), at: CGPoint(x: size.width, y: backTop - 14), anchor: .trailing)
         }
     }
 
@@ -409,7 +401,7 @@ private struct FlowBands {
         let detail = ["clean": "sent as is", "masked": "as placeholders", "observed": "sent unmasked", "failed": "upstream failed",
                       "blocked": "never sent"]
         let title = ["clean": "Clean", "masked": "Masked", "observed": "Observed", "failed": "Failed", "blocked": "Blocked"]
-        let tint: [String: Color] = ["masked": Theme.accent, "blocked": Theme.danger, "observed": Self.resultColor("observed")]
+        let tint: [String: Color] = ["masked": Theme.masked, "blocked": Theme.blocked, "observed": Self.resultColor("observed")]
         for r in Self.results {
             guard let n = out.nodes["r:" + r] else { continue }
             let v = sum(flows.out.filter { $0.kind == r }.map(\.n))
@@ -425,7 +417,7 @@ private struct FlowBands {
         }
         if let n = back.nodes["restored"] {
             let replies = sum(flows.back.filter(\.restored).map(\.n)), values = sum(flows.back.map(\.values))
-            restore.append((n.rect, "Real values put back", "\(replies.compact) replies · \(values.compact) values", Theme.success))
+            restore.append((n.rect, "Real values put back", "\(replies.compact) replies · \(values.compact) values", Theme.restored))
         }
         if let n = back.nodes["plain"] {
             restore.append((n.rect, "Nothing to put back", "\(sum(flows.back.filter { !$0.restored }.map(\.n)).compact) replies", Theme.text))
@@ -436,8 +428,8 @@ private struct FlowBands {
             for (rect, t, d, color) in items.sorted(by: { $0.0.midY < $1.0.midY }) {
                 let y = max(rect.midY - 8, lastY + 30)
                 lastY = y
-                ctx.draw(Text(t).font(.system(size: 12, weight: .semibold)).foregroundStyle(color), at: CGPoint(x: x, y: y), anchor: anchor)
-                ctx.draw(Text(d).font(.system(size: 11)).foregroundStyle(Theme.secondary), at: CGPoint(x: x, y: y + 14), anchor: anchor)
+                ctx.draw(Text(t).font(.km(.callout).weight(.semibold)).foregroundStyle(color), at: CGPoint(x: x, y: y), anchor: anchor)
+                ctx.draw(Text(d).font(.km(.caption)).foregroundStyle(Theme.textSecondary), at: CGPoint(x: x, y: y + 14), anchor: anchor)
             }
         }
         place(leftOut, x: xs[0] - 10, anchor: .trailing)
@@ -449,14 +441,14 @@ private struct FlowBands {
     }
 
     private func tooltip(_ ctx: inout GraphicsContext, _ text: String, at p: CGPoint) {
-        let t = ctx.resolve(Text(text).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.text))
+        let t = ctx.resolve(Text(text).font(.km(.callout).weight(.semibold)).foregroundStyle(Theme.text))
         let sz = t.measure(in: CGSize(width: 400, height: 40))
         var box = CGRect(x: p.x + 14, y: p.y - sz.height - 18, width: sz.width + 20, height: sz.height + 12)
         if box.maxX > size.width { box.origin.x = p.x - box.width - 14 }
         if box.minY < 0 { box.origin.y = p.y + 16 }
-        let shape = Path(roundedRect: box, cornerRadius: 8)
-        ctx.fill(shape, with: .color(Theme.surface))
-        ctx.stroke(shape, with: .color(Theme.border), lineWidth: 1)
+        let shape = Path(roundedRect: box, cornerRadius: Radius.s)
+        ctx.fill(shape, with: .color(Theme.raised))
+        ctx.stroke(shape, with: .color(Theme.separator), lineWidth: 1)
         ctx.draw(t, at: CGPoint(x: box.midX, y: box.midY))
     }
 

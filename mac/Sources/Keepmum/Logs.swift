@@ -73,12 +73,10 @@ struct LogsPage: View {
     var body: some View {
         let all = store.sampleMode ? Finding.samples : store.findings
         let shown = all.filter { (type == "ALL" || $0.type == type) && $0.matches(query) }
-        VStack(spacing: 16) {
-            PageHeader(title: "Logs", subtitle: "What keepmum masked in new text, newest first. Only the first and last character of a value, kept in memory until keepmum exits.") {
-                PreviewToggle(store: store)
-            }
+        VStack(spacing: Space.l) {
+            PageHeader(title: "Logs", subtitle: "What keepmum masked in new text, newest first: the first and last character only, kept in memory until keepmum exits.")
             Card(title: "Masked values", subtitle: all.isEmpty ? "Nothing masked since keepmum started" : "\(shown.count) of \(all.count)") {
-                HStack(spacing: 8) {
+                HStack(spacing: Space.s) {
                     search
                     typePicker
                 }
@@ -86,21 +84,26 @@ struct LogsPage: View {
                 VStack(spacing: 0) {
                     if !store.previewsOn {
                         Text("Previews are off ([log] previews = false): types and rules only.")
-                            .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
+                            .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, Space.s)
                     }
-                    header
-                    Rectangle().fill(Theme.border).frame(height: 1)
+                    ColumnHeader {
+                        Text("Time").frame(width: 70, alignment: .leading)
+                        Text("Agent").frame(width: 92, alignment: .leading)
+                        Text("Type").frame(width: 110, alignment: .leading)
+                        Text("Value").frame(width: 70, alignment: .leading)
+                        Text("Length").frame(width: 56, alignment: .trailing)
+                        Text("Found by").frame(maxWidth: .infinity, alignment: .leading).padding(.leading, Space.s)
+                        Text("Outcome").frame(width: 80, alignment: .leading)
+                    }
                     if isSnapshot {
                         ForEach(shown.prefix(14)) { row($0) }
                     } else {
                         ScrollView { LazyVStack(spacing: 0) { ForEach(shown) { row($0) } } }
                     }
                     if shown.isEmpty {
-                        Text(all.isEmpty ? "Nothing yet. Values masked in new text appear here; the list starts empty each time keepmum starts."
-                                         : "No match")
-                            .font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 12)
+                        EmptyNote(text: all.isEmpty ? "Nothing yet. Values masked in new text appear here; the list starts empty each time keepmum starts."
+                                                    : "No match")
                     }
                     Spacer(minLength: 0)
                 }
@@ -115,25 +118,25 @@ struct LogsPage: View {
     }
 
     private var search: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Theme.secondary)
+        HStack(spacing: Space.s - Space.xxs) {
+            Image(systemName: "magnifyingglass").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
             if isSnapshot {
-                Text("Search").font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                Text("Search").font(.km(.callout)).foregroundStyle(Theme.textTertiary)
             } else {
                 TextField("Search", text: $query, prompt: Text("Search: g…w, email, github-token, Codex"))
-                    .textFieldStyle(.plain).font(.system(size: 12))
+                    .textFieldStyle(.plain).font(.km(.callout))
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 9).frame(width: 260, height: 26)
-        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.faint))
+        .padding(.horizontal, Space.s).frame(width: 260, height: 26)
+        .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.fill))
     }
 
     @ViewBuilder private var typePicker: some View {
         if isSnapshot {
-            Text("All types").font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                .padding(.horizontal, 9).frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.faint))
+            Text("All types").font(.km(.callout)).foregroundStyle(Theme.text)
+                .padding(.horizontal, Space.s).frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.fill))
         } else {
             Picker("Type", selection: $type) {
                 Text("All types").tag("ALL")
@@ -143,52 +146,31 @@ struct LogsPage: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Text("Time").frame(width: 70, alignment: .leading)
-            Text("Agent").frame(width: 92, alignment: .leading)
-            Text("Type").frame(width: 110, alignment: .leading)
-            Text("Value").frame(width: 70, alignment: .leading)
-            Text("Length").frame(width: 56, alignment: .trailing)
-            Text("Found by").frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8)
-            Text("Outcome").frame(width: 80, alignment: .leading)
-        }
-        .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondary).padding(.bottom, 6)
-    }
-
     private func row(_ f: Finding) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Text(f.date, format: .dateTime.hour().minute().second())
-                    .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Theme.secondary).frame(width: 70, alignment: .leading)
-                HStack(spacing: 6) {
-                    Circle().fill(clientColor(f.client ?? "claude-code")).frame(width: 7, height: 7)
-                    Text(f.clientName).lineLimit(1)
-                }
-                .font(.system(size: 12)).foregroundStyle(Theme.text).frame(width: 92, alignment: .leading)
-                HStack(spacing: 6) {
-                    Image(systemName: Theme.icon(f.type)).font(.system(size: 11)).foregroundStyle(Theme.secondary).frame(width: 14)
-                    Text(Theme.label(f.type))
-                }
-                .font(.system(size: 12)).foregroundStyle(Theme.text).frame(width: 110, alignment: .leading)
-                Text(f.preview ?? "—").font(.system(size: 12.5, design: .monospaced)).foregroundStyle(Theme.accent)
-                    .frame(width: 70, alignment: .leading)
-                    .help(f.preview == "•••" ? "Shorter than 8 characters: nothing of it is shown" : "First and last character only")
-                Text("\(f.chars)").font(.system(size: 12)).monospacedDigit().foregroundStyle(Theme.secondary)
-                    .frame(width: 56, alignment: .trailing)
-                Text(f.foundBy).font(.system(size: 12, design: f.detector == "rules" ? .monospaced : .default))
-                    .foregroundStyle(f.detector == "known" ? Theme.secondary : Theme.text).lineLimit(1).truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8)
-                HStack(spacing: 5) {
-                    Image(systemName: f.outcome == "observed" ? "eye" : "eye.slash")
-                    Text(f.outcome == "observed" ? "Observed" : "Masked")
-                }
-                .font(.system(size: 11.5)).foregroundStyle(f.outcome == "observed" ? Theme.secondary : Theme.accent)
+        TableRow {
+            Text(f.date, format: .dateTime.hour().minute().second())
+                .font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary).frame(width: 70, alignment: .leading)
+            HStack(spacing: Space.s - Space.xxs) {
+                Circle().fill(clientColor(f.client ?? "claude-code")).frame(width: 7, height: 7)
+                Text(f.clientName).lineLimit(1)
+            }
+            .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 92, alignment: .leading)
+            HStack(spacing: Space.s - Space.xxs) {
+                Image(systemName: Theme.icon(f.type)).font(.km(.caption)).foregroundStyle(Theme.textSecondary).frame(width: 14)
+                Text(Theme.label(f.type))
+            }
+            .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 110, alignment: .leading)
+            Text(f.preview ?? "—").font(.km(.mono)).foregroundStyle(Theme.masked)
+                .frame(width: 70, alignment: .leading)
+                .help(f.preview == "•••" ? "Shorter than 8 characters: nothing of it is shown" : "First and last character only")
+            Text("\(f.chars)").font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                .frame(width: 56, alignment: .trailing)
+            Text(f.foundBy).font(f.detector == "rules" ? .km(.mono) : .km(.callout))
+                .foregroundStyle(f.detector == "known" ? Theme.textSecondary : Theme.text).lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, Space.s)
+            OutcomeLabel(kind: f.outcome == "observed" ? .observed : .masked)
                 .help(f.outcome == "observed" ? "Observe mode: sent unmasked, only counted" : "")
                 .frame(width: 80, alignment: .leading)
-            }
-            .padding(.vertical, 7)
-            Rectangle().fill(Theme.border).frame(height: 1)
         }
     }
 }

@@ -2,39 +2,43 @@ import AppKit
 import SwiftUI
 
 /// Projects where Claude Code skips keepmum and goes straight to the API (`keepmum exclude`).
-struct ExclusionsCard: View {
+struct ExclusionsSection: View {
     var engine: Engine
 
     var body: some View {
-        Card(title: "Excluded projects", subtitle: "Claude Code in these goes straight to the API, unscanned") {
-            PillButton(title: "Exclude a project…", icon: "plus") { pick() }
-                .disabled(!engine.isBundled || engine.busy)
-        } content: {
-            let list = engine.status?.excluded ?? []
-            VStack(alignment: .leading, spacing: 0) {
-                if list.isEmpty {
-                    Text("None. Every project goes through keepmum.").font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                }
+        let list = engine.status?.excluded ?? []
+        FormSection(title: "Excluded projects", footer: engine.exclusionNote ?? "Claude Code in these projects goes straight to the API, unscanned.") {
+            if list.isEmpty {
+                FormRow(title: "None", detail: "Every project goes through keepmum") { addButton }
+            } else {
                 ForEach(list) { p in
-                    HStack(spacing: 10) {
-                        Image(systemName: "folder").foregroundStyle(Theme.secondary)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(display(p.path)).font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.text)
+                    HStack(spacing: Space.m) {
+                        Image(systemName: "folder").font(.km(.body)).foregroundStyle(Theme.textSecondary).frame(width: 24)
+                        VStack(alignment: .leading, spacing: Space.xxs) {
+                            Text(display(p.path)).font(.km(.mono)).foregroundStyle(Theme.text)
                                 .lineLimit(1).truncationMode(.middle)
-                            Text(p.active ? "→ \(p.url)" : "setting removed by hand: goes through keepmum")
-                                .font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(1)
+                            Text(p.active ? "→ \(p.url)" : "Setting removed by hand: goes through keepmum")
+                                .font(.km(.caption)).foregroundStyle(Theme.textSecondary).lineLimit(1)
                         }
-                        Spacer(minLength: 8)
+                        Spacer(minLength: Space.s)
                         PillButton(title: "Include") { Task { await engine.include(p.path) } }
                             .disabled(!engine.isBundled || engine.busy)
                     }
-                    .padding(.vertical, 7)
+                    .padding(.vertical, Space.s)
+                    Hairline()
                 }
-                if let note = engine.exclusionNote {
-                    Text(note).font(.system(size: 11.5)).foregroundStyle(Theme.secondary).padding(.top, 6)
+                HStack {
+                    Spacer()
+                    addButton
                 }
+                .padding(.vertical, Space.s)
             }
         }
+    }
+
+    private var addButton: some View {
+        PillButton(title: "Exclude a project…", icon: "plus") { pick() }
+            .disabled(!engine.isBundled || engine.busy)
     }
 
     private func display(_ path: String) -> String {
@@ -55,41 +59,49 @@ struct ExclusionsCard: View {
     }
 }
 
-/// Mask (the default) or observe only.
-struct ModeCard: View {
+/// What gets masked: the mode (mask, or observe only) and the detector (the rules alone, or the
+/// rules and the local model).
+struct MaskingSection: View {
     var engine: Engine
-    /// From the running proxy's feed, so the card shows what is in force right now.
+    /// From the running proxy's feed, so the section shows what is in force right now.
     var observing: Bool
-
-    var body: some View {
-        let on = engine.status?.observe ?? observing
-        Card(title: "Mode", subtitle: on ? "Observe only: requests go out unmasked; keepmum counts what it would mask"
-                                         : "Mask: sensitive values are replaced before requests leave this Mac") {
-            Segmented(options: [(false, "Mask"), (true, "Observe only")],
-                      selection: Binding(get: { on }, set: { new in Task { await engine.setObserve(new) } }))
-                .disabled(!engine.isBundled || engine.busy)
-        }
-    }
-}
-
-/// The rules alone, or the rules and the local model (`keepmum model`).
-struct DetectorCard: View {
-    var engine: Engine
     /// From the running proxy's feed: the model was asked for but did not load, and why.
     var modelError: String?
+    @State private var confirmObserve = false
 
     var body: some View {
-        let on = engine.modelOn
-        Card(title: "Detector", subtitle: on ? "Rules, then the local model: also names, addresses, and secrets with no known shape"
-                                             : "Rules only: faster and about 1.7 GB lighter, but names, addresses and unlabeled secrets go out unmasked") {
-            VStack(alignment: .leading, spacing: 8) {
-                Segmented(options: [(true, "Rules + model"), (false, "Rules only")],
-                          selection: Binding(get: { on }, set: { new in Task { await engine.setModel(new) } }))
-                    .disabled(!engine.isBundled || engine.busy || engine.download != nil)
-                if on, let modelError {
-                    Text(modelError).font(.system(size: 11.5)).foregroundStyle(Theme.danger).fixedSize(horizontal: false, vertical: true)
-                }
+        let observe = engine.status?.observe ?? observing
+        let model = engine.modelOn
+        FormSection(title: "Masking") {
+            FormRow(title: "Mode",
+                    detail: observe ? "Observe only: requests leave this Mac unmasked; keepmum only counts what it would mask"
+                                    : "Sensitive values are replaced before requests leave this Mac",
+                    detailTone: observe ? Theme.blocked : Theme.textSecondary) {
+                Segmented(options: [(false, "Mask"), (true, "Observe only")],
+                          selection: Binding(get: { observe }, set: { new in
+                              if new { confirmObserve = true } else { Task { await engine.setObserve(false) } }
+                          }))
+                    .disabled(!engine.isBundled || engine.busy)
             }
+            Hairline()
+            FormRow(title: "Detector",
+                    detail: model ? "Rules, then the local model: also names, addresses, and secrets with no known shape"
+                                  : "Rules only: faster and about 1.7 GB lighter, but names, addresses and unlabeled secrets go out unmasked") {
+                Segmented(options: [(true, "Rules + model"), (false, "Rules only")],
+                          selection: Binding(get: { model }, set: { new in Task { await engine.setModel(new) } }))
+                    .disabled(!engine.isBundled || engine.busy || engine.download != nil)
+            }
+            if model, let modelError {
+                Hairline()
+                Text(modelError).font(.km(.callout)).foregroundStyle(Theme.blocked).fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, Space.s + Space.xxs)
+            }
+        }
+        .alert("Send requests unmasked?", isPresented: $confirmObserve) {
+            Button("Keep masking", role: .cancel) {}
+            Button("Observe only", role: .destructive) { Task { await engine.setObserve(true) } }
+        } message: {
+            Text("Secrets and personal data would reach the model provider as they are. keepmum only counts what it would have masked, and the audit log records the change.")
         }
     }
 }

@@ -1,37 +1,6 @@
 import Charts
 import SwiftUI
 
-/// Masked values by type as labeled horizontal bars, in one color.
-struct TypeBars: View {
-    var counts: [String: Int]
-
-    var body: some View {
-        let rows = Theme.typeOrder.compactMap { t in counts[t].flatMap { $0 > 0 ? (t, $0) : nil } }
-        let top = Double(rows.map(\.1).max() ?? 1)
-        VStack(alignment: .leading, spacing: 9) {
-            if rows.isEmpty {
-                Text("Nothing masked yet").font(.system(size: 12)).foregroundStyle(Theme.secondary)
-            }
-            ForEach(rows, id: \.0) { type, n in
-                HStack(spacing: 10) {
-                    Image(systemName: Theme.icon(type)).font(.system(size: 11)).foregroundStyle(Theme.secondary).frame(width: 16)
-                    Text(Theme.label(type)).font(.system(size: 12)).foregroundStyle(Theme.text).frame(width: 74, alignment: .leading)
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Theme.faint)
-                            Capsule().fill(Theme.accent.opacity(type == "SECRET" ? 1 : 0.55))
-                                .frame(width: max(4, geo.size.width * Double(n) / top))
-                        }
-                    }
-                    .frame(height: 8)
-                    Text(n.compact).font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(Theme.text)
-                        .frame(width: 40, alignment: .trailing)
-                }
-            }
-        }
-    }
-}
-
 struct MaskedTimeline: View {
     var minutes: [Snapshot.Minute]
 
@@ -42,23 +11,23 @@ struct MaskedTimeline: View {
         Chart {
             ForEach(recent) { m in
                 BarMark(x: .value("Minute", m.date, unit: .minute), y: .value("Masked", m.masked.values.reduce(0, +)))
-                    .foregroundStyle(Theme.accent.opacity(0.75))
-                    .cornerRadius(4)
+                    .foregroundStyle(Theme.masked.opacity(0.8))
+                    .cornerRadius(Radius.s - Space.xxs)
                 if m.blocked > 0 {
                     PointMark(x: .value("Minute", m.date, unit: .minute), y: .value("Blocked", 0))
-                        .symbol(.circle).symbolSize(36).foregroundStyle(Theme.danger)
+                        .symbol(.circle).symbolSize(36).foregroundStyle(Theme.blocked)
                 }
             }
         }
         .chartXScale(domain: start...Date().addingTimeInterval(420))
         .chartPlotStyle { $0.clipped() }
         .chartXAxis { AxisMarks(values: .stride(by: .minute, count: 20)) { _ in
-            AxisGridLine().foregroundStyle(Theme.border)
-            AxisValueLabel(format: .dateTime.hour().minute()).foregroundStyle(Theme.secondary)
+            AxisGridLine().foregroundStyle(Theme.separator)
+            AxisValueLabel(format: .dateTime.hour().minute()).foregroundStyle(Theme.textSecondary)
         } }
         .chartYAxis { AxisMarks(position: .leading) { _ in
-            AxisGridLine().foregroundStyle(Theme.border)
-            AxisValueLabel().foregroundStyle(Theme.secondary)
+            AxisGridLine().foregroundStyle(Theme.separator)
+            AxisValueLabel().foregroundStyle(Theme.textSecondary)
         } }
     }
 }
@@ -72,32 +41,32 @@ struct LatencyChart: View {
         Chart {
             ForEach(Array(points.enumerated()), id: \.offset) { _, pt in
                 AreaMark(x: .value("Time", pt.0), y: .value("ms", pt.1))
-                    .foregroundStyle(Theme.accentSoft).interpolationMethod(.monotone)
+                    .foregroundStyle(Theme.soft(Theme.masked)).interpolationMethod(.monotone)
                 LineMark(x: .value("Time", pt.0), y: .value("ms", pt.1))
-                    .foregroundStyle(Theme.accent).interpolationMethod(.monotone)
+                    .foregroundStyle(Theme.masked).interpolationMethod(.monotone)
                     .lineStyle(StrokeStyle(lineWidth: 1.6))
             }
             RuleMark(y: .value("Budget", Self.budget))
-                .foregroundStyle(Theme.danger.opacity(0.6))
+                .foregroundStyle(Theme.warning)
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                 .annotation(position: .top, alignment: .trailing) {
-                    Text("budget \(Int(Self.budget)) ms").font(.system(size: 10)).foregroundStyle(Theme.secondary)
+                    Text("budget \(Int(Self.budget)) ms").font(.km(.label)).foregroundStyle(Theme.textSecondary)
                 }
         }
         .chartYScale(domain: 0...max(Self.budget * 1.3, points.map(\.1).max() ?? 0))
         .chartPlotStyle { $0.clipped() }
         .chartXAxis { AxisMarks { _ in
-            AxisGridLine().foregroundStyle(Theme.border)
-            AxisValueLabel(format: .dateTime.hour().minute()).foregroundStyle(Theme.secondary)
+            AxisGridLine().foregroundStyle(Theme.separator)
+            AxisValueLabel(format: .dateTime.hour().minute()).foregroundStyle(Theme.textSecondary)
         } }
         .chartYAxis { AxisMarks(position: .leading) { _ in
-            AxisGridLine().foregroundStyle(Theme.border)
-            AxisValueLabel().foregroundStyle(Theme.secondary)
+            AxisGridLine().foregroundStyle(Theme.separator)
+            AxisValueLabel().foregroundStyle(Theme.textSecondary)
         } }
     }
 }
 
-/// How scan times are distributed, in 25 ms buckets; buckets over the budget are red.
+/// How scan times are distributed, in 25 ms buckets; buckets over the budget are amber.
 struct LatencyHistogram: View {
     var events: [Snapshot.Event]
 
@@ -110,13 +79,13 @@ struct LatencyHistogram: View {
         }
         Chart(buckets, id: \.label) { b in
             BarMark(x: .value("ms", b.label), y: .value("Requests", b.count))
-                .foregroundStyle(b.over ? Theme.danger.opacity(0.7) : Theme.accent.opacity(0.75))
-                .cornerRadius(5)
+                .foregroundStyle(b.over ? Theme.warning.opacity(0.8) : Theme.masked.opacity(0.8))
+                .cornerRadius(Radius.s - Space.xxs)
         }
-        .chartXAxis { AxisMarks { _ in AxisValueLabel().foregroundStyle(Theme.secondary) } }
+        .chartXAxis { AxisMarks { _ in AxisValueLabel().foregroundStyle(Theme.textSecondary) } }
         .chartYAxis { AxisMarks(position: .leading) { _ in
-            AxisGridLine().foregroundStyle(Theme.border)
-            AxisValueLabel().foregroundStyle(Theme.secondary)
+            AxisGridLine().foregroundStyle(Theme.separator)
+            AxisValueLabel().foregroundStyle(Theme.textSecondary)
         } }
     }
 }
