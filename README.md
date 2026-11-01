@@ -189,6 +189,7 @@ port = 7788            # for `keepmum serve`
 [log]
 level = "info"         # logs contain types and counts, never values
 previews = true        # the app's Logs page shows the first and last character of masked values (memory only)
+context = true         # and the text around each, with every masked value in it shown as its type (memory only)
 
 [audit]
 keep_days = 90         # how long the audit log keeps entries (`keepmum audit`)
@@ -206,12 +207,13 @@ keep_days = 90         # how long the audit log keeps entries (`keepmum audit`)
 | Audit log: requests (counts, rules, restore decisions per tool), protection changes, starts and stops; never values | `~/.config/keepmum/audit.jsonl` (0600), with its head in `audit.head.json`; `[audit] keep_days`, 90 by default |
 | Masked values | Process memory only, cleared on exit |
 | The Logs page: per masked value its type, rule and length, and the first and last character of values of 8 or more characters | Process memory only (the last 2,000), cleared on exit; `[log] previews = false` keeps types and rules only |
+| The Logs page's context: up to 80 characters each side of a masked value, with every masked value and placeholder in it shown as its type (`‹SECRET›`), as the provider received it | Process memory only, with the findings; `[log] context = false` turns it off and forgets what was kept |
 
 keepmum makes no network calls except the request it forwards, and `keepmum setup`'s one model download. There is no telemetry and no update check.
 
 ## Mac app
 
-A menu-bar app that sets keepmum up and runs it in the background, with a dashboard: live flow diagrams of requests going out and replies coming back, per coding agent and provider, with hover highlighting; what was found and masked per type, with switches for what gets masked and an editor for your own rules; scan latency; every request in a history; a searchable Logs page of what was masked; and an Audit page that checks the audit log and lists every change that turned protection down, in light and dark mode. Its local stats feed carries counts, types and rules, and for the Logs page only the first and last character of each value of 8 or more characters (`g…w`), so it cannot show a whole secret even by mistake. See [mac/README.md](mac/README.md) to build it.
+A menu-bar app that sets keepmum up and runs it in the background, with a dashboard: live flow diagrams of requests going out and replies coming back, per coding agent and provider, with hover highlighting; what was found and masked per type, with switches for what gets masked and an editor for your own rules; scan latency; every request in a history; a searchable Logs page of what was masked; and an Audit page that checks the audit log and lists every change that turned protection down, in light and dark mode. Its local stats feed carries counts, types and rules, and for the Logs page only the first and last character of each value of 8 or more characters (`g…w`) and the text around each value with every masked value in it shown as its type, so it cannot show a whole secret even by mistake. See [mac/README.md](mac/README.md) to build it.
 
 ## Accuracy and speed
 

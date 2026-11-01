@@ -106,8 +106,9 @@ struct MenuPanel: View {
         .padding(Space.l)
         .frame(width: 320)
         .task { await engine.refresh() }
-        // The menu bar window brings its own material; snapshots need a surface to draw on.
-        .background(isSnapshot ? Theme.canvas : .clear)
+        // Opaque: the menu bar window's material shows what is behind it, and the theme's colors,
+        // unlike the system's, do not adapt to it (gray labels vanish over a light window).
+        .background(Theme.canvas)
         .preferredColorScheme(appearance.scheme)
     }
 
@@ -235,6 +236,11 @@ enum Snapshotter {
             // Settings in full: the window scrolls it, a snapshot cannot.
             render(Dashboard(store: store, engine: .preview(), page: .settings).frame(width: 1200, height: 1640),
                    to: "\(dir)/settings-full-\(dark ? "dark" : "light").png", dark: dark)
+        }
+        // A Logs row's details, as its popover shows them.
+        for dark in [false, true] {
+            render(FindingDetail(finding: Finding.samples[0]).frame(width: 440).background(Theme.canvas),
+                   to: "\(dir)/logs-detail-\(dark ? "dark" : "light").png", dark: dark)
         }
         // The background service just started, waiting for it to answer.
         render(Dashboard(store: store, engine: .preview(starting: true), page: .settings).frame(width: 1200, height: 780),

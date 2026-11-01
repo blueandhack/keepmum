@@ -121,7 +121,7 @@ class Proxy:
     def __init__(self, redactor: Redactor, upstream: str = UPSTREAM, policy: dict[str, str] | None = None,
                  client: httpx.AsyncClient | None = None, stats: Stats | None = None, stats_token: str | None = None,
                  info: dict | None = None, observe=None, openai_upstream: str = OPENAI_UPSTREAM,
-                 chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, audit=None):
+                 chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None):
         self.redactor = redactor
         self.upstream = upstream.rstrip("/")
         self.prefixed = {"/openai": openai_upstream.rstrip("/"), "/chatgpt": chatgpt_upstream.rstrip("/")}
@@ -135,6 +135,8 @@ class Proxy:
         self._observe = observe if callable(observe) else (lambda: bool(observe))
         # The Logs page's first and last characters ([log] previews): a callable or a fixed bool.
         self._previews = previews if callable(previews) else (lambda: bool(previews))
+        # The text around each value on the Logs page, values shown as types ([log] context).
+        self._context = context if callable(context) else (lambda: bool(context))
         # The detectors and the vault are not thread-safe; scans run one at a time off the event loop.
         self._scan_lock = threading.Lock()
         self.app = Starlette(routes=[Route("/{path:path}", self.handle, methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])])
@@ -190,11 +192,15 @@ class Proxy:
             events = history.events() if history else list(self.stats.events)
             return JSONResponse({"window": window, **flows(events, time.time() - window)})
         if path == "/_keepmum/findings" and request.method == "GET":
-            # What was masked in new text, newest first: types, rules, lengths, and the first and
-            # last character of values of 8 or more ([log] previews). In memory only.
+            # What was masked in new text, newest first: types, rules, lengths, the first and last
+            # character of values of 8 or more ([log] previews), and the text around each value
+            # with every masked value in it shown as its type ([log] context). In memory only.
             if not self._previews():
                 self.stats.drop_previews()
-            return JSONResponse({"findings": self.stats.findings_page(), "previews": self._previews()})
+            if not self._context():
+                self.stats.drop_context()
+            return JSONResponse({"findings": self.stats.findings_page(), "previews": self._previews(),
+                                 "context": self._context()})
         if path == "/_keepmum/history" and request.method == "GET":
             q = request.query_params
             try:
@@ -332,6 +338,7 @@ class Proxy:
             self.redactor.fresh = 0
             self.redactor.findings = []
             self.redactor.previews = self._previews()
+            self.redactor.context = self._context()
             if api == "responses":
                 masked = self.redactor.redact_responses_request(body)
             else:

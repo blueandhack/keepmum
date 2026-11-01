@@ -266,6 +266,12 @@ class Stats:
             for f in self.findings:
                 f["preview"] = None
 
+    def drop_context(self) -> None:
+        """[log] context turned off: forget the text kept around each value."""
+        with self._lock:
+            for f in self.findings:
+                f["before"] = f["after"] = None
+
     def snapshot(self, **extra) -> dict:
         with self._lock:
             lat = sorted(self.scan_ms)

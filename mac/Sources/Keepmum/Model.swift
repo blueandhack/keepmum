@@ -276,11 +276,13 @@ final class StatsStore {
     private(set) var findings: [Finding] = []
     /// [log] previews: the feed carries the first and last character of long values.
     private(set) var previewsOn = true
+    private(set) var contextOn = true
 
     func loadFindings() async {
         if sampleMode {
             findings = Finding.samples
             previewsOn = true
+            contextOn = true
             return
         }
         port = discoverPort()
@@ -290,7 +292,7 @@ final class StatsStore {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 4
-        struct Page: Decodable { var findings: [Finding]; var previews: Bool? }
+        struct Page: Decodable { var findings: [Finding]; var previews: Bool?; var context: Bool? }
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { findings = []; return }
         let decoder = JSONDecoder()
@@ -298,6 +300,7 @@ final class StatsStore {
         guard let page = try? decoder.decode(Page.self, from: data) else { return }
         findings = page.findings
         previewsOn = page.previews ?? true
+        contextOn = page.context ?? false
     }
 
     // MARK: History (the Activity page): older events from keepmum's history file, paged.
@@ -454,6 +457,7 @@ struct SampleFeed {
                   .init(provider: "openai", client: "codex", restored: false, n: 83 * k, values: 0),
                   .init(provider: "anthropic", client: "pi", restored: true, n: 9 * k, values: 7 * k),
                   .init(provider: "anthropic", client: "pi", restored: false, n: 20 * k, values: 0)]
+        f.unresolved = 2  // placeholders made by another keepmum, or before a restart
         return f
     }
 

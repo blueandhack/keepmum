@@ -77,7 +77,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     history = History()
     proxy = Proxy(Redactor(pipeline, Vault()), upstream=upstream or cfg.upstream, policy=cfg.restore,
                   stats=Stats(history=history), stats_token=stats_token(), info=info, observe=observe,
-                  previews=lambda: observe.config.log_previews, audit=audit)
+                  previews=lambda: observe.config.log_previews,
+                  context=lambda: observe.config.log_context, audit=audit)
     switch = ModelSwitch(pipeline, proxy._scan_lock)
     return proxy
 

@@ -75,3 +75,53 @@ def test_previews_off_keeps_types_and_drops_the_characters(tmp_path):
     assert before["findings"][0]["preview"] is not None
     assert after["previews"] is False and [f["preview"] for f in after["findings"]] == [None, None]
     assert all(f["preview"] is None for f in proxy.stats.findings)  # forgotten, not just hidden
+
+
+def test_context_shows_the_text_around_a_value_with_every_value_as_its_type(tmp_path):
+    canary = selftest.make_canary()
+    text = (f"deploy notes: rotate GITHUB_TOKEN={canary} tonight, then mail jane.roe@fastmail.com; "
+            "the old key was KEEPMUM_SECRET_9a6c1c4b in yesterday's run")
+
+    async def go():
+        _, client = make(tmp_path)
+        await client.post("/v1/messages", json=body(text))
+        return await findings(client)
+
+    _, data = anyio.run(go)
+    assert data["context"] is True
+    token = next(f for f in data["findings"] if f["rule"] == "github-token")
+    assert token["before"] == "deploy notes: rotate GITHUB_TOKEN="
+    assert token["after"].startswith(" tonight, then mail ‹EMAIL›;")
+    assert canary not in str(data) and "jane.roe" not in str(data) and "KEEPMUM_" not in str(data)
+    assert "context" not in (tmp_path / "history.jsonl").read_text() and "tonight" not in (tmp_path / "history.jsonl").read_text()
+
+
+def test_context_never_shows_part_of_a_value_or_placeholder_cut_by_the_window():
+    from keepmum.detect import Span
+    from keepmum.redact import CONTEXT, context
+
+    secret = "s3cr3t-" * 20  # longer than the window
+    text = secret + " sits right before " + "x" * 10 + " KEEPMUM_SECRET_0123abcd and more"
+    start = text.index("x")
+    before, after = context(text, [Span(0, len(secret), "SECRET", 1.0, "rules:x")], start, start + 10)
+    # The window starts inside the value: "…" for what is left out, the value whole as its type.
+    assert len(secret) > CONTEXT and before == "…‹SECRET› sits right before "
+    assert after == " ‹SECRET› and more"  # the placeholder, too, shows only as its type
+
+
+def test_context_off_drops_the_text_already_kept(tmp_path):
+    state = {"on": True}
+
+    async def go():
+        mock = selftest.MockUpstream()
+        up = httpx.AsyncClient(transport=httpx.ASGITransport(app=mock.app), base_url="http://up")
+        proxy = Proxy(Redactor(Pipeline(RulesDetector(), None, pii=True), Vault(secrets.token_bytes(32))),
+                      upstream="http://up", client=up, stats=Stats(), stats_token="t", context=lambda: state["on"])
+        client = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
+        await client.post("/v1/messages", json=body("mail jane.roe@fastmail.com today"))
+        state["on"] = False
+        return await findings(client), proxy
+
+    (_, data), proxy = anyio.run(go)
+    assert data["context"] is False and data["findings"][0]["before"] is None
+    assert all(f["before"] is None and f["after"] is None for f in proxy.stats.findings)

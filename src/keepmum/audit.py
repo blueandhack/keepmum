@@ -252,7 +252,7 @@ def config_state(cfg) -> dict:
         "allow_strings": sorted(_fingerprint("string", s) for s in cfg.allow_strings),
         "allow_patterns": sorted(_fingerprint("pattern", p) for p in cfg.allow_patterns),
         "restore": dict(sorted(cfg.restore.items())), "upstream": cfg.upstream,
-        "previews": cfg.log_previews, "keep_days": cfg.audit_keep_days,
+        "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
     }
 
 
@@ -263,8 +263,10 @@ _SETTINGS = {
     "observe": ("detect.observe", True), "model": ("detect.model", False), "pii": ("detect.pii", False),
     "pass": ("detect.pass", "added"), "rules_off": ("rules.off", "added"), "mask_rules": ("rules.mask", "removed"),
     "allow_strings": ("allowlist.strings", "added"), "allow_patterns": ("allowlist.patterns", "added"),
-    "upstream": ("server.upstream", "any"), "previews": ("log.previews", None),
+    "upstream": ("server.upstream", "any"), "previews": ("log.previews", None), "context": ("log.context", None),
 }
+# Settings newer than some logs: missing from a recorded state is not a change.
+_ADDED_LATER = {"context"}
 
 
 def config_changes(old: dict, new: dict) -> list[dict]:
@@ -272,7 +274,7 @@ def config_changes(old: dict, new: dict) -> list[dict]:
     out = []
     for key, (name, weak) in _SETTINGS.items():
         a, b = old.get(key), new.get(key)
-        if a == b:
+        if a == b or (key in _ADDED_LATER and key not in old):
             continue
         if isinstance(b, list):
             added = [x for x in b if x not in (a or [])]

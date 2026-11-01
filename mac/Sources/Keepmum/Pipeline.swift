@@ -378,8 +378,14 @@ private struct FlowBands {
             h(d, dashX + 8, y, .leading)
         }
         if flows.unresolved > 0 {
-            ctx.draw(Text("\(flows.unresolved) placeholders could not be restored").font(.km(.caption).weight(.semibold))
-                .foregroundStyle(Theme.blocked), at: CGPoint(x: size.width, y: backTop - 14), anchor: .trailing)
+            // In the replies' empty Result column, clear of "arrives on this Mac"; shorter if it must be.
+            let n = flows.unresolved
+            let room = dashX - 8 - xs[2]
+            let note = [n == 1 ? "1 placeholder could not be restored" : "\(n) placeholders could not be restored",
+                        "\(n) placeholder\(n == 1 ? "" : "s") not restored", "\(n) not restored"]
+                .map { ctx.resolve(Text($0).font(.km(.caption).weight(.semibold)).foregroundStyle(Theme.blocked)) }
+            let text = note.first { $0.measure(in: size).width <= room } ?? note[2]
+            ctx.draw(text, at: CGPoint(x: xs[2], y: backTop - 14), anchor: .leading)
         }
     }
 

@@ -28,6 +28,7 @@
     [log]
     level = "info"
     previews = true        # the Logs page shows the first and last character of masked values (in memory only)
+    context = true         # and the text around each, every masked value in it shown as its type (in memory only)
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ _SCHEMA = {
     "detect": {"pii": bool, "model": bool, "observe": bool, "pass": list},
     "allowlist": {"strings": list, "patterns": list},
     "rules": {"mask": list, "off": list},
-    "log": {"level": str, "previews": bool},
+    "log": {"level": str, "previews": bool, "context": bool},
     "audit": {"keep_days": int},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
@@ -72,6 +73,7 @@ class Config:
     restore: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_POLICY))
     log_level: str = "info"
     log_previews: bool = True
+    log_context: bool = True
     audit_keep_days: int = 90
     path: Path | None = None
 
@@ -153,6 +155,7 @@ def load(path: Path | None = None) -> Config:
     cfg.restore = {**DEFAULT_POLICY, **restore}
     cfg.log_level = log.get("level", cfg.log_level)
     cfg.log_previews = log.get("previews", cfg.log_previews)
+    cfg.log_context = log.get("context", cfg.log_context)
     if cfg.log_level not in LOG_LEVELS:
         raise ConfigError(f"{path}: log.level must be one of {', '.join(LOG_LEVELS)}")
     cfg.audit_keep_days = audit.get("keep_days", cfg.audit_keep_days)

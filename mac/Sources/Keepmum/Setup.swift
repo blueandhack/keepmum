@@ -157,7 +157,9 @@ struct ProtectionRow: View {
             }
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(title).font(.km(.body).weight(.medium)).foregroundStyle(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(subtitle).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             if engine.serviceChange != nil {

@@ -8,7 +8,7 @@ from collections import Counter, OrderedDict
 
 from .detect import Span
 from .detect.merge import merge
-from .vault import Vault
+from .vault import PLACEHOLDER, Vault
 
 # Signed or binary blocks are resent exactly as the API produced them.
 PASS_THROUGH = frozenset({"thinking", "redacted_thinking", "image"})
@@ -42,6 +42,34 @@ def preview(value: str) -> str:
     return f"{value[0]}…{value[-1]}" if len(value) >= PREVIEW_MIN else "•••"
 
 
+# Characters of text kept on each side of a masked value for the Logs page's context.
+CONTEXT = 80
+
+
+def context(text: str, spans: list[Span], start: int, end: int) -> tuple[str, str]:
+    """The text before and after text[start:end], CONTEXT characters each way, as the provider
+    saw it but with every masked value in it, and every placeholder, shown as its type: `‹SECRET›`.
+    A value or placeholder cut by the window is shown whole as its type, never in part."""
+    marks = sorted([(s.start, s.end, s.type) for s in spans]
+                   + [(m.start(), m.end(), m.group(1)) for m in PLACEHOLDER.finditer(text)])
+
+    def render(a: int, b: int) -> str:
+        out, pos = [], a
+        for s, e, kind in marks:
+            if e <= a or s >= b or e <= pos:
+                continue
+            if s > pos:
+                out.append(text[pos:s])
+            out.append(f"‹{kind}›")
+            pos = e
+        if pos < b:
+            out.append(text[pos:b])
+        return "".join(out)
+
+    a, b = max(0, start - CONTEXT), min(len(text), end + CONTEXT)
+    return ("…" if a > 0 else "") + render(a, start), render(end, b) + ("…" if b < len(text) else "")
+
+
 def detector_of(source: str) -> tuple[str, str]:
     """(detector, rule) for a span's source, preferring your rule, then a built-in rule, then the
     model: rules:github-token|pf-serve -> ("rules", "github-token")."""
@@ -70,6 +98,7 @@ class Redactor:
         # first and last character. Never the value. Reset with `fresh`.
         self.findings: list[dict] = []
         self.previews = True
+        self.context = True
 
     def _detect(self, text: str) -> tuple[tuple[Span, ...], bool]:
         """Detector spans, cached per text: the conversation history is resent every turn.
@@ -114,8 +143,10 @@ class Redactor:
             for s in spans:
                 value = text[s.start : s.end]
                 detector, rule = detector_of(s.source)
+                before, after = context(text, spans, s.start, s.end) if self.context else (None, None)
                 self.findings.append({"type": s.type, "detector": detector, "rule": rule, "chars": len(value),
-                                      "preview": preview(value) if self.previews else None})
+                                      "preview": preview(value) if self.previews else None,
+                                      "before": before, "after": after})
         if not spans:
             return text
         out, pos = [], 0
