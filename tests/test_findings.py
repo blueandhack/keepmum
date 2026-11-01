@@ -125,3 +125,24 @@ def test_context_off_drops_the_text_already_kept(tmp_path):
     (_, data), proxy = anyio.run(go)
     assert data["context"] is False and data["findings"][0]["before"] is None
     assert all(f["before"] is None and f["after"] is None for f in proxy.stats.findings)
+
+
+def test_findings_name_every_detector_and_who_found_a_value_first():
+    from keepmum.detect import Span
+
+    class Model:
+        name = "pf-serve"
+
+        def detect(self, text):
+            i = text.find("hunter2-correct-horse")
+            return [Span(i, i + 21, "SECRET", 0.9, "pf-serve")] if i >= 0 else []
+
+    r = Redactor(Pipeline(RulesDetector(), Model(), pii=True), Vault(secrets.token_bytes(32)))
+    r.redact_text("db password=hunter2-correct-horse")  # the rule and the model both find it
+    first = r.findings[-1]
+    assert first["detector"] == "rules" and first["by"] == ["rule:secret-assignment", "model"] and not first["earlier"]
+    r.findings = []
+    r.redact_text("try hunter2-correct-horse again")  # matched as a value masked before
+    again = r.findings[-1]
+    assert again["detector"] in ("known", "model") and again["earlier"] is True
+    assert "rule:secret-assignment" in again["by"] and "model" in again["by"]

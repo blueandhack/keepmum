@@ -70,6 +70,20 @@ def context(text: str, spans: list[Span], start: int, end: int) -> tuple[str, st
     return ("…" if a > 0 else "") + render(a, start), render(end, b) + ("…" if b < len(text) else "")
 
 
+def finders(sources) -> list[str]:
+    """Every detector that found a value, for the Logs page, yours first, then built-in rules, then
+    the model: `yours:<name>`, `rule:<id>`, `model`."""
+    out = []
+    for x in sorted(set(sources)):
+        if x.startswith("rules:"):
+            out.append("rule:" + x[len("rules:"):])
+        elif x.startswith("user:"):
+            out.append("yours:" + x[len("user:"):])
+        elif x and x != "known" and "model" not in out:
+            out.append("model")
+    return sorted(out, key=lambda x: ("yours:", "rule:", "model").index(x.split(":")[0] + (":" if ":" in x else "")))
+
+
 def detector_of(source: str) -> tuple[str, str]:
     """(detector, rule) for a span's source, preferring your rule, then a built-in rule, then the
     model: rules:github-token|pf-serve -> ("rules", "github-token")."""
@@ -143,8 +157,13 @@ class Redactor:
             for s in spans:
                 value = text[s.start : s.end]
                 detector, rule = detector_of(s.source)
+                parts = s.source.split("|")
+                # Seen earlier in the conversation: who found it then.
+                earlier = "known" in parts
+                by = finders(parts + (list(self.vault.sources_of(value)) if earlier else []))
                 before, after = context(text, spans, s.start, s.end) if self.context else (None, None)
-                self.findings.append({"type": s.type, "detector": detector, "rule": rule, "chars": len(value),
+                self.findings.append({"type": s.type, "detector": detector, "rule": rule, "by": by, "earlier": earlier,
+                                      "chars": len(value),
                                       "preview": preview(value) if self.previews else None,
                                       "before": before, "after": after})
         if not spans:
