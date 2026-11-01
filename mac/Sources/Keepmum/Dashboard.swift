@@ -226,7 +226,7 @@ struct ActivityPage: View {
             } content: {
                 let events = store.newerThanHistory(kind: filter) + store.history
                 ActivityTable(events: events, rows: isSnapshot ? 11 : events.count, newestFirst: true,
-                              footer: store.historyDone ? nil : { Task { await store.loadHistory(kind: filter, more: true) } })
+                              footer: !store.canLoadOlder ? nil : { Task { await store.loadHistory(kind: filter, more: true) } })
             }
         }
         .task(id: "\(filter?.rawValue ?? ""):\(store.sampleMode)") { await store.loadHistory(kind: filter) }
@@ -357,7 +357,7 @@ struct ActivityTable: View {
                 Text("Scan").frame(width: 56, alignment: .trailing)
             }
             let shown = newestFirst ? Array(events.prefix(rows)) : Array(events.suffix(rows).reversed())
-            if newestFirst && !isSnapshot {
+            if newestFirst && !isSnapshot && !events.isEmpty {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(shown) { e in row(e) }

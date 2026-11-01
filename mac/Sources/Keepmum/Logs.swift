@@ -98,7 +98,7 @@ struct LogsPage: View {
                     }
                     if isSnapshot {
                         ForEach(shown.prefix(14)) { row($0) }
-                    } else {
+                    } else if !shown.isEmpty {
                         ScrollView { LazyVStack(spacing: 0) { ForEach(shown) { row($0) } } }
                     }
                     if shown.isEmpty {

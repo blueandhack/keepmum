@@ -340,6 +340,10 @@ final class StatsStore {
         historyDone = page.events.count < 100
     }
 
+    /// Older events may be left to page in: a page loaded and was full. Not when nothing loaded,
+    /// as when keepmum is not running and the history request failed.
+    var canLoadOlder: Bool { !historyDone && !history.isEmpty }
+
     /// Live events newer than the loaded history, newest first, for the top of the list.
     func newerThanHistory(kind: Snapshot.Event.Kind?) -> [Snapshot.Event] {
         let newest = history.first?.ts ?? 0
