@@ -18,17 +18,24 @@ struct SetupSection: View {
                             Text("\(Int(p * 100))%").font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
                         } else if !engine.canScan {
                             PillButton(title: "Download", icon: "arrow.down.circle", prominent: true) { Task { await engine.downloadModel() } }
+                                .disabled(engine.busy)
                         }
                     }
                     Hairline()
                     step(2, "Background service", done: engine.serviceRunning, detail: serviceDetail) {
-                        if engine.serviceStatus == .requiresApproval {
+                        if let change = engine.serviceChange {
+                            PillButton(title: change == .starting ? "Starting…" : "Stopping…", loading: true) {}
+                        } else if engine.serviceStatus == .requiresApproval {
                             PillButton(title: "Open Login Items", icon: "gearshape") { engine.openLoginItems() }
                         } else if engine.serviceRunning {
                             PillButton(title: "Stop") { Task { await engine.stopService() } }
+                                .disabled(engine.busy)
+                        } else if engine.serviceStatus == .enabled {
+                            PillButton(title: "Restart", icon: "arrow.clockwise") { Task { await engine.restartService() } }
+                                .disabled(engine.busy)
                         } else {
                             PillButton(title: "Start", icon: "play.fill", prominent: engine.canScan) { Task { await engine.startService() } }
-                                .disabled(!engine.canScan)
+                                .disabled(!engine.canScan || engine.busy)
                         }
                     }
                 }
@@ -59,10 +66,16 @@ struct SetupSection: View {
     }
 
     private var serviceDetail: String {
+        let port = engine.status?.port ?? 7788
+        switch engine.serviceChange {
+        case .starting: return engine.modelOn && engine.hasModel ? "Loading the model; this takes a few seconds" : "Waiting for it to answer"
+        case .stopping: return engine.anyProtected ? "Turning protection off first, so no agent loses its connection" : "Stopping…"
+        case nil: break
+        }
         switch engine.serviceStatus {
-        case .requiresApproval: "Allow \"keepmum\" in System Settings › Login Items"
-        case .enabled where !engine.serviceRunning: "Starting…"
-        default: engine.serviceRunning ? "Running, on 127.0.0.1:\(engine.status?.port ?? 7788)" : "Runs the proxy in the background, at login"
+        case .requiresApproval: return "Allow \"keepmum\" in System Settings › Login Items"
+        case .enabled where !engine.serviceRunning: return "Registered, but not answering on 127.0.0.1:\(port) yet"
+        default: return engine.serviceRunning ? "Running, on 127.0.0.1:\(port)" : "Runs the proxy in the background, at login"
         }
     }
 
@@ -136,14 +149,20 @@ struct ProtectionRow: View {
 
     var body: some View {
         HStack(spacing: Space.s + Space.xxs) {
-            Image(systemName: engine.anyProtected ? (engine.serviceRunning ? "checkmark.shield.fill" : "exclamationmark.shield.fill") : "shield")
-                .font(.km(.title).weight(.regular)).foregroundStyle(color)
+            if engine.serviceChange == .starting {
+                Spinner(size: 16).foregroundStyle(Theme.textSecondary).frame(width: 20)
+            } else {
+                Image(systemName: engine.anyProtected ? (engine.serviceRunning ? "checkmark.shield.fill" : "exclamationmark.shield.fill") : "shield")
+                    .font(.km(.title).weight(.regular)).foregroundStyle(color)
+            }
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(title).font(.km(.body).weight(.medium)).foregroundStyle(Theme.text)
                 Text(subtitle).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
             }
             Spacer()
-            if engine.canScan && engine.serviceRunning {
+            if engine.serviceChange != nil {
+                EmptyView()  // nothing to do but wait
+            } else if engine.canScan && engine.serviceRunning {
                 PillButton(title: "Agents", action: openSetup)  // one switch per agent, in Settings
             } else if engine.isBundled {
                 PillButton(title: "Set up", prominent: true, action: openSetup)
@@ -160,6 +179,7 @@ struct ProtectionRow: View {
 
     private var title: String {
         let names = protectedNames
+        if engine.serviceChange == .starting { return "keepmum is starting" }
         if names.isEmpty { return "No coding agent is protected" }
         if !engine.serviceRunning { return "keepmum is not running" }
         return names.count == 1 ? "\(names[0]) is protected" : "\(names.count) agents are protected"
@@ -167,6 +187,7 @@ struct ProtectionRow: View {
 
     private var subtitle: String {
         let names = protectedNames
+        if engine.serviceChange == .starting { return "Loading the model; this takes a few seconds" }
         if !names.isEmpty && !engine.serviceRunning { return "They cannot connect until keepmum restarts" }
         if names.count > 1 { return names.joined(separator: ", ") }
         if names.count == 1 { return "Every session goes through keepmum" }

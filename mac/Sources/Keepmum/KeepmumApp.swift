@@ -179,6 +179,10 @@ enum Snapshotter {
             render(Dashboard(store: store, engine: .preview(), page: .settings).frame(width: 1200, height: 1640),
                    to: "\(dir)/settings-full-\(dark ? "dark" : "light").png", dark: dark)
         }
+        // The background service just started, waiting for it to answer.
+        render(Dashboard(store: store, engine: .preview(starting: true), page: .settings).frame(width: 1200, height: 780),
+               to: "\(dir)/settings-starting-light.png", dark: false)
+        render(MenuPanel(store: store, engine: .preview(starting: true)), to: "\(dir)/menu-starting-light.png", dark: false)
         // Observe mode, live: the one state where values leave this Mac unmasked.
         store.snapshot.observe = true
         store.connection = .live

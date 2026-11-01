@@ -113,6 +113,9 @@ final class Engine {
     /// 0...1 while the model downloads.
     private(set) var download: Double?
     private(set) var busy = false
+    /// The background service on its way up or down: from the click until it answers, or stops.
+    enum ServiceChange { case starting, stopping }
+    private(set) var serviceChange: ServiceChange?
     var error: String?
     /// The menu bar asks the dashboard to open on Settings, where Setup is.
     var settingsRequested = false
@@ -171,17 +174,18 @@ final class Engine {
         }
     }
 
-    /// Register the LaunchAgent. macOS may ask the user to allow it in Login Items first.
+    /// Register the LaunchAgent, then wait until the proxy answers: loading the model takes a few
+    /// seconds. macOS may ask the user to allow it in Login Items first.
     func startService() async {
         await act {
-            do {
-                try self.service.register()
-            } catch let e as NSError where e.code == Int(kSMErrorAlreadyRegistered) {
-                // already registered: fine
+            self.serviceChange = .starting
+            defer { self.serviceChange = nil }
+            try self.registerService()
+            if self.service.status == .requiresApproval {
+                SMAppService.openSystemSettingsLoginItems()
+                return
             }
-            UserDefaults.standard.set(Self.version, forKey: "registeredVersion")
-            if self.service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
-            try? await Task.sleep(for: .seconds(2))  // let the proxy load the model
+            try await self.waitForService(running: true)
         }
     }
 
@@ -189,9 +193,47 @@ final class Engine {
     /// protection off first.
     func stopService() async {
         await act {
+            self.serviceChange = .stopping
+            defer { self.serviceChange = nil }
             if self.anyProtected { try await self.applyProtection(false, client: nil) }
             try await self.service.unregister()
+            try await self.waitForService(running: false)
         }
+    }
+
+    /// Registered but not answering: unregister and register again. Protection stays as it is, so
+    /// the agents pointed at keepmum reach it again once it answers.
+    func restartService() async {
+        await act {
+            self.serviceChange = .starting
+            defer { self.serviceChange = nil }
+            try? await self.service.unregister()
+            try self.registerService()
+            try await self.waitForService(running: true)
+        }
+    }
+
+    private func registerService() throws {
+        do {
+            try service.register()
+        } catch let e as NSError where e.code == Int(kSMErrorAlreadyRegistered) {
+            // already registered: fine
+        }
+        UserDefaults.standard.set(Self.version, forKey: "registeredVersion")
+    }
+
+    /// Check the service until it is up (or down), so the page moves on the moment it does.
+    private func waitForService(running: Bool) async throws {
+        let seconds = running ? 60.0 : 15.0
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            await refresh()
+            if serviceRunning == running { return }
+            if running && service.status != .enabled { return }  // unregistered, or waiting for approval
+            try await Task.sleep(for: .milliseconds(700))
+        }
+        throw EngineError(running ? "The background service did not answer within \(Int(seconds)) seconds. Run keepmum serve in a terminal to see why."
+                                  : "The background service still answers after \(Int(seconds)) seconds.")
     }
 
     /// One coding agent (claude, codex, pi, opencode) on or off; `client: nil` is every one of them.
@@ -362,8 +404,9 @@ final class Engine {
         }.value
     }
 
-    /// For snapshots: an engine that is set up and protecting Claude Code.
-    static func preview() -> Engine {
+    /// For snapshots: an engine that is set up and protecting Claude Code; with `starting`, one
+    /// whose background service was just started and has yet to answer.
+    static func preview(starting: Bool = false) -> Engine {
         let e = Engine()
         e.previewing = true
         e.status = Status(model: "~/.local/share/keepmum/models/privacy-filter-q8.gguf", modelSize: 1_637_572_192,
@@ -376,6 +419,11 @@ final class Engine {
                                        allowStrings: ["sk_test_docs_example"], allowPatterns: ["^demo-[a-z]+$"], off: ["phone-labeled"]),
                           clients: ["codex": .init(installed: true, on: true), "pi": .init(installed: true, on: false)])
         e.serviceStatus = .enabled
+        if starting {
+            e.status?.serveRunning = false
+            e.serviceChange = .starting
+            e.busy = true
+        }
         let now = Date().timeIntervalSince1970
         e.audit = [
             .init(seq: 4211, ts: now - 600, event: "config", summary: "detect.observe true -> false", weakens: false, by: "keepmum observe off (from Keepmum.app)"),

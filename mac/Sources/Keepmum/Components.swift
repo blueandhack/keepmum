@@ -205,6 +205,8 @@ struct PillButton: View {
     var destructive = false
     /// On a solid signal color, such as the observe banner.
     var onSolid = false
+    /// Its action is under way: a spinner in place of the icon, and no second click.
+    var loading = false
     var action: () -> Void
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
@@ -212,7 +214,11 @@ struct PillButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Space.xs + Space.xxs) {
-                if let icon { Image(systemName: icon).font(.km(.caption).weight(.semibold)) }
+                if loading {
+                    Spinner(size: 11)
+                } else if let icon {
+                    Image(systemName: icon).font(.km(.caption).weight(.semibold))
+                }
                 Text(title).font(.km(.callout).weight(.medium)).lineLimit(1)
             }
             .fixedSize()
@@ -222,9 +228,12 @@ struct PillButton: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .opacity(isEnabled ? 1 : 0.4)
-        .onHover { hovering = $0 && isEnabled }
+        .disabled(loading)
+        // A loading button stays legible: it is busy, not unavailable.
+        .opacity(isEnabled || loading ? 1 : 0.4)
+        .onHover { hovering = $0 && isEnabled && !loading }
         .animation(Motion.quick, value: hovering)
+        .animation(Motion.quick, value: loading)
     }
 
     private var foreground: Color {
@@ -236,6 +245,23 @@ struct PillButton: View {
         if prominent { return hovering ? Theme.accentFill.opacity(0.88) : Theme.accentFill }
         if onSolid { return .white.opacity(hovering ? 0.3 : 0.2) }
         return hovering ? Theme.fillStrong : Theme.fill
+    }
+}
+
+/// An indeterminate spinner in the current foreground color, drawn in SwiftUI so snapshots show it.
+struct Spinner: View {
+    var size: CGFloat = 12
+    @State private var turning = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.72)
+            .stroke(style: StrokeStyle(lineWidth: max(1.5, size / 7), lineCap: .round))
+            .frame(width: size, height: size)
+            .rotationEffect(.degrees(turning ? 360 : 0))
+            .animation(.linear(duration: 0.9).repeatForever(autoreverses: false), value: turning)
+            .onAppear { turning = true }
+            .accessibilityLabel("In progress")
     }
 }
 
