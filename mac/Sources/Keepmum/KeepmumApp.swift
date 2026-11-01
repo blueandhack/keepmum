@@ -21,7 +21,7 @@ struct KeepmumApp: App {
         Window("keepmum", id: "dashboard") {
             Dashboard(store: store, engine: engine)
                 .frame(minWidth: 1100, minHeight: 720)
-                .onAppear { store.start(); engine.start() }
+                .onAppear { store.start(); engine.start(); DashboardWindow.opened() }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1200, height: 780)
@@ -89,8 +89,7 @@ struct MenuPanel: View {
             .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
             ProtectionRow(engine: engine) {
                 engine.settingsRequested = true
-                openWindow(id: "dashboard")
-                NSApp.activate()
+                DashboardWindow.show(openWindow)
             }
             if case .offline(let reason) = store.connection {
                 Text("\(reason.sentence). \(engine.isBundled ? "Start the background service in Settings." : "Run keepmum claude to start.")")
@@ -98,8 +97,7 @@ struct MenuPanel: View {
             }
             HStack(spacing: Space.s) {
                 PillButton(title: "Open dashboard", icon: "macwindow", prominent: true) {
-                    openWindow(id: "dashboard")
-                    NSApp.activate()
+                    DashboardWindow.show(openWindow)
                 }
                 Spacer()
                 PillButton(title: "Quit") { NSApp.terminate(nil) }
@@ -119,6 +117,65 @@ struct MenuPanel: View {
             Text(title).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// The dashboard window, and keepmum's place in the Dock. keepmum lives in the menu bar; while the
+/// dashboard is open it is also an ordinary app, in the Dock and in Cmd-Tab, so the window can be
+/// found again behind other apps (unless Settings › Display turns that off).
+@MainActor
+enum DashboardWindow {
+    static let dockKey = "showInDock"
+    static var showsInDock: Bool { UserDefaults.standard.object(forKey: dockKey) as? Bool ?? true }
+    private static var isOpen = false
+    private static var watching = false
+
+    /// Open the dashboard, or bring it back, in front of the app in use. NSApp.activate() alone
+    /// is a request the frontmost app may refuse; ordering the window front is not.
+    static func show(_ openWindow: OpenWindowAction) {
+        // Called from the menu bar panel: it closes, as a menu does once you pick something.
+        let panel = NSApp.keyWindow.flatMap { $0.identifier?.rawValue.hasPrefix("dashboard") == true ? nil : $0 }
+        openWindow(id: "dashboard")
+        DispatchQueue.main.async {  // the window exists once openWindow's update has run
+            panel?.close()
+            NSApp.activate()
+            if let window {
+                window.makeKeyAndOrderFront(nil)
+                window.orderFrontRegardless()
+            }
+        }
+    }
+
+    static func opened() {
+        isOpen = true
+        applyDockPolicy()
+        guard !watching else { return }
+        watching = true
+        // SwiftUI does not reliably call onDisappear when the window closes; AppKit always says so.
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
+            let window = note.object as? NSWindow
+            MainActor.assumeIsolated {
+                guard window?.identifier?.rawValue.hasPrefix("dashboard") == true else { return }
+                isOpen = false
+                applyDockPolicy()
+            }
+        }
+    }
+
+    /// In the Dock while the dashboard is open and the setting allows it; otherwise menu bar only.
+    static func applyDockPolicy() {
+        let policy: NSApplication.ActivationPolicy = isOpen && showsInDock ? .regular : .accessory
+        guard NSApp.activationPolicy() != policy else { return }
+        NSApp.setActivationPolicy(policy)
+        // Changing the policy can send the app to the back: keep the dashboard where it was.
+        if isOpen, let window {
+            NSApp.activate()
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private static var window: NSWindow? {
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("dashboard") == true }
     }
 }
 

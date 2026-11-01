@@ -272,6 +272,7 @@ struct SettingsPage: View {
     var store: StatsStore
     var engine: Engine
     @Binding var appearance: Appearance
+    @AppStorage(DashboardWindow.dockKey) private var showInDock = true
     @Environment(\.isSnapshot) private var isSnapshot
 
     var body: some View {
@@ -295,6 +296,10 @@ struct SettingsPage: View {
             FormSection(title: "Display") {
                 FormRow(title: "Appearance") {
                     Segmented(options: Appearance.allCases.map { ($0, $0.title) }, selection: $appearance)
+                }
+                Hairline()
+                FormRow(title: "Show in Dock", detail: "While the dashboard is open, so you can switch back to it; keepmum always stays in the menu bar") {
+                    Switch(isOn: showInDock) { showInDock = $0; DashboardWindow.applyDockPolicy() }.accessibilityLabel("Show in Dock")
                 }
                 Hairline()
                 FormRow(title: "Preview data", detail: "Synthetic numbers on every page, clearly labeled, to see the dashboard without real traffic") {
