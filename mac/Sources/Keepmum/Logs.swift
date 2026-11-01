@@ -91,6 +91,7 @@ struct Finding: Decodable, Sendable, Identifiable {
         switch provider ?? "anthropic" {
         case "anthropic": "Anthropic"
         case "openai": "OpenAI"
+        case "google": "Google"
         case let other: other
         }
     }
@@ -113,6 +114,7 @@ struct Finding: Decodable, Sendable, Identifiable {
         switch client ?? "claude-code" {
         case "claude-code": "Claude Code"
         case "codex": "Codex"
+        case "gemini": "Gemini CLI"
         case let other: other
         }
     }

@@ -225,6 +225,7 @@ private struct FlowBands {
         switch id {
         case "anthropic": clientColor("claude-code")
         case "openai": clientColor("codex")
+        case "google": clientColor("gemini")
         default: clientColor("other")
         }
     }

@@ -115,8 +115,9 @@ CLIENTS = (
     ("pi-coding-agent", "pi", "pi"),
     ("pi/", "pi", "pi"),
     ("opencode", "opencode", "opencode"),
+    ("geminicli", "gemini", "Gemini CLI"),  # GeminiCLI/0.66.0/…, GeminiCLI-acp-…
 )
-PROVIDERS = {"anthropic": "Anthropic", "openai": "OpenAI"}
+PROVIDERS = {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google"}
 # Events from before keepmum recorded clients came from Claude Code, the only client it served.
 DEFAULT_CLIENT = "claude-code"
 
@@ -140,6 +141,8 @@ def provider_of(upstream: str) -> str:
         return "anthropic"
     if host.endswith("openai.com") or host.endswith("chatgpt.com"):
         return "openai"
+    if host.endswith("googleapis.com"):
+        return "google"
     return host or "unknown"
 
 

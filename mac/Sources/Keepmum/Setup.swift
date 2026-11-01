@@ -47,7 +47,7 @@ struct SetupSection: View {
             }
             if engine.isBundled {
                 FormSection(title: "Coding agents",
-                            footer: "Each switch points that agent at keepmum. Claude Code's open sessions switch right away; the others on their next session.") {
+                            footer: "Each switch points that agent at keepmum. Claude Code's open sessions switch right away; the others on their next session. Gemini CLI has no setting keepmum can rely on, so it is protected one run at a time.") {
                     ClientRow(engine: engine, id: "claude", name: "Claude Code", icon: "CC", detail: "~/.claude/settings.json")
                     Hairline()
                     ClientRow(engine: engine, id: "codex", name: "Codex", icon: "Cx", detail: "~/.codex/config.toml")
@@ -55,6 +55,9 @@ struct SetupSection: View {
                     ClientRow(engine: engine, id: "pi", name: "pi", icon: "π", detail: "~/.pi/agent/models.json")
                     Hairline()
                     ClientRow(engine: engine, id: "opencode", name: "opencode", icon: "oc", detail: "~/.config/opencode/opencode.json")
+                    Hairline()
+                    TerminalOnlyRow(name: "Gemini CLI", icon: "G", command: "keepmum gemini",
+                                    why: "Gemini CLI has no setting keepmum can rely on: any project's .env file would override it")
                 }
             }
         }
@@ -97,6 +100,30 @@ struct SetupSection: View {
             trailing()
         }
         .padding(.vertical, Space.s + Space.xxs)
+    }
+}
+
+/// A coding agent keepmum protects one run at a time, from a terminal: no switch, and why.
+private struct TerminalOnlyRow: View {
+    var name: String
+    var icon: String
+    var command: String
+    var why: String
+
+    var body: some View {
+        HStack(spacing: Space.m) {
+            Text(icon).font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.textSecondary)
+                .frame(width: 24, height: 24).background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.fill))
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                Text(name).font(.km(.body)).foregroundStyle(Theme.text)
+                (Text("Run ") + Text(command).font(.km(.monoSmall)) + Text(" in a terminal"))
+                    .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+            }
+            .help(why)
+            Spacer(minLength: Space.s)
+            Chip(text: "Terminal")
+        }
+        .padding(.vertical, Space.s)
     }
 }
 

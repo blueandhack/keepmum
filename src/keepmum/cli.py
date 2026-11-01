@@ -167,6 +167,44 @@ def codex(ctx: typer.Context) -> None:
     raise typer.Exit(code)
 
 
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def gemini(ctx: typer.Context) -> None:
+    """Start Gemini CLI with every request scanned. Arguments go to `gemini` unchanged."""
+    import os
+    import shutil
+
+    from .launch import (
+        BackgroundServer,
+        _run_child,
+        gemini_env,
+        gemini_upstreams,
+        log_to_file,
+        shared_serve_port,
+    )
+
+    binary = shutil.which("gemini")
+    if binary is None:
+        typer.echo("keepmum gemini: `gemini` is not on PATH (npm install -g @google/gemini-cli)", err=True)
+        raise typer.Exit(2)
+    cfg = _config()
+    env = dict(os.environ)
+    upstreams = gemini_upstreams(env, cfg.port)
+    # The service forwards to Google; an address set here (another gateway) needs a proxy of its own.
+    port = None if upstreams else shared_serve_port(cfg, need="gemini")
+    if port is not None:
+        raise typer.Exit(_run_child([binary, *ctx.args], gemini_env(port, env)))
+    cfg, proxy = _proxy_or_exit(None, False, None, "gemini")
+    proxy.prefixed.update(upstreams)
+    log_to_file(cfg.log_level)
+    server = BackgroundServer(proxy)
+    server.start()
+    try:
+        code = _run_child([binary, *ctx.args], gemini_env(server.port, env))
+    finally:
+        server.stop()
+    raise typer.Exit(code)
+
+
 @app.command()
 def serve(
     port: int = typer.Option(None, help="Port on 127.0.0.1 (default: config, else 7788)."),
@@ -252,6 +290,13 @@ def protect(
     from .clients import CLIENTS, protect_clients
 
     cfg = _config()
+    if "gemini" in (client or []):
+        # Gemini CLI reads its address only from the environment or a .env file, and the first
+        # .env it finds walking up from the project wins: a project's own .env would quietly
+        # undo a setting here. `keepmum gemini` sets the environment, which every .env yields to.
+        typer.echo("keepmum protect: Gemini CLI has no setting keepmum can rely on (any project's .env file "
+                   "would override it); run `keepmum gemini` instead", err=True)
+        raise typer.Exit(2)
     if action not in ("on", "off", "status") or any(c not in CLIENTS for c in client or []):
         typer.echo("keepmum protect: use on, off or status, and --client claude|codex|pi|opencode", err=True)
         raise typer.Exit(2)

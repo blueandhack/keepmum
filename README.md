@@ -2,9 +2,9 @@
 
 <h1 align="center">keepmum</h1>
 
-<p align="center"><b>Keep secrets and personal data on your Mac while you use Claude Code, Codex, pi or opencode.</b></p>
+<p align="center"><b>Keep secrets and personal data on your Mac while you use Claude Code, Codex, Gemini CLI, pi or opencode.</b></p>
 
-keepmum is a local proxy that sits between your coding agent (Claude Code, Codex, pi or opencode) and its model provider (Anthropic or OpenAI). Before a request leaves your Mac, it finds secrets (API keys, tokens, passwords, private keys, connection strings) and, if you want, personal data (names, emails, phones, addresses, account numbers), and replaces each one with a placeholder such as `KEEPMUM_SECRET_7f3a9c2e`. When the model answers, keepmum puts the real values back, so your agent can still edit your `.env` file correctly, but the provider never sees what is in it.
+keepmum is a local proxy that sits between your coding agent (Claude Code, Codex, Gemini CLI, pi or opencode) and its model provider (Anthropic, OpenAI or Google). Before a request leaves your Mac, it finds secrets (API keys, tokens, passwords, private keys, connection strings) and, if you want, personal data (names, emails, phones, addresses, account numbers), and replaces each one with a placeholder such as `KEEPMUM_SECRET_7f3a9c2e`. When the model answers, keepmum puts the real values back, so your agent can still edit your `.env` file correctly, but the provider never sees what is in it.
 
 Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned request to the provider. The name comes from "keep mum": to say nothing about a secret.
 
@@ -17,8 +17,9 @@ Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned
 ```
 Claude Code ─┐                            ┌──▶ Anthropic API
 Codex       ─┤                            │
-pi          ─┼─▶ keepmum (on your Mac) ─────┤
-opencode    ─┘   detect → mask            └──▶ OpenAI API
+Gemini CLI  ─┼─▶ keepmum (on your Mac) ─────┼──▶ OpenAI API
+pi          ─┤   detect → mask            │
+opencode    ─┘                            └──▶ Google (Gemini API, Code Assist)
   real values  ◀── restore ◀───────────────── placeholders only
 ```
 
@@ -34,7 +35,7 @@ opencode    ─┘   detect → mask            └──▶ OpenAI API
 
 - A Mac with Apple silicon, and macOS 14 or later
 - Python 3.12+, [uv](https://docs.astral.sh/uv/), and Xcode or its command line tools (to build pf-serve)
-- Claude Code, Codex, pi or opencode
+- Claude Code, Codex, Gemini CLI, pi or opencode
 - About 1.7 GB of free memory while keepmum runs (the local model), and 1.6 GB of disk for it; neither with `keepmum model off`
 
 ## Install
@@ -61,9 +62,12 @@ keepmum selftest                              # sends a canary secret through ke
 ```sh
 keepmum claude          # starts Claude Code with every request scanned; arguments pass through to `claude`
 keepmum codex           # the same for Codex (ChatGPT login or API key); arguments pass through to `codex`
+keepmum gemini          # the same for Gemini CLI (Sign in with Google or an API key); arguments pass through to `gemini`
 ```
 
 `keepmum codex` adds `-c` overrides for that run only: a `keepmum` model provider pointed at the proxy, with WebSockets off (keepmum refuses them, since it cannot scan them) and your existing Codex login. Your Codex config file is not changed.
+
+`keepmum gemini` points Gemini CLI at keepmum through its environment, which wins over every `.env` file Gemini CLI reads. It covers both sign-ins: an API key (the Gemini API) and Sign in with Google (Code Assist, whose setup and metrics calls carry no conversation text and pass through; any other Code Assist call is blocked). Vertex AI is refused, not sent. If you already point Gemini CLI at a gateway (`GOOGLE_GEMINI_BASE_URL` or `CODE_ASSIST_ENDPOINT`), keepmum forwards to it. There is no `keepmum protect` for Gemini CLI: it reads its address only from the environment or the first `.env` file it finds walking up from your project, so any project's own `.env` would override a setting keepmum made.
 
 ### In VS Code (Claude Code extension)
 
@@ -240,6 +244,7 @@ No language model judges spans at request time. The Apple on-device model and Qw
 - **macOS on Apple silicon only.**
 - **Remote Control.** Claude Code turns Remote Control off while its requests go through a proxy, and Remote Control would send the restored transcript to Anthropic around keepmum anyway. Use an unprotected session when you need it.
 - **Codex and pi: the Responses and Messages APIs only.** Codex's WebSocket transport is refused (it falls back to HTTPS), and pi providers other than Anthropic and OpenAI (Google, OpenRouter, local models) are not routed through keepmum. Chat Completions requests are blocked, not sent unscanned.
+- **Gemini CLI: `keepmum gemini` only, and not in a Docker sandbox.** A Gemini CLI started without `keepmum gemini` goes straight to Google. Its Docker or Podman sandbox cannot reach keepmum on your Mac's 127.0.0.1 (requests fail; nothing is sent unscanned); the macOS Seatbelt sandbox works. Gemini CLI's usage statistics (prompt lengths and ids, no text) go to Google directly; `"usageStatisticsEnabled": false` in its settings turns them off.
 - **opencode: the `anthropic` and `openai` providers only.** opencode Zen, GitHub Copilot, OpenRouter and other providers go straight to their own servers. opencode 2.x works with an API key or a ChatGPT login; opencode 1.x sends a ChatGPT login to chatgpt.com itself, around keepmum, and `keepmum protect status` warns about it.
 
 ## Development

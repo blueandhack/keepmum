@@ -40,13 +40,25 @@ class MockUpstream:
         body = await request.body()
         self.received.append(request.url.path.encode() + b"?" + request.url.query.encode() + b"\n"
                              + b"\n".join(f"{k}: {v}".encode() for k, v in request.headers.items()) + b"\n\n" + body)
-        if request.url.path == "/v1/messages/count_tokens":
-            return JSONResponse({"input_tokens": 42})
-        if request.url.path not in ("/v1/messages", "/v1/responses"):
+        path = request.url.path
+        if path == "/v1/messages/count_tokens" or path.endswith(":countTokens"):
+            return JSONResponse({"input_tokens": 42, "totalTokens": 42})
+        gemini = path.endswith((":generateContent", ":streamGenerateContent"))
+        if path not in ("/v1/messages", "/v1/responses") and not gemini:
             return JSONResponse({"ok": True})
         req = json.loads(body)
         found = PLACEHOLDER.findall(body.decode())
         ph = f"KEEPMUM_{found[0][0]}_{found[0][1]}" if found else "none"
+        if gemini:
+            # Code Assist (/v1internal:...) wraps each response as {"response": ..., "traceId": ...}.
+            wrap = (lambda r: {"response": r, "traceId": "trace_selftest"}) if path.startswith("/v1internal") else (lambda r: r)
+            if path.endswith(":streamGenerateContent"):
+                chunks = [wrap(c) for c in self.gemini_chunks(ph)]
+                if "alt=sse" in request.url.query:
+                    return Response("".join(f"data: {json.dumps(c)}\r\n\r\n" for c in chunks), media_type="text/event-stream")
+                return JSONResponse(chunks)
+            return JSONResponse(wrap({"candidates": [{"index": 0, "finishReason": "STOP", "content": {
+                "role": "model", "parts": self.gemini_parts(ph)}}], "usageMetadata": {"totalTokenCount": 9}}))
         if request.url.path == "/v1/responses":
             if req.get("stream"):
                 return Response(self.responses_stream(ph), media_type="text/event-stream")
@@ -87,6 +99,28 @@ class MockUpstream:
             out.append(ev({"type": "content_block_stop", "index": i}))
         out.append(ev({"type": "message_stop"}))
         return "".join(out)
+
+    @staticmethod
+    def gemini_parts(ph: str) -> list[dict]:
+        """A Gemini answer: text, a thought, and two function calls, each holding the placeholder."""
+        return [{"text": f"The token {ph} is set."},
+                {"text": f"I should not reveal {ph}.", "thought": True},
+                {"functionCall": {"name": "write_file", "args": {"file_path": "/tmp/x", "content": f"TOKEN={ph}\n"}},
+                 "thoughtSignature": "c2lnbmVk"},
+                {"functionCall": {"name": "mcp__web__fetch", "args": {"url": f"https://example.com/?t={ph}"}}}]
+
+    @classmethod
+    def gemini_chunks(cls, ph: str) -> list[dict]:
+        """The same answer streamed: the placeholder split across text chunks, the calls whole."""
+        _, thought, write, fetch = cls.gemini_parts(ph)
+        cut = len(ph) // 2
+
+        def chunk(parts, **extra):
+            return {"candidates": [{"index": 0, "content": {"role": "model", "parts": parts}, **extra}],
+                    "usageMetadata": {"totalTokenCount": 9}}
+
+        return [chunk([thought]), chunk([{"text": f"The token {ph[:cut]}"}]), chunk([{"text": f"{ph[cut:]} is set."}]),
+                chunk([write, fetch], finishReason="STOP")]
 
     @staticmethod
     def responses_items(ph: str) -> list[dict]:
@@ -139,7 +173,8 @@ async def run(detector, verbose: bool = True) -> bool:
     mock = MockUpstream()
     upstream = httpx.AsyncClient(transport=httpx.ASGITransport(app=mock.app), base_url="http://upstream.test")
     proxy = Proxy(Redactor(detector, Vault(secrets.token_bytes(32))), upstream="http://upstream.test",
-                  client=upstream, stats_token="selftest", openai_upstream="http://upstream.test")
+                  client=upstream, stats_token="selftest", openai_upstream="http://upstream.test",
+                  gemini_upstream="http://upstream.test", code_assist_upstream="http://upstream.test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
     auth = {"x-api-key": "sk-ant-selftest-not-a-key", "anthropic-version": "2023-06-01"}
     body = {
@@ -200,6 +235,43 @@ async def run(detector, verbose: bool = True) -> bool:
           canary in done.get("response.function_call_arguments.done", {}).get("arguments", ""))
     check("Responses API: streamed MCP call keeps the placeholder",
           canary not in done.get("response.mcp_call_arguments.done", {}).get("arguments", canary))
+
+    # Gemini CLI: the Gemini API (an API key) and Code Assist ("Sign in with Google").
+    gkey = {"x-goog-api-key": "AIza-selftest-not-a-key", "user-agent": "GeminiCLI/0.66.0/gemini-2.5-pro (darwin; arm64)"}
+    gbody = {"contents": [{"role": "user", "parts": [{"text": f"Why does {canary} fail?"}]},
+                          {"role": "model", "parts": [{"functionCall": {"name": "run_shell_command", "args": {"command": f"echo {canary}"}}}]},
+                          {"role": "user", "parts": [{"functionResponse": {"name": "run_shell_command", "response": {"output": canary}}}]}],
+             "systemInstruction": {"parts": [{"text": f"Environment: GITHUB_TOKEN={canary}"}]}}
+    for name, url, req in (("Gemini API", "/gemini/v1beta/models/gemini-2.5-pro", gbody),
+                           ("Code Assist", "/codeassist/v1internal", {"model": "gemini-2.5-pro", "project": "p-selftest",
+                                                                     "user_prompt_id": "u1", "request": gbody})):
+        r = await client.post(url + ":generateContent", json=req, headers=gkey)
+        doc = r.json() if r.status_code == 200 else {}
+        parts = (doc.get("response", doc).get("candidates") or [{}])[0].get("content", {}).get("parts", [{}] * 4)
+        check(f"{name}: forwarded (200)", r.status_code == 200)
+        check(f"{name}: text restored", canary in parts[0].get("text", ""))
+        check(f"{name}: thought keeps the placeholder", canary not in parts[1].get("text", canary))
+        check(f"{name}: function call restored", canary in json.dumps(parts[2].get("functionCall", {})))
+        check(f"{name}: MCP call keeps the placeholder", canary not in json.dumps(parts[3].get("functionCall", {canary: 1})))
+        r = await client.post(url + ":streamGenerateContent?alt=sse", json=req, headers=gkey)
+        chunks = _responses_events(r.text) if r.status_code == 200 else []
+        streamed = [p for c in chunks for p in (c.get("response", c).get("candidates") or [{}])[0].get("content", {}).get("parts", [])]
+        text = "".join(p.get("text", "") for p in streamed if not p.get("thought"))
+        calls = {p["functionCall"]["name"]: json.dumps(p["functionCall"]) for p in streamed if "functionCall" in p}
+        check(f"{name}: streamed text restored (placeholder split across chunks)", canary in text)
+        check(f"{name}: streamed function call restored", canary in calls.get("write_file", ""))
+        check(f"{name}: streamed MCP call keeps the placeholder", canary not in calls.get("mcp__web__fetch", canary))
+        r = await client.post(url + ":countTokens", json={"contents": gbody["contents"]} if name == "Gemini API"
+                              else {"request": {"model": "models/gemini-2.5-pro", "contents": gbody["contents"]}}, headers=gkey)
+        check(f"{name}: countTokens forwarded, with no system instruction added", r.status_code == 200
+              and b"systemInstruction" not in mock.received[-1])
+    sent = len(mock.received)
+    r = await client.post("/codeassist/v1internal:loadCodeAssist", json={"metadata": {"ideType": "IDE_UNSPECIFIED"}}, headers=gkey)
+    check("Code Assist setup call passed through", r.status_code == 200 and len(mock.received) == sent + 1)
+    r = await client.post("/codeassist/v1internal:somethingNew", json={"text": canary}, headers=gkey)
+    check("unknown Code Assist call blocked", r.status_code == 403 and len(mock.received) == sent + 1)
+    r = await client.post("/vertex/v1/projects/p/locations/l/publishers/google/models/m:generateContent", json=gbody, headers=gkey)
+    check("Vertex AI refused, not sent", r.status_code == 403 and len(mock.received) == sent + 1)
 
     sent = len(mock.received)
     r = await client.post("/v1/messages", content=b'{"messages": [' + canary.encode(), headers=auth)

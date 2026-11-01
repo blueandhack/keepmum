@@ -195,6 +195,76 @@ class Redactor:
             ]
         return out
 
+    # --- Gemini payloads (Gemini CLI: the Gemini API and Code Assist) -----------------------
+
+    def redact_gemini_request(self, body: dict, hint: bool = False) -> dict:
+        """A copy of a Gemini request with every content masked: `contents`, `systemInstruction`,
+        an embedding's `content`, and the same inside the wrappers Gemini uses (`request` for Code
+        Assist, `generateContentRequest` for countTokens, `requests` for batch embeddings).
+        With `hint` (generateContent and streamGenerateContent only: countTokens and embeddings
+        take no system instruction), the placeholder hint goes last in the system instruction."""
+        out = dict(body)
+        for key in ("request", "generateContentRequest", "generate_content_request"):
+            if isinstance(out.get(key), dict):
+                out[key] = self.redact_gemini_request(out[key], hint)
+                hint = False  # the wrapped request carries it
+        if isinstance(out.get("requests"), list):
+            out["requests"] = [self.redact_gemini_request(r) if isinstance(r, dict) else r for r in out["requests"]]
+        if isinstance(out.get("contents"), list):
+            out["contents"] = [self._gemini_content(c) for c in out["contents"]]
+        elif isinstance(out.get("contents"), dict):
+            out["contents"] = self._gemini_content(out["contents"])
+        if isinstance(out.get("content"), dict):
+            out["content"] = self._gemini_content(out["content"])
+        key = "system_instruction" if "system_instruction" in out else "systemInstruction"
+        if out.get(key) is not None:
+            out[key] = self._gemini_content(out[key]) if isinstance(out[key], dict) else self._values(out[key])
+        # `key` names the system instruction as this body spells it (REST takes either).
+        if hint and "contents" in out:
+            note = {"text": PLACEHOLDER_HINT}
+            system = out.get(key)
+            if isinstance(system, dict) and isinstance(system.get("parts"), list):
+                out[key] = {**system, "parts": [*system["parts"], note]}
+            elif isinstance(system, str):
+                out[key] = {"parts": [{"text": system}, note]}
+            elif system is None:
+                out[key] = {"parts": [note]}
+        return out
+
+    def _gemini_content(self, content):
+        if not isinstance(content, dict):
+            return self._values(content) if isinstance(content, str) else content
+        parts = content.get("parts")
+        if isinstance(parts, list):
+            return {**content, "parts": [self._gemini_part(p) for p in parts]}
+        return content
+
+    def _gemini_part(self, part):
+        if isinstance(part, str):
+            return self.redact_text(part)
+        if not isinstance(part, dict):
+            return part
+        # A thought is model output, signed like a thinking block: it goes back as it came.
+        if part.get("thought") is True:
+            return part
+        out = dict(part)
+        if isinstance(out.get("text"), str):
+            out["text"] = self.redact_text(out["text"])
+        for key in ("functionCall", "function_call"):
+            if isinstance(out.get(key), dict):
+                call = out[key]
+                out[key] = {**call, "args": self._values(call["args"])} if "args" in call else call
+        for key in ("functionResponse", "function_response"):
+            if isinstance(out.get(key), dict):
+                resp = out[key]
+                out[key] = {**resp, **{k: self._values(resp[k]) for k in ("response", "parts") if k in resp}}
+        for key, field in (("executableCode", "code"), ("executable_code", "code"),
+                           ("codeExecutionResult", "output"), ("code_execution_result", "output")):
+            if isinstance(out.get(key), dict) and isinstance(out[key].get(field), str):
+                out[key] = {**out[key], field: self.redact_text(out[key][field])}
+        # inlineData and fileData carry files and images: they pass through, like images and PDFs.
+        return out
+
     # --- Responses API payloads (OpenAI: Codex, pi) ------------------------------------
 
     def redact_responses_request(self, body: dict) -> dict:

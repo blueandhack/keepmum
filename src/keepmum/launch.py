@@ -50,7 +50,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     pipeline = default_pipeline(pii=pii, rules_only=rules_only or not cfg.model, allow_strings=cfg.allow_strings,
                                 allow_patterns=cfg.allow_patterns, pass_types=cfg.pass_types, mask_rules=cfg.mask_rules,
                                 off_rules=cfg.off_rules)
-    info = {"mode": mode, "pii": pii, "detector": pipeline.name, "version": __version__, "apis": ["messages", "responses"]}
+    info = {"mode": mode, "pii": pii, "detector": pipeline.name, "version": __version__, "apis": ["messages", "responses", "gemini"]}
     from .stats import History, Stats
 
     from .audit import AuditLog
@@ -250,6 +250,29 @@ def _run_child(command: list[str], env: dict[str, str]) -> int:
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
+
+
+# Where Gemini CLI sends its requests, one variable per sign-in. Set in its environment, they win
+# over every .env file it reads (a .env value applies only to a variable not already set).
+GEMINI_VARS = {"GOOGLE_GEMINI_BASE_URL": "/gemini", "CODE_ASSIST_ENDPOINT": "/codeassist",
+               "GOOGLE_VERTEX_BASE_URL": "/vertex"}
+
+
+def gemini_env(port: int, env: dict[str, str]) -> dict[str, str]:
+    """Gemini CLI's environment pointed at keepmum: the Gemini API (an API key), Code Assist
+    ("Sign in with Google"), and Vertex AI, which keepmum refuses rather than let through."""
+    return {**env, **{k: f"http://127.0.0.1:{port}{path}" for k, path in GEMINI_VARS.items()}}
+
+
+def gemini_upstreams(env: dict[str, str], port: int) -> dict[str, str]:
+    """A Gemini or Code Assist address already set (a company gateway): keepmum forwards there.
+    Only those two: a Vertex address is refused like any Vertex request."""
+    out = {}
+    for var, prefix in (("GOOGLE_GEMINI_BASE_URL", "/gemini"), ("CODE_ASSIST_ENDPOINT", "/codeassist")):
+        value = env.get(var, "").rstrip("/")
+        if value and not value.startswith((f"http://127.0.0.1:{port}", f"http://localhost:{port}")):
+            out[prefix] = value
+    return out
 
 
 PROTECTED_BUT_DOWN = ("protection is on, so Claude Code goes to the keepmum service, but it is not running: "

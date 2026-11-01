@@ -77,6 +77,7 @@ enum Theme {
         case "codex": Color(light: 0x5B6270, dark: 0x9AA1AE)
         case "pi": Color(light: 0x6E78E0, dark: 0x8F98F0)
         case "opencode": Color(light: 0xB7791F, dark: 0xE0A458)
+        case "gemini": Color(light: 0x7E64B8, dark: 0x9F8AD6)  // the purple of Gemini's spark
         default: Color(light: 0x2A9D8F, dark: 0x4FC3B5)
         }
     }

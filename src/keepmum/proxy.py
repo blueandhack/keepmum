@@ -14,6 +14,13 @@ One proxy serves every provider, chosen by path prefix:
     /v1/messages...                      Anthropic Messages API (Claude Code, pi)
     /openai/v1/responses...              OpenAI Responses API (Codex, pi or opencode with an API key)
     /chatgpt/backend-api/codex/responses OpenAI through a ChatGPT login (Codex, pi)
+    /gemini/v1beta/models/<m>:generateContent...   the Gemini API, with an API key (Gemini CLI)
+    /codeassist/v1internal:generateContent...      Code Assist, "Sign in with Google" (Gemini CLI)
+
+Code Assist also takes setup and metrics calls (`CODE_ASSIST_METADATA`): their bodies, read in
+Gemini CLI 0.66, hold project ids, client metadata, counts and statuses, never conversation
+text, so they pass through unscanned; any other Code Assist method is blocked. Vertex AI is not
+scanned: `keepmum gemini` points it at /vertex, which refuses every request.
 
 opencode keeps one OpenAI base URL for both logins, so an /openai/v1 request that carries a
 ChatGPT account (`chatgpt-account-id`) goes to chatgpt.com/backend-api/codex instead: a ChatGPT
@@ -27,6 +34,7 @@ import gzip
 import hmac
 import json
 import logging
+import re
 import threading
 import time
 import zlib
@@ -40,6 +48,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from .gemini import GeminiStreamRestorer, restore_gemini
 from .redact import Redactor
 from .responses import ResponsesStreamRestorer, restore_responses
 from .restore import DEFAULT_POLICY, StreamRestorer, restore_response, take_tools
@@ -50,6 +59,16 @@ log = logging.getLogger("keepmum")
 UPSTREAM = "https://api.anthropic.com"
 OPENAI_UPSTREAM = "https://api.openai.com"
 CHATGPT_UPSTREAM = "https://chatgpt.com"
+GEMINI_UPSTREAM = "https://generativelanguage.googleapis.com"
+CODE_ASSIST_UPSTREAM = "https://cloudcode-pa.googleapis.com"
+# Gemini API methods keepmum scans. generateContent and streamGenerateContent get the placeholder
+# hint ("gemini"); countTokens and embeddings take no system instruction ("gemini-plain").
+_GEMINI_METHOD = re.compile(r"^/v1[a-z0-9]*/(?:tunedModels|models)/[^/:]+:(generateContent|streamGenerateContent"
+                            r"|countTokens|embedContent|batchEmbedContents)$")
+_CODE_ASSIST_METHOD = re.compile(r"^/v1[a-z0-9]*:([A-Za-z]+)$")
+# Code Assist setup and metrics: no conversation text, forwarded as they are (see above).
+CODE_ASSIST_METADATA = frozenset({"loadCodeAssist", "onboardUser", "listExperiments", "retrieveUserQuota",
+                                  "fetchAdminControls", "setCodeAssistGlobalUserSetting", "recordCodeAssistMetrics"})
 MESSAGES = frozenset({"/v1/messages", "/v1/messages/count_tokens"})
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
 # Not forwarded upstream; accept-encoding is replaced so responses arrive uncompressed, and
@@ -109,7 +128,22 @@ class Target:
     api: str | None
 
 
-def api_of(path: str) -> str | None:
+def api_of(path: str, prefix: str = "") -> str | None:
+    """The API whose body keepmum scans at `path` behind `prefix`, "metadata" for Code Assist
+    calls that pass through, or None: not an endpoint keepmum knows."""
+    if prefix == "/gemini":
+        m = _GEMINI_METHOD.match(path)
+        if m is None:
+            return None
+        return "gemini" if m.group(1) in ("generateContent", "streamGenerateContent") else "gemini-plain"
+    if prefix == "/codeassist":
+        m = _CODE_ASSIST_METHOD.match(path)
+        method = m.group(1) if m else ""
+        if method in ("generateContent", "streamGenerateContent"):
+            return "gemini"
+        if method == "countTokens":
+            return "gemini-plain"
+        return "metadata" if method in CODE_ASSIST_METADATA else None
     if path in MESSAGES:
         return "messages"
     if path.endswith("/responses") or path.endswith("/responses/compact"):
@@ -117,14 +151,24 @@ def api_of(path: str) -> str | None:
     return None
 
 
+def wants_stream(t: Target, body, query: str) -> bool:
+    """A streamed reply: `stream: true` for Anthropic and OpenAI, streamGenerateContent with
+    alt=sse for Gemini (without it the stream comes back as one JSON array)."""
+    if t.api in ("gemini", "gemini-plain"):
+        return t.path.endswith(":streamGenerateContent") and "alt=sse" in query
+    return isinstance(body, dict) and bool(body.get("stream")) and t.path != "/v1/messages/count_tokens"
+
+
 class Proxy:
     def __init__(self, redactor: Redactor, upstream: str = UPSTREAM, policy: dict[str, str] | None = None,
                  client: httpx.AsyncClient | None = None, stats: Stats | None = None, stats_token: str | None = None,
                  info: dict | None = None, observe=None, openai_upstream: str = OPENAI_UPSTREAM,
-                 chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None):
+                 chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
+                 gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM):
         self.redactor = redactor
         self.upstream = upstream.rstrip("/")
-        self.prefixed = {"/openai": openai_upstream.rstrip("/"), "/chatgpt": chatgpt_upstream.rstrip("/")}
+        self.prefixed = {"/openai": openai_upstream.rstrip("/"), "/chatgpt": chatgpt_upstream.rstrip("/"),
+                         "/gemini": gemini_upstream.rstrip("/"), "/codeassist": code_assist_upstream.rstrip("/")}
         self.policy = policy or DEFAULT_POLICY
         self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10))
         self.stats = stats or Stats()
@@ -148,7 +192,8 @@ class Proxy:
         for prefix, base in self.prefixed.items():
             if path.startswith(prefix + "/"):
                 rest = path[len(prefix):]
-                return Target("openai", base, rest, api_of(rest))
+                provider = "google" if prefix in ("/gemini", "/codeassist") else "openai"
+                return Target(provider, base, rest, api_of(rest, prefix))
         return Target(provider_of(self.upstream), self.upstream, path, "messages" if path in MESSAGES else None)
 
     # --- Entry point --------------------------------------------------------------
@@ -163,7 +208,13 @@ class Proxy:
             # Without a WebSocket library uvicorn hands an upgrade over as a plain GET: refuse it
             # here too, so it is never forwarded. Clients fall back to HTTPS.
             return api_error(403, "permission_error", "keepmum does not scan WebSockets; use HTTPS")
+        if path.startswith("/vertex/"):
+            self._record(path, "blocked", 403, origin=self._origin(request, Target("google", "", path, None)))
+            return api_error(403, "permission_error", "keepmum does not scan Vertex AI, so nothing was sent; "
+                             "sign in to Gemini CLI with an API key or with Google")
         t = self.target(path, "chatgpt-account-id" in request.headers)
+        if t.api == "metadata" and request.method == "POST":
+            return await self._forward_raw(request, t, await request.body(), note="Code Assist setup, no content")
         if t.api and request.method == "POST":
             return await self._scanned(request, t)
         body = await request.body()
@@ -252,7 +303,7 @@ class Proxy:
             payload = zstandard.ZstdCompressor().compress(payload)
             headers.append(("content-encoding", "zstd"))
         try:
-            if masked.get("stream") and t.path not in ("/v1/messages/count_tokens",):
+            if wants_stream(t, masked, request.url.query):
                 return await self._stream(url, headers, payload, path, t, scan_ms, counts, new, origin=origin, found=found)
             resp = await self.client.post(url, headers=headers, content=payload)
         except httpx.HTTPError as e:
@@ -288,7 +339,7 @@ class Proxy:
         url = self._url(request, t)
         headers = self._headers(request, keep_encoding=True)
         try:
-            if t.path != "/v1/messages/count_tokens" and isinstance(body, dict) and body.get("stream"):
+            if wants_stream(t, body, request.url.query):
                 return await self._stream(url, headers, raw, path, t, scan_ms, counts, new, outcome="observed", origin=origin,
                                           found=found)
             resp = await self.client.post(url, headers=headers, content=raw)
@@ -341,6 +392,8 @@ class Proxy:
             self.redactor.context = self._context()
             if api == "responses":
                 masked = self.redactor.redact_responses_request(body)
+            elif api in ("gemini", "gemini-plain"):
+                masked = self.redactor.redact_gemini_request(body, hint=api == "gemini")
             else:
                 masked = self.redactor.redact_request(body)
             self.stats.record_findings(self.redactor.findings, outcome, origin)
@@ -350,6 +403,10 @@ class Proxy:
         with self._scan_lock:
             if api == "responses":
                 return restore_responses(data, self.redactor.vault, self.policy, counts)
+            if api in ("gemini", "gemini-plain"):
+                return restore_gemini(data, self.redactor.vault, self.policy, counts)
+            if not isinstance(data, dict):
+                return data
             return restore_response(data, self.redactor.vault, self.policy, counts)
 
     async def _stream(self, url, headers, payload, path, t: Target, scan_ms, counts, new=0, outcome="forwarded",
@@ -359,7 +416,8 @@ class Proxy:
         restored = Counter()
         # A requested stream that succeeds is SSE; the ChatGPT backend sends it without a content type.
         is_sse = resp.status_code < 300
-        kind = ResponsesStreamRestorer if t.api == "responses" else StreamRestorer
+        kind = {"responses": ResponsesStreamRestorer, "gemini": GeminiStreamRestorer,
+                "gemini-plain": GeminiStreamRestorer}.get(t.api, StreamRestorer)
         # Observed requests went out unmasked: there is nothing to restore.
         restorer = kind(self.redactor.vault, self.policy, restored) if is_sse and outcome != "observed" else None
 
@@ -388,7 +446,8 @@ class Proxy:
     def _url(request: Request, t: Target) -> str:
         return t.base + t.path + (f"?{request.url.query}" if request.url.query else "")
 
-    async def _forward_raw(self, request: Request, t: Target, body: bytes = b"", outcome: str = "forwarded") -> Response:
+    async def _forward_raw(self, request: Request, t: Target, body: bytes = b"", outcome: str = "forwarded",
+                           note: str = "no body") -> Response:
         path = request.url.path
         try:
             resp = await self.client.request(request.method, self._url(request, t),
@@ -396,7 +455,7 @@ class Proxy:
         except httpx.HTTPError as e:
             return api_error(502, "api_error", f"upstream request failed ({type(e).__name__})")
         self._record(path, outcome, resp.status_code, origin=self._origin(request, t))
-        log.info("%s %s -> %d (not scanned: no body)", request.method, path, resp.status_code)
+        log.info("%s %s -> %d (not scanned: %s)", request.method, path, resp.status_code, note)
         return Response(resp.content, status_code=resp.status_code, headers=self._response_headers(resp))
 
     @staticmethod
