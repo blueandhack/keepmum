@@ -30,18 +30,23 @@ ditto "$prefix" "$RES/python"
 py=$RES/python/bin/python3
 stdlib=$("$py" -I -c 'import sysconfig; print(sysconfig.get_paths()["stdlib"])')
 site=$("$py" -I -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
-rm -rf "$stdlib"/{test,idlelib,tkinter,turtledemo,ensurepip,lib2to3} "$stdlib"/lib-dynload/_tkinter* \
+rm -rf "$stdlib"/{test,idlelib,tkinter,turtledemo,ensurepip,lib2to3,pydoc_data} "$stdlib"/lib-dynload/_tkinter* \
        "$RES/python"/lib/{libtcl,libtk,tcl,tk,itcl,thread}* "$RES/python"/{include,share} "$RES/python/lib/pkgconfig"
 find "$RES/python" -name __pycache__ -type d -prune -exec rm -rf {} +
 find "$RES/python/bin" -mindepth 1 ! -name 'python3*' -delete
 rm -f "$stdlib"/EXTERNALLY-MANAGED
 
-# keepmum and its locked dependencies (no dev or benchmark groups).
-(cd "$ROOT" && uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt -o "$work/requirements.txt" >/dev/null)
+# keepmum and its locked dependencies (no dev or benchmark groups). Not rich and what it pulls in
+# (about 14 MB): typer's boxed help and tracebacks, off with TYPER_USE_RICH=0 below. Plain errors
+# also suit the app, which shows a failed command's last line.
+(cd "$ROOT" && uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt -o "$work/all.txt" >/dev/null)
+grep -vE '^(rich|pygments|markdown-it-py|mdurl)==' "$work/all.txt" > "$work/requirements.txt"
 (cd "$ROOT" && uv build --wheel -q -o "$work")
 uv pip install -q --python "$py" --target "$site" --no-deps -r "$work/requirements.txt"
 uv pip install -q --python "$py" --target "$site" --no-deps "$work"/keepmum-*.whl
-rm -rf "$site"/bin
+rm -rf "$site"/bin "$site"/pip "$site"/pip-*.dist-info
+# The interpreter is linked statically: the shared libpython (17 MB) is never loaded.
+otool -L "$RES/python/bin/python3" | grep -q libpython || rm -f "$RES/python/lib"/libpython3*.dylib "$RES/python/bin"/python3*-config
 "$py" -I -m compileall -q -j 0 --invalidation-mode unchecked-hash "$RES/python/lib" >/dev/null
 
 # pf-serve, built from pinned sources.
@@ -51,7 +56,7 @@ cat > "$RES/keepmum" <<'SH'
 #!/bin/sh
 # keepmum, as bundled in Keepmum.app.
 here=$(cd "$(dirname "$0")" && pwd)
-KEEPMUM_PF_SERVE="$here/bin/pf-serve" exec "$here/python/bin/python3" -I -B -m keepmum "$@"
+TYPER_USE_RICH=0 KEEPMUM_PF_SERVE="$here/bin/pf-serve" exec "$here/python/bin/python3" -I -B -m keepmum "$@"
 SH
 cat > "$RES/keepmum-agent" <<'SH'
 #!/bin/sh
@@ -78,4 +83,7 @@ cat > "$APP/Contents/Library/LaunchAgents/app.keepmum.agent.plist" <<PLIST
 PLIST
 
 "$py" -I -B -c 'import keepmum, keepmum.cli, keepmum.proxy, uvicorn, httpx; print("runtime ok:", keepmum.__version__)'
+# Help and a usage error, which are what would need rich.
+HOME=$work "$RES/keepmum" --help >/dev/null
+HOME=$work "$RES/keepmum" tools set >/dev/null 2>&1 && exit 1 || [ $? -eq 2 ]
 du -sh "$RES/python" "$RES/bin"
