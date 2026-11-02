@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from collections import Counter, OrderedDict
 
 from .detect import Span
 from .detect.merge import merge
+from .tools import server_of
 from .vault import PLACEHOLDER, Vault
 
 # Signed or binary blocks are resent exactly as the API produced them.
@@ -113,6 +115,10 @@ class Redactor:
         self.findings: list[dict] = []
         self.previews = True
         self.context = True
+        # While masking a tool's result: the server it came from, noted on each value in the vault,
+        # so that server may have its own values back (tools.py). Tool call ids -> tool names.
+        self._origin: str | None = None
+        self._calls: dict[str, str] = {}
 
     def _detect(self, text: str) -> tuple[tuple[Span, ...], bool]:
         """Detector spans, cached per text: the conversation history is resent every turn.
@@ -171,11 +177,20 @@ class Redactor:
         out, pos = [], 0
         for s in spans:
             out.append(text[pos : s.start])
-            out.append(self.vault.placeholder(s.type, text[s.start : s.end], s.source.split("|")))
+            out.append(self.vault.placeholder(s.type, text[s.start : s.end], s.source.split("|"), self._origin))
             self.counts[s.type] += 1
             pos = s.end
         out.append(text[pos:])
         return "".join(out)
+
+    @contextlib.contextmanager
+    def _result_of(self, tool: str | None):
+        """Mask a tool result, noting the tool's server on every value in it."""
+        before, self._origin = self._origin, server_of(tool) if tool else None
+        try:
+            yield
+        finally:
+            self._origin = before
 
     # --- Messages API payloads ----------------------------------------------------
 
@@ -185,6 +200,10 @@ class Redactor:
         `tools`, `metadata` and every other top-level field pass through unchanged.
         """
         out = dict(body)
+        self._calls = {b["id"]: b["name"] for m in out.get("messages") or [] if isinstance(m, dict)
+                       for b in (m.get("content") if isinstance(m.get("content"), list) else [])
+                       if isinstance(b, dict) and b.get("type") == "tool_use"
+                       and isinstance(b.get("id"), str) and isinstance(b.get("name"), str)}
         if "system" in out:
             out["system"] = self._content(out["system"])
         out["system"] = self._with_hint(out.get("system"))
@@ -257,7 +276,8 @@ class Redactor:
         for key in ("functionResponse", "function_response"):
             if isinstance(out.get(key), dict):
                 resp = out[key]
-                out[key] = {**resp, **{k: self._values(resp[k]) for k in ("response", "parts") if k in resp}}
+                with self._result_of(resp.get("name") if isinstance(resp.get("name"), str) else None):
+                    out[key] = {**resp, **{k: self._values(resp[k]) for k in ("response", "parts") if k in resp}}
         for key, field in (("executableCode", "code"), ("executable_code", "code"),
                            ("codeExecutionResult", "output"), ("code_execution_result", "output")):
             if isinstance(out.get(key), dict) and isinstance(out[key].get(field), str):
@@ -280,6 +300,9 @@ class Redactor:
         if isinstance(items, str):
             items = [{"type": "message", "role": "user", "content": items}]
         if isinstance(items, list):
+            self._calls = {i["call_id"]: i["name"] for i in items if isinstance(i, dict)
+                           and i.get("type") in ("function_call", "custom_tool_call")
+                           and isinstance(i.get("call_id"), str) and isinstance(i.get("name"), str)}
             out["input"] = [RESPONSES_HINT, *(self._responses_item(i) for i in items)]
         return out
 
@@ -306,9 +329,16 @@ class Redactor:
                 return {**item, "content": [_part(c) for c in content]}
             return item
         out = {**item, "arguments": self._json_string(item["arguments"])} if isinstance(item.get("arguments"), str) else dict(item)
+        if kind in ("function_call_output", "custom_tool_call_output"):
+            tool = self._calls.get(item.get("call_id"))
+        elif kind == "mcp_call" and item.get("server_label"):
+            tool = f"mcp__{item['server_label']}__{item.get('name') or ''}"
+        else:
+            tool = None
         for key in ("output", "input", "content", "text", "action", "error"):
             if key in out:
-                out[key] = self._values(out[key])
+                with self._result_of(tool if key == "output" else None):
+                    out[key] = self._values(out[key])
         return out
 
     def _json_string(self, raw: str) -> str:
@@ -348,7 +378,8 @@ class Redactor:
         if kind == "tool_use":
             return {**block, "input": self._values(block.get("input"))}
         if kind == "tool_result":
-            return {**block, "content": self._content(block.get("content"))}
+            with self._result_of(self._calls.get(block.get("tool_use_id"))):
+                return {**block, "content": self._content(block.get("content"))}
         if kind == "document":
             out = dict(block)
             for meta in ("title", "context"):

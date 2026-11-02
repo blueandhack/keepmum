@@ -145,7 +145,8 @@ def test_stream_mcp_call_keeps_placeholder_and_records_tool():
     rs = ResponsesStreamRestorer(r.vault, counts=counts)
     out = (rs.feed(sse(*events)) + rs.close()).decode()
     assert canary not in out and ph in out
-    assert take_tools(counts) == [{"tool": "mcp__docs__search", "action": "keep", "values": 1}]
+    assert take_tools(counts) == [{"tool": "mcp__docs__search", "action": "keep", "values": 1, "reason": "secret",
+                                   "types": {"SECRET": 1}}]
 
 
 def test_responses_request_masks_mcp_call_error_and_refusal():

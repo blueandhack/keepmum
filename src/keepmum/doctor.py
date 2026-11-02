@@ -36,6 +36,10 @@ def run() -> int:
         cfg = None
         _check(r, FAIL, f"config: {e}")
 
+    if cfg is not None:
+        for line in _tool_warnings(cfg.restore):
+            _check(r, WARN, line)
+
     from .detect.pfserve import PfServe, find_binary, find_model
 
     binary, model = find_binary(), find_model()
@@ -132,3 +136,20 @@ def run() -> int:
     failed = sum(1 for s, _ in r if s == FAIL)
     print("all checks passed" if not failed else f"{failed} check(s) failed")
     return 1 if failed else 0
+
+
+def _tool_warnings(policy: dict) -> list[str]:
+    """Restore settings that reach further than one server, and servers paused because their tools changed."""
+    from .tools import ToolRegistry
+
+    out = []
+    for key, action in policy.items():
+        if key.endswith("*") and key.count("__") < 2 and (action == "restore" or isinstance(action, list)):
+            what = "every value, secrets included" if action == "restore" else ", ".join(action)
+            out.append(f"restore.{key} gives {what} to every tool it matches, including servers added later; "
+                       "set it per server (`keepmum tools set`)")
+    for s in ToolRegistry().snapshot(policy):
+        if s["paused"]:
+            out.append(f"{s['label']}: its tools changed ({', '.join(s['changed'])}), so it gets placeholders only; "
+                       f"`keepmum tools trust {s['label']}` once you have checked them")
+    return out

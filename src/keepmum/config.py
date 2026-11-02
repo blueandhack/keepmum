@@ -18,9 +18,10 @@
     strings = []
     patterns = []
 
-    [restore]              # per tool: "restore" or "keep"; "mcp__*" style prefixes allowed
+    [restore]              # per tool: "restore", "keep", "own" or a list of types; "mcp__*" style prefixes allowed
     default = "restore"
     WebFetch = "keep"
+    "mcp__claude_ai_Gmail__*" = ["EMAIL", "PERSON"]   # its own values, and these types (never SECRET)
 
     [audit]
     keep_days = 90         # how long the audit log keeps entries (`keepmum audit`)
@@ -149,9 +150,18 @@ def load(path: Path | None = None) -> Config:
     restore = raw.get("restore", {})
     if not isinstance(restore, dict):
         raise ConfigError(f"{path}: [restore] must be a table")
+    from .detect import TYPES
+
     for tool, action in restore.items():
-        if action not in ("restore", "keep"):
-            raise ConfigError(f"{path}: restore.{tool} must be \"restore\" or \"keep\"")
+        if isinstance(action, list):
+            bad = [t for t in action if t not in TYPES]
+            if bad:
+                raise ConfigError(f"{path}: restore.{tool}: unknown type {bad[0]!r}")
+            if "SECRET" in action:
+                raise ConfigError(f"{path}: restore.{tool}: SECRET cannot be listed: a tool that may not have every "
+                                  "value never gets a secret. \"restore\" gives a tool every value, secrets included")
+        elif action not in ("restore", "keep", "own"):
+            raise ConfigError(f"{path}: restore.{tool} must be \"restore\", \"keep\", \"own\" or a list of types")
     cfg.restore = {**DEFAULT_POLICY, **restore}
     cfg.log_level = log.get("level", cfg.log_level)
     cfg.log_previews = log.get("previews", cfg.log_previews)
@@ -181,19 +191,26 @@ def toml_value(value) -> str:
 
 
 def set_value(section: str, key: str, value, path: Path | None = None) -> None:
-    """Set one key in one section, keeping the rest of the file as written. The result must
-    load cleanly, or the file is left as it was. Values keepmum writes are one line each."""
+    """Set one key in one section, keeping the rest of the file as written; None removes it. The
+    result must load cleanly, or the file is left as it was. Values keepmum writes are one line
+    each. A key other than a bare word is written quoted ("mcp__gmail__*")."""
     path = path or config_file()
     text = path.read_text() if path.exists() else ""
-    line = f"{key} = {toml_value(value)}"
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", key):
+        key = json.dumps(key)
+    line = None if value is None else f"{key} = {toml_value(value)}"
     lines = text.splitlines()
     start = next((i for i, l in enumerate(lines) if l.strip() == f"[{section}]"), None)
     if start is None:
+        if line is None:
+            return
         lines += ([""] if lines and lines[-1].strip() else []) + [f"[{section}]", line]
     else:
         end = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("[")), len(lines))
         hit = next((i for i in range(start + 1, end) if re.match(rf"\s*{re.escape(key)}\s*=", lines[i])), None)
         if hit is None:
+            if line is None:
+                return
             lines.insert(start + 1, line)
         else:
             try:  # a multi-line value written by hand: replace all of its lines
@@ -201,7 +218,7 @@ def set_value(section: str, key: str, value, path: Path | None = None) -> None:
                 stop = hit + 1
             except tomllib.TOMLDecodeError:
                 stop = next((k + 1 for k in range(hit + 1, end) if _parses("\n".join(lines[hit:k + 1]))), hit + 1)
-            lines[hit:stop] = [line]
+            lines[hit:stop] = [line] if line is not None else []
     new = "\n".join(lines) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_suffix(".tmp")

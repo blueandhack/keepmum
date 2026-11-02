@@ -217,7 +217,7 @@ class Stats:
 
     def record(self, path: str, outcome: str, status: int, scan_ms: float | None = None,
                redacted: Counter | None = None, restored: Counter | None = None, new: int = 0,
-               origin: tuple[str, str] | None = None) -> None:
+               origin: tuple[str, str] | None = None, tools: list[dict] | None = None) -> None:
         from .restore import UNRESOLVED
 
         restored = Counter(restored or {})
@@ -248,6 +248,8 @@ class Stats:
             }
             if origin:
                 event["client"], event["provider"] = origin
+            if tools:  # tool calls whose input held placeholders: names, types and counts, never values
+                event["tools"] = tools
             self.events.append(event)
         if self.history:
             self.history.append(event)

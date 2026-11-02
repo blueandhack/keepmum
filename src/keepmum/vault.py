@@ -60,6 +60,7 @@ class Vault:
         self._placeholders: dict[tuple[str, str], str] = {}  # (type, value) -> placeholder
         self._kinds: dict[str, str] = {}  # value -> type it was first masked as
         self._sources: dict[str, set[str]] = {}  # value -> the detectors that found it (rules:<id>, user:<name>, pf-serve)
+        self._origins: dict[str, set[str]] = {}  # value -> the tool servers whose results held it (mcp__gmail)
         self._known: re.Pattern[str] | None = None
 
     def __repr__(self) -> str:  # never show values, even in a traceback
@@ -68,8 +69,10 @@ class Vault:
     def __len__(self) -> int:
         return len(self._values)
 
-    def placeholder(self, kind: str, value: str, sources=()) -> str:
+    def placeholder(self, kind: str, value: str, sources=(), origin: str | None = None) -> str:
         self._sources.setdefault(value, set()).update(x for x in sources if x and x != "known")
+        if origin:
+            self._origins.setdefault(value, set()).add(origin)
         key = (kind, value)
         if key in self._placeholders:
             return self._placeholders[key]
@@ -104,9 +107,14 @@ class Vault:
     def sources_of(self, value: str) -> frozenset[str]:
         return frozenset(self._sources.get(value, ()))
 
+    def origins_of(self, value: str | None) -> frozenset[str]:
+        """The tool servers that returned this value: they may have it back (tools.py)."""
+        return frozenset(self._origins.get(value, ())) if value is not None else frozenset()
+
     def clear(self) -> None:
         self._values.clear()
         self._placeholders.clear()
         self._kinds.clear()
         self._sources.clear()
+        self._origins.clear()
         self._known = None

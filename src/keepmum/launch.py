@@ -54,6 +54,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     from .stats import History, Stats
 
     from .audit import AuditLog
+    from .tools import ToolRegistry
 
     audit = AuditLog(keep_days=cfg.audit_keep_days)
     if mode == "serve":
@@ -78,7 +79,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     proxy = Proxy(Redactor(pipeline, Vault()), upstream=upstream or cfg.upstream, policy=cfg.restore,
                   stats=Stats(history=history), stats_token=stats_token(), info=info, observe=observe,
                   previews=lambda: observe.config.log_previews,
-                  context=lambda: observe.config.log_context, audit=audit)
+                  context=lambda: observe.config.log_context, audit=audit, tools=ToolRegistry())
     switch = ModelSwitch(pipeline, proxy._scan_lock)
     return proxy
 

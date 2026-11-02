@@ -35,7 +35,8 @@ struct MenuLabel: View {
     var body: some View {
         let unique = store.snapshot.vaultSize ?? 0
         HStack(spacing: 3) {
-            Image(nsImage: store.connection == .live || store.connection == .sample ? Brand.menuBarActive : Brand.menuBarIdle)
+            let live = store.connection == .live || store.connection == .sample
+            Image(nsImage: !live ? Brand.menuBarIdle : store.toolsNeedReview ? Brand.menuBarAttention : Brand.menuBarActive)
             if unique > 0 { Text(unique.compact).monospacedDigit() }
         }
         .task { store.start(); engine.start() }
@@ -90,6 +91,22 @@ struct MenuPanel: View {
             ProtectionRow(engine: engine) {
                 engine.settingsRequested = true
                 DashboardWindow.show(openWindow)
+            }
+            if let review = store.toolServers.first(where: { $0.paused }) ?? store.toolServers.first(where: { $0.new }) {
+                let others = store.toolServers.filter { $0.new || $0.paused }.count - 1
+                HStack(spacing: Space.s) {
+                    Image(systemName: review.paused ? "exclamationmark.shield" : "puzzlepiece.extension")
+                        .foregroundStyle(review.paused ? Theme.warning : Theme.accent)
+                    Text(review.paused ? "\(review.label): tools changed" : "New tool: \(review.label)" + (others > 0 ? " and \(others) more" : ""))
+                        .font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1)
+                    Spacer(minLength: Space.s)
+                    PillButton(title: "Review") {
+                        engine.settingsRequested = true
+                        DashboardWindow.show(openWindow)
+                    }
+                }
+                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
+                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
             }
             if case .offline(let reason) = store.connection {
                 Text("\(reason.sentence). \(engine.isBundled ? "Start the background service in Settings." : "Run keepmum claude to start.")")
@@ -220,6 +237,7 @@ enum Snapshotter {
         store.connection = .sample
         let now = Date()
         store.injectFlows(SampleFeed.flows(window: 3600))
+        store.injectTools(ToolServer.samples)
         store.pulses = (0..<9).map { k in
             let kinds: [Pulse.Kind] = [.out("masked"), .out("clean"), .back(restored: true), .out("blocked"), .back(restored: false)]
             let client = ["claude-code", "codex", "pi"][k % 3]
@@ -234,7 +252,7 @@ enum Snapshotter {
         for dark in [false, true] {
             render(MenuPanel(store: store, engine: .preview()), to: "\(dir)/menu-\(dark ? "dark" : "light").png", dark: dark)
             // Settings in full: the window scrolls it, a snapshot cannot.
-            render(Dashboard(store: store, engine: .preview(), page: .settings).frame(width: 1200, height: 1640),
+            render(Dashboard(store: store, engine: .preview(), page: .settings).frame(width: 1200, height: 2140),
                    to: "\(dir)/settings-full-\(dark ? "dark" : "light").png", dark: dark)
         }
         // A Logs row's details, as its popover shows them.
@@ -246,6 +264,12 @@ enum Snapshotter {
         render(Dashboard(store: store, engine: .preview(starting: true), page: .settings).frame(width: 1200, height: 780),
                to: "\(dir)/settings-starting-light.png", dark: false)
         render(MenuPanel(store: store, engine: .preview(starting: true)), to: "\(dir)/menu-starting-light.png", dark: false)
+        // The menu bar icon, plain and with the dot that points at Settings › Tools.
+        for (name, image) in [("menubar", Brand.menuBarActive), ("menubar-attention", Brand.menuBarAttention)] {
+            if let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
+            }
+        }
         // Observe mode, live: the one state where values leave this Mac unmasked.
         store.snapshot.observe = true
         store.connection = .live

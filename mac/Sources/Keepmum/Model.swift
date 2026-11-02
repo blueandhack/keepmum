@@ -96,7 +96,24 @@ struct Snapshot: Decodable, Sendable {
         /// Which coding agent sent it, and which provider it went to (absent in old history).
         var client: String? = nil
         var provider: String? = nil
+        /// Tool calls whose input held placeholders, and what each got (absent in old history).
+        var tools: [ToolCall]? = nil
         var id: String { "\(ts):\(path):\(outcome):\(status)" }
+
+        struct ToolCall: Decodable, Sendable, Hashable {
+            var tool: String
+            /// "restore": real values went in; "keep": placeholders stayed.
+            var action: String
+            var values: Int
+            /// local, own, allowed; or for kept ones placeholders, secret, paused, not_allowed, too_many.
+            var reason: String? = nil
+            var types: [String: Int]? = nil
+        }
+
+        /// Calls that kept placeholders a setting could change (not secrets, not "placeholders only").
+        var keptTools: [ToolCall] {
+            (tools ?? []).filter { $0.action == "keep" && ["not_allowed", "paused", "too_many"].contains($0.reason ?? "") }
+        }
 
         enum Kind: String, CaseIterable { case masked, clean, blocked, observed }
         /// Matches `event_kind` in keepmum's stats.py.
@@ -205,7 +222,7 @@ final class StatsStore {
             var tick = 0
             while !Task.isCancelled {
                 await self?.refresh()
-                if tick % 3 == 0 { await self?.refreshFlows() }
+                if tick % 3 == 0 { await self?.refreshFlows(); await self?.loadTools() }
                 tick += 1
                 try? await Task.sleep(for: .seconds(1))
             }
@@ -303,6 +320,35 @@ final class StatsStore {
         previewsOn = page.previews ?? true
         contextOn = page.context ?? false
     }
+
+    // MARK: Tools (Settings › Tools): the network tools agents offered, and what each may receive.
+
+    private(set) var toolServers: [ToolServer] = []
+    /// A server not reviewed yet, or paused because its tools changed: the menu bar shows a dot.
+    var toolsNeedReview: Bool { toolServers.contains { $0.new || $0.paused } }
+
+    func loadTools() async {
+        if sampleMode {
+            toolServers = ToolServer.samples
+            return
+        }
+        port = discoverPort()
+        guard let token = try? String(contentsOf: home.appending(path: ".config/keepmum/stats-token"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty,
+            let url = URL(string: "http://127.0.0.1:\(port)/_keepmum/tools") else { return }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 4
+        struct Page: Decodable { var servers: [ToolServer] }
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        if let page = try? decoder.decode(Page.self, from: data) { toolServers = page.servers }
+    }
+
+    /// For the snapshot renderer.
+    func injectTools(_ servers: [ToolServer]) { toolServers = servers }
 
     // MARK: History (the Activity page): older events from keepmum's history file, paged.
 
@@ -433,6 +479,12 @@ struct SampleFeed {
         snap.scanMs = .init(p50: 21, p95: 88, n: 400)
         snap.vaultSize = 37
         for i in 0..<14 { snap.recent.append(event(at: now - Double(14 - i) * 7)) }
+        // One search that kept a placeholder: Gmail is not allowed emails yet.
+        snap.recent[10].redacted = ["EMAIL": 1]
+        snap.recent[10].new = 1
+        snap.recent[10].client = "claude-code"
+        snap.recent[10].tools = [.init(tool: "mcp__claude_ai_Gmail__search_threads", action: "keep", values: 1,
+                                       reason: "not_allowed", types: ["EMAIL": 1])]
     }
 
     /// The flows a preview shows: three clients, two providers, the numbers of the design mock.
@@ -505,4 +557,45 @@ struct SampleFeed {
         }
         return snap
     }
+}
+
+/// One server from keepmum's tools feed: an MCP server (all its tools), or a web tool.
+struct ToolServer: Decodable, Sendable, Identifiable, Hashable {
+    var server: String
+    var label: String
+    var agents: [String] = []
+    var tools: [String] = []
+    /// Not reviewed yet: it runs on keepmum's default until you choose.
+    var new = false
+    /// One of its tools changed since it was trusted: it gets placeholders only.
+    var paused = false
+    var changed: [String] = []
+    /// placeholders, own, contacts, custom (own plus `types`), or restore (every value).
+    var setting: String
+    var types: [String] = []
+    /// The [restore] key that decides, and whether it names this server or is keepmum's default.
+    var rule: String
+    var ownRule = false
+    var `default` = false
+    /// The last 7 days' calls that kept a placeholder this server's setting could let through, by type.
+    var keptWeek: [String: Int] = [:]
+    /// Sends what it gets to the public internet (web search, web fetch).
+    var `public` = false
+    var id: String { server }
+
+    /// Set by a broader [restore] key written in the config file ("mcp__*" = [...]), not by this row.
+    var setElsewhere: Bool { !ownRule && !self.default }
+
+    static let samples: [ToolServer] = [
+        .init(server: "mcp__claude_ai_Gmail", label: "Gmail", agents: ["claude-code"], tools: ["mcp__claude_ai_Gmail__search_threads"],
+              setting: "own", rule: "mcp__*", default: true, keptWeek: ["EMAIL": 6]),
+        .init(server: "mcp__linear", label: "linear", agents: ["claude-code", "codex"], tools: ["mcp__linear__create_issue"],
+              setting: "contacts", types: ["PERSON", "EMAIL", "PHONE", "ADDRESS"], rule: "mcp__linear__*", ownRule: true),
+        .init(server: "mcp__notion", label: "notion", agents: ["claude-code"], tools: ["mcp__notion__search"], new: true,
+              setting: "own", rule: "mcp__*", default: true),
+        .init(server: "mcp__docs", label: "docs", agents: ["codex"], tools: ["mcp__docs__fetch"], paused: true,
+              changed: ["mcp__docs__fetch"], setting: "own", rule: "mcp__*", default: true),
+        .init(server: "WebSearch", label: "WebSearch", agents: ["claude-code"], tools: ["WebSearch"],
+              setting: "placeholders", rule: "WebSearch", default: true, public: true),
+    ]
 }

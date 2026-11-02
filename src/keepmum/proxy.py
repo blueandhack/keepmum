@@ -51,8 +51,9 @@ from starlette.routing import Route
 from .gemini import GeminiStreamRestorer, restore_gemini
 from .redact import Redactor
 from .responses import ResponsesStreamRestorer, restore_responses
-from .restore import DEFAULT_POLICY, StreamRestorer, restore_response, take_tools
+from .restore import DEFAULT_POLICY, StreamRestorer, ToolPolicy, restore_response, rule_for, take_tools
 from .stats import Stats, client_of, flows, provider_of
+from .tools import BULK, CONTACTS, definitions
 
 log = logging.getLogger("keepmum")
 
@@ -164,11 +165,14 @@ class Proxy:
                  client: httpx.AsyncClient | None = None, stats: Stats | None = None, stats_token: str | None = None,
                  info: dict | None = None, observe=None, openai_upstream: str = OPENAI_UPSTREAM,
                  chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
-                 gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM):
+                 gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM,
+                 tools=None):
         self.redactor = redactor
         self.upstream = upstream.rstrip("/")
         self.prefixed = {"/openai": openai_upstream.rstrip("/"), "/chatgpt": chatgpt_upstream.rstrip("/"),
                          "/gemini": gemini_upstream.rstrip("/"), "/codeassist": code_assist_upstream.rstrip("/")}
+        # The servers seen in agents' tool lists (tools.ToolRegistry); None: no fingerprints, no counts.
+        self.tools = tools
         self.policy = policy or DEFAULT_POLICY
         self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10))
         self.stats = stats or Stats()
@@ -184,6 +188,14 @@ class Proxy:
         # The detectors and the vault are not thread-safe; scans run one at a time off the event loop.
         self._scan_lock = threading.Lock()
         self.app = Starlette(routes=[Route("/{path:path}", self.handle, methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])])
+
+    @property
+    def policy(self) -> ToolPolicy:
+        return self._policy
+
+    @policy.setter
+    def policy(self, policy: dict) -> None:
+        self._policy = ToolPolicy(policy, self.tools)
 
     def target(self, path: str, chatgpt_account: bool = False) -> Target:
         if chatgpt_account and path.startswith("/openai/v1/"):
@@ -230,7 +242,8 @@ class Proxy:
     def _local(self, request: Request, path: str) -> Response:
         if path == "/_keepmum/health":
             return JSONResponse({"ok": True})
-        if path in ("/_keepmum/stats", "/_keepmum/history", "/_keepmum/flows", "/_keepmum/findings") and request.method == "GET":
+        if path in ("/_keepmum/stats", "/_keepmum/history", "/_keepmum/flows", "/_keepmum/findings",
+                    "/_keepmum/tools") and request.method == "GET":
             given = request.headers.get("authorization", "").removeprefix("Bearer ")
             if not self.stats_token or not hmac.compare_digest(given, self.stats_token):
                 return api_error(401, "authentication_error", "missing or wrong stats token")
@@ -252,6 +265,10 @@ class Proxy:
                 self.stats.drop_context()
             return JSONResponse({"findings": self.stats.findings_page(), "previews": self._previews(),
                                  "context": self._context()})
+        if path == "/_keepmum/tools" and request.method == "GET":
+            # The network tools agents offered, each with its restore setting: names, never values.
+            servers = self.tools.snapshot(self.policy) if self.tools else []
+            return JSONResponse({"servers": servers, "contacts": list(CONTACTS), "bulk": BULK})
         if path == "/_keepmum/history" and request.method == "GET":
             q = request.query_params
             try:
@@ -362,7 +379,7 @@ class Proxy:
         """Count a request for the stats feed, and add it to the audit log. Bodyless checks that
         carried no content (a GET of /v1/models) are counted but not audited."""
         tools = take_tools(restored) if restored else []
-        self.stats.record(path, outcome, status, scan_ms, counts, restored, new=new, origin=origin)
+        self.stats.record(path, outcome, status, scan_ms, counts, restored, new=new, origin=origin, tools=tools)
         if self.audit is None or (scan_ms is None and outcome in ("forwarded", "observed")):
             return
         from .restore import UNRESOLVED
@@ -397,7 +414,14 @@ class Proxy:
             else:
                 masked = self.redactor.redact_request(body)
             self.stats.record_findings(self.redactor.findings, outcome, origin)
-            return masked, Counter(self.redactor.counts), self.redactor.fresh, found_by(self.redactor.findings)
+            result = masked, Counter(self.redactor.counts), self.redactor.fresh, found_by(self.redactor.findings)
+        if self.tools is not None:
+            try:
+                self.tools.observe(definitions(body, api), origin[0] if origin else None,
+                                   lambda name: rule_for(name, self.policy)[1] != "restore")
+            except Exception as e:  # the registry never stops a request
+                log.warning("tool list not recorded (%s)", type(e).__name__)
+        return result
 
     def _restore(self, data: dict, counts: Counter, api: str = "messages") -> dict:
         with self._scan_lock:

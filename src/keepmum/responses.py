@@ -17,18 +17,12 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-from .restore import DEFAULT_POLICY, StreamRestorer, _hold_from, _values, note_tool, restore_text, tool_policy
+from .restore import DEFAULT_POLICY, StreamRestorer, _hold_from, restore_text, restore_tool
 from .vault import Vault
 
 
 def _restore_args(raw: str, name: str, vault: Vault, policy: dict, counts: Counter) -> str:
-    note_tool(counts, name, policy, raw)
-    if tool_policy(name, policy) != "restore":
-        return raw
-    try:
-        return json.dumps(_values(json.loads(raw), vault, counts), ensure_ascii=False)
-    except ValueError:
-        return restore_text(raw, vault, counts)
+    return restore_tool(name, raw, vault, policy, counts, parse=True)
 
 
 def restore_item(item, vault: Vault, policy: dict = DEFAULT_POLICY, counts: Counter | None = None):
@@ -44,14 +38,9 @@ def restore_item(item, vault: Vault, policy: dict = DEFAULT_POLICY, counts: Coun
     if kind == "function_call" and isinstance(item.get("arguments"), str):
         return {**item, "arguments": _restore_args(item["arguments"], item.get("name", ""), vault, policy, counts)}
     if kind == "custom_tool_call" and isinstance(item.get("input"), str):
-        note_tool(counts, item.get("name", ""), policy, item["input"])
-        if tool_policy(item.get("name", ""), policy) == "restore":
-            return {**item, "input": restore_text(item["input"], vault, counts)}
+        return {**item, "input": restore_tool(item.get("name", ""), item["input"], vault, policy, counts)}
     if kind in ("local_shell_call", "shell_call"):
-        tool = kind.removesuffix("_call")
-        note_tool(counts, tool, policy, item.get("action"))
-        if tool_policy(tool, policy) == "restore":
-            return {**item, "action": _values(item.get("action"), vault, counts)}
+        return {**item, "action": restore_tool(kind.removesuffix("_call"), item.get("action"), vault, policy, counts)}
     if kind == "mcp_call" and isinstance(item.get("arguments"), str):
         label = item.get("server_label") or ""
         fn = item.get("name") or ""
@@ -134,9 +123,7 @@ class ResponsesStreamRestorer(StreamRestorer):
             if field == "arguments":
                 whole = _restore_args(whole, call["name"], v, p, c)
             else:
-                note_tool(c, call["name"], p, whole)
-                if tool_policy(call["name"], p) == "restore":
-                    whole = restore_text(whole, v, c)
+                whole = restore_tool(call["name"], whole, v, p, c)
             delta = b""
             if call["parts"]:
                 last = call["last"] or {}

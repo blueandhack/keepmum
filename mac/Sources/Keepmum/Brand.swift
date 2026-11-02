@@ -86,9 +86,23 @@ extension Brand {
     /// Rendered once per variant; the menu bar label updates every second.
     @MainActor static let menuBarActive = renderMenuBarImage(dimmed: false)
     @MainActor static let menuBarIdle = renderMenuBarImage(dimmed: true)
+    /// With a dot at the top right: something in Settings › Tools waits for a look.
+    @MainActor static let menuBarAttention = renderMenuBarImage(dimmed: false, dot: true)
 
-    @MainActor private static func renderMenuBarImage(dimmed: Bool) -> NSImage {
-        let renderer = ImageRenderer(content: KeepmumMark(color: .black.opacity(dimmed ? 0.45 : 1), weight: 13).frame(width: 18, height: 18))
+    @MainActor private static func renderMenuBarImage(dimmed: Bool, dot: Bool = false) -> NSImage {
+        let mark = KeepmumMark(color: .black.opacity(dimmed ? 0.45 : 1), weight: 13).frame(width: 18, height: 18)
+            .overlay(alignment: .topTrailing) {
+                if dot {
+                    // A clear ring around the dot keeps it apart from the mark.
+                    ZStack {
+                        Circle().frame(width: 9, height: 9).blendMode(.destinationOut)
+                        Circle().fill(.black).frame(width: 6, height: 6)
+                    }
+                    .offset(x: 2, y: -2)
+                }
+            }
+            .compositingGroup()
+        let renderer = ImageRenderer(content: mark)
         renderer.scale = 2
         let image = renderer.nsImage ?? NSImage(systemSymbolName: "text.alignleft", accessibilityDescription: nil)!
         image.size = NSSize(width: 18, height: 18)

@@ -111,9 +111,10 @@ Every sensitive value becomes a deterministic placeholder, so the same secret al
 | `thinking` blocks | Keep placeholder (signed; must be resent unchanged) |
 | `tool_use` input for Edit, Write, MultiEdit, NotebookEdit | Restore |
 | `tool_use` input for Bash | Restore (open question below) |
-| `tool_use` input for WebFetch, WebSearch, and every MCP tool (`mcp__*`) | Keep placeholder. keepmum cannot tell which MCP servers reach the network, so all of them keep placeholders unless the config says otherwise |
+| `tool_use` input for WebFetch, WebSearch | Keep placeholder |
+| `tool_use` input for every MCP tool (`mcp__*`) | "own": a value restored only if that server's own results held it (each value notes the servers whose tool results it was masked in, in memory only). A list of types adds values of those types from anywhere |
 
-The policy lives in config (`[restore]` per tool name), so it can be tightened without code changes.
+The policy lives in config (`[restore]` per tool name; the longest matching prefix decides), so it can be tightened without code changes. For any tool not set to "restore", three rules hold whatever the setting: a SECRET is never restored; more than 5 values in one call means none are; and while a server's tool definitions (name, description, input schema, hashed) differ from the ones first seen or last trusted (`keepmum tools trust`), it gets placeholders only. A tool first seen later is trusted as it appears, since Claude Code loads deferred tools one at a time. The servers seen, those hashes, and per day the calls that kept a type a setting could let through are in `~/.config/keepmum/tools.json` (0600), shared by every keepmum process under a file lock.
 
 **Streaming (the tricky part)**
 
@@ -214,11 +215,11 @@ off = []                             # built-in rule names turned off (`keepmum 
 strings = []
 patterns = []
 
-[restore]                            # per tool: "restore" or "keep"; prefixes like "mcp__files__*" allowed
-default = "restore"
+[restore]                            # per tool: "restore", "keep", "own" or a list of types (never SECRET);
+default = "restore"                  #   prefixes like "mcp__files__*" allowed, the longest match decides
 WebFetch = "keep"
 WebSearch = "keep"
-"mcp__*" = "keep"
+"mcp__*" = "own"
 
 [log]
 level = "info"                       # never logs values, only type + counts
@@ -297,9 +298,10 @@ keepmum/
 | `protect` | action, clients, by | off |
 | `exclude` / `include` | project, by | exclude |
 | `start` / `stop` | mode, pid, and at start the port, version, detector, pii, observe | |
+| `tools` | action (`trust`), server, the tools that had changed, by | trust after a change |
 | `pruned` | dropped, `through` {seq, hash}, keep_days | |
 
-Bodyless requests that carry no content (a GET of `/v1/models`) are not audited; blocked and rejected ones always are. A tool call is listed when its input held placeholders: `restore` means the tool ran with real values, `keep` that it kept the placeholders (WebFetch, WebSearch, MCP tools by default).
+Bodyless requests that carry no content (a GET of `/v1/models`) are not audited; blocked and rejected ones always are. A tool call is listed when its input held placeholders, once per action and reason, with counts by type: `restore` means the tool ran with real values (reason `local`, `own` or `allowed`), `keep` that it kept the placeholders (reason `placeholders`, `secret`, `paused`, `not_allowed` or `too_many`).
 
 **Never recorded:** values, previews, placeholders, headers, bodies, command arguments. Allowlist strings and patterns, and the patterns of your own mask rules, are recorded as fingerprints: the first 12 hex digits of HMAC-SHA256(install salt, kind + value). They show that an entry was added or removed, and which, without what it says.
 
@@ -344,7 +346,8 @@ The one test that must never fail: a canary secret sent through keepmum never ap
 | --- | --- |
 | Missed secret (false negative) | Layered detection; redact-when-in-doubt merge; recall target in Phase 0 |
 | Over-redaction breaks Claude's work | Allowlist; hard-negative tests; restore in edits so files stay correct |
-| Prompt injection asks Claude to send a placeholder somewhere, and restore leaks it | Per-tool restore policy; network tools keep placeholders |
+| Prompt injection asks Claude to send a placeholder somewhere, and restore leaks it | Per-tool restore policy: web tools keep placeholders; an MCP server gets only its own values and the types you allow; never a secret, never more than 5 values a call. A server can still pass what it gets on (a mail server sending a message), so allow types only for servers you trust |
+| An MCP server changes its tool descriptions after it was trusted, or another server takes its name | Each tool's definition is hashed; a change pauses the server (placeholders only) until `keepmum tools trust` |
 | Secrets inside images or PDFs | Out of scope for v1; documented in README |
 | A client opens a WebSocket keepmum cannot scan | Refused; Codex falls back to HTTPS, and `keepmum protect` turns Codex's WebSockets off |
 | A user lets a type through, or excludes a project | Explicit and visible: secrets need confirmation, the dashboard marks passed types and lists exclusions |

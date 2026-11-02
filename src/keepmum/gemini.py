@@ -23,10 +23,8 @@ from .restore import (
     DEFAULT_POLICY,
     StreamRestorer,
     _hold_from,
-    _values,
-    note_tool,
     restore_text,
-    tool_policy,
+    restore_tool,
 )
 from .vault import Vault
 
@@ -40,10 +38,7 @@ def _part(part, vault: Vault, policy: dict, counts: Counter):
     for key in ("functionCall", "function_call"):
         call = out.get(key)
         if isinstance(call, dict) and "args" in call:
-            name = call.get("name", "")
-            note_tool(counts, name, policy, call["args"])
-            if tool_policy(name, policy) == "restore":
-                out[key] = {**call, "args": _values(call["args"], vault, counts)}
+            out[key] = {**call, "args": restore_tool(call.get("name", ""), call["args"], vault, policy, counts)}
     for key, field in (("executableCode", "code"), ("codeExecutionResult", "output")):
         if isinstance(out.get(key), dict) and isinstance(out[key].get(field), str):
             out[key] = {**out[key], field: restore_text(out[key][field], vault, counts)}

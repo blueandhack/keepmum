@@ -304,6 +304,27 @@ final class Engine {
         await act { try await self.check(["rules", "remove", kind, String(index)]) }
     }
 
+    // MARK: Tools (`keepmum tools`): what each network tool may receive
+
+    /// setting: placeholders, own, contacts or default. A public tool (web search) given more needs `confirmed`.
+    func setTool(_ server: String, _ setting: String, confirmed: Bool = false) async {
+        await act { try await self.check(["tools", "set", server, setting] + (confirmed ? ["--yes"] : [])) }
+    }
+
+    func allowTool(_ server: String, _ types: [String], confirmed: Bool = false) async {
+        await act { try await self.check(["tools", "allow", server] + types + (confirmed ? ["--yes"] : [])) }
+    }
+
+    /// A server whose tools changed: trust them as they are now.
+    func trustTool(_ server: String) async {
+        await act { try await self.check(["tools", "trust", server]) }
+    }
+
+    /// Keep every new server on its setting, and stop pointing at them.
+    func toolsReviewed() async {
+        await act { try await self.check(["tools", "reviewed"]) }
+    }
+
     // MARK: Audit (`keepmum audit`)
 
     /// The audit log's events other than requests, and a check of its chain. The head of a good

@@ -9,8 +9,9 @@ from .detect import TYPES
 from .vault import PLACEHOLDER, Vault
 
 # Per tool: "restore" puts real values into the tool's input before it runs locally; "keep"
-# leaves placeholders, so a prompt-injected request cannot send a real value over the network.
-# MCP tools keep placeholders because keepmum cannot tell which ones reach the network.
+# leaves placeholders, so a prompt-injected request cannot send a real value over the network;
+# "own" lets an MCP server have back the values it returned itself, and a list of types adds
+# those (tools.py has the rules every network tool is held to).
 DEFAULT_POLICY = {
     "default": "restore",
     "WebFetch": "keep",
@@ -20,35 +21,52 @@ DEFAULT_POLICY = {
     "web_fetch": "keep",
     "web_search": "keep",
     "codesearch": "keep",
-    "mcp__*": "keep",
-    "mcp_*": "keep",
+    "mcp__*": "own",
+    "mcp_*": "own",
 }
+ACTIONS = ("restore", "keep", "own")
 
 
-def tool_policy(name: str, policy: dict[str, str]) -> str:
+class ToolPolicy(dict):
+    """The restore policy, with the registry of servers seen (tools.ToolRegistry) when there is one."""
+
+    def __init__(self, policy: dict, registry=None):
+        super().__init__(policy)
+        self.registry = registry
+
+
+def rule_for(name: str, policy: dict) -> tuple[str, object]:
+    """(the key that decides, its action) for a tool: its own name, else the longest matching
+    prefix pattern ("mcp__gmail__*" before "mcp__*"), else the default."""
     if name in policy:
-        return policy[name]
-    for pattern, action in policy.items():
-        if pattern.endswith("*") and name.startswith(pattern[:-1]):
-            return action
-    return policy.get("default", "restore")
-
-
-def note_tool(counts: Counter | None, name: str, policy: dict[str, str], value) -> None:
-    """Record a tool call whose input holds placeholders, and what the policy did with them, for
-    the audit log: counts[("tool", name, "restore" | "keep")] += placeholders in the input."""
-    if counts is None:
-        return
-    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-    n = len(PLACEHOLDER.findall(text))
-    if n:
-        counts[(TOOL, name, tool_policy(name, policy))] += n
+        return name, policy[name]
+    best = None
+    for pattern in policy:
+        if pattern.endswith("*") and name.startswith(pattern[:-1]) and (best is None or len(pattern) > len(best)):
+            best = pattern
+    if best is not None:
+        return best, policy[best]
+    return "default", policy.get("default", "restore")
 
 
 def take_tools(counts: Counter) -> list[dict]:
-    """Remove the tool decisions note_tool put in counts: [{tool, action, values}]."""
+    """Remove the tool decisions put in counts: [{tool, action, values, reason, types}], one per
+    tool, action and reason. action is "restore" (real values went in) or "keep"; reason says why:
+    local (the tool runs on this Mac), own (the server returned it), allowed (its type is let
+    through), and for kept ones placeholders (the setting), secret, paused (the server changed),
+    not_allowed, too_many."""
     keys = [k for k in counts if isinstance(k, tuple) and k[0] == TOOL]
-    return [{"tool": k[1], "action": k[2], "values": counts.pop(k)} for k in sorted(keys)]
+    grouped: dict[tuple, dict] = {}
+    for k in sorted(keys, key=lambda k: tuple(str(x) for x in k)):
+        _, name, action, reason, kind = k
+        n = counts.pop(k)
+        g = grouped.setdefault((name, action, reason), {"tool": name, "action": action, "values": 0})
+        g["values"] += n
+        if reason:
+            g["reason"] = reason
+        if kind:
+            g.setdefault("types", {})[kind] = g.get("types", {}).get(kind, 0) + n
+    return list(grouped.values())
 
 
 TOOL = "tool"
@@ -59,36 +77,108 @@ TOOL = "tool"
 UNRESOLVED = "unresolved"
 
 
-def restore_text(text: str, vault: Vault, counts: Counter | None = None) -> str:
-    """Replace every placeholder the vault knows. Unknown placeholders stay as they are."""
+def resolve(m, vault: Vault) -> tuple[str, str | None, str]:
+    """(the placeholder the vault knows, its value or None, text after it) for a PLACEHOLDER match.
+    A 12-digit match may be an 8-digit placeholder followed by hex text."""
+    ph = m.group(0)
+    value = vault.value(ph)
+    if value is None and len(m.group(2)) == 12 and vault.value(ph[:-4]) is not None:
+        return ph[:-4], vault.value(ph[:-4]), ph[-4:]
+    return ph, value, ""
+
+
+def restore_text(text: str, vault: Vault, counts: Counter | None = None, only: set[str] | None = None) -> str:
+    """Replace every placeholder the vault knows (with `only`, just those placeholders).
+    Unknown placeholders stay as they are."""
 
     def swap(m):
-        ph = m.group(0)
-        value = vault.value(ph)
-        suffix = ""
-        # A 12-digit match may be an 8-digit placeholder followed by hex text.
-        if value is None and len(m.group(2)) == 12:
-            value, suffix = vault.value(ph[:-4]), ph[-4:]
+        ph, value, suffix = resolve(m, vault)
         if value is None:
             if counts is not None:
                 counts[UNRESOLVED] += 1
-            return ph
+            return m.group(0)
+        if only is not None and ph not in only:
+            return m.group(0)
         if counts is not None:
-            counts[m.group(1)] += 1
+            counts[ph.split("_")[1]] += 1
         return value + suffix
 
     return PLACEHOLDER.sub(swap, text)
 
 
-def _values(value, vault: Vault, counts: Counter | None):
+def _values(value, vault: Vault, counts: Counter | None, only: set[str] | None = None):
     if isinstance(value, str):
-        return restore_text(value, vault, counts)
+        return restore_text(value, vault, counts, only)
     if isinstance(value, dict):
-        return {(restore_text(k, vault, counts) if isinstance(k, str) else k): _values(v, vault, counts)
+        return {(restore_text(k, vault, counts, only) if isinstance(k, str) else k): _values(v, vault, counts, only)
                 for k, v in value.items()}
     if isinstance(value, list):
-        return [_values(v, vault, counts) for v in value]
+        return [_values(v, vault, counts, only) for v in value]
     return value
+
+
+def tool_values(name: str, value, vault: Vault, policy: dict) -> tuple[set[str] | None, list[tuple[str, str, str, int]]]:
+    """Which placeholders in a tool call's input get their real values: (None for all, or the set
+    allowed; and the decisions as (action, reason, type, occurrences)) for the audit log."""
+    action = rule_for(name, policy)[1]
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    found = Counter()
+    for m in PLACEHOLDER.finditer(text):
+        ph, real, _ = resolve(m, vault)
+        if real is not None:
+            found[ph] += 1
+    if action == "restore":
+        return None, [("restore", "local", ph.split("_")[1], n) for ph, n in found.items()]
+    from .tools import BULK, server_of
+
+    server = server_of(name)
+    registry = getattr(policy, "registry", None)
+    types = set(action) if isinstance(action, (list, tuple)) else set()
+    paused = action != "keep" and registry is not None and registry.paused(server)
+    allowed, decisions = set(), []
+    for ph, n in found.items():
+        kind = ph.split("_")[1]
+        if action == "keep":
+            reason = "placeholders"
+        elif kind == "SECRET":
+            reason = "secret"
+        elif paused:
+            reason = "paused"
+        elif server in vault.origins_of(vault.value(ph)):
+            reason = "own"
+        elif kind in types:
+            reason = "allowed"
+        else:
+            reason = "not_allowed"
+        if reason in ("own", "allowed"):
+            allowed.add(ph)
+        decisions.append(("restore" if reason in ("own", "allowed") else "keep", reason, kind, n))
+    if len(allowed) > BULK:
+        allowed = set()
+        decisions = [("keep", "too_many" if a == "restore" else r, k, n) for a, r, k, n in decisions]
+    if registry is not None:
+        registry.note_kept(server, [k for a, r, k, n in decisions if r == "not_allowed"])
+    return allowed, decisions
+
+
+def restore_tool(name: str, value, vault: Vault, policy: dict, counts: Counter | None, parse: bool = False):
+    """A tool call's input with the real values its tool may receive, and its decisions in counts.
+    `parse`: value is a JSON document in a string (Responses API arguments), restored as JSON."""
+    tree = value
+    if parse and isinstance(value, str):
+        try:
+            tree = json.loads(value)
+        except ValueError:
+            parse = False
+    only, decisions = tool_values(name, tree, vault, policy)
+    if counts is not None:
+        for action, reason, kind, n in decisions:
+            counts[(TOOL, name, action, reason, kind)] += n
+    if only is not None and not only:
+        return value  # nothing to put back: the input goes out exactly as the model wrote it
+    if parse:
+        return json.dumps(_values(tree, vault, counts, only), ensure_ascii=False)
+    return _values(value, vault, counts, only)
 
 
 def restore_response(body: dict, vault: Vault, policy: dict[str, str] = DEFAULT_POLICY, counts: Counter | None = None) -> dict:
@@ -107,11 +197,7 @@ def restore_response(body: dict, vault: Vault, policy: dict[str, str] = DEFAULT_
         elif block.get("type") == "text":
             out.append({**block, "text": restore_text(block.get("text", ""), vault, counts)})
         elif block.get("type") == "tool_use":
-            note_tool(counts, block.get("name", ""), policy, block.get("input"))
-            if tool_policy(block.get("name", ""), policy) == "restore":
-                out.append({**block, "input": _values(block.get("input"), vault, counts)})
-            else:
-                out.append(block)
+            out.append({**block, "input": restore_tool(block.get("name", ""), block.get("input"), vault, policy, counts)})
         else:
             out.append(block)
     return {**body, "content": out}
@@ -236,31 +322,33 @@ class StreamRestorer:
             delta = {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}}
             return self._emit("content_block_delta", delta)
         if state["type"] == "tool_use" and state["json"]:
-            partial = "".join(state["json"])
-            note_tool(self.counts, state["name"], self.policy, partial)
-            if tool_policy(state["name"], self.policy) == "restore":
-                partial = self._restore_json(partial)
+            partial = self._restore_json("".join(state["json"]), state["name"])
             delta = {"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": partial}}
             return self._emit("content_block_delta", delta)
         return b""
 
-    def _restore_json(self, partial: str) -> str:
+    def _restore_json(self, partial: str, name: str) -> str:
         try:
-            return json.dumps(_values(json.loads(partial), self.vault, self.counts), ensure_ascii=False)
+            tree = json.loads(partial)
         except ValueError:
             # Not parseable as a whole: restore in place, JSON-escaping each value.
+            only, decisions = tool_values(name, partial, self.vault, self.policy)
+            for action, reason, kind, n in decisions:
+                self.counts[(TOOL, name, action, reason, kind)] += n
+
             def swap(m):
-                ph = m.group(0)
-                value, suffix = self.vault.value(ph), ""
-                if value is None and len(m.group(2)) == 12:
-                    value, suffix = self.vault.value(ph[:-4]), ph[-4:]
+                ph, value, suffix = resolve(m, self.vault)
                 if value is None:
                     self.counts[UNRESOLVED] += 1
-                    return ph
+                    return m.group(0)
+                if only is not None and ph not in only:
+                    return m.group(0)
                 self.counts[m.group(1)] += 1
                 return json.dumps(value + suffix, ensure_ascii=False)[1:-1]
 
             return PLACEHOLDER.sub(swap, partial)
+        restored = restore_tool(name, tree, self.vault, self.policy, self.counts)
+        return partial if restored is tree else json.dumps(restored, ensure_ascii=False)
 
     @staticmethod
     def _emit(name: str | None, data: dict) -> bytes:

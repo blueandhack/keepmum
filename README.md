@@ -28,7 +28,7 @@ opencode    ─┘                            └──▶ Google (Gemini API, C
    - [OpenAI Privacy Filter](https://huggingface.co/openai/privacy-filter), an open-weight token classifier, for secrets in context and, optionally, personal data such as names and addresses. It runs in pf-serve, a small native program on [privacy-filter.cpp](https://github.com/localai-org/privacy-filter.cpp) that uses the Mac's GPU through Metal. You can turn it off and run on the rules alone (`keepmum model off`).
    - A deterministic refinement step then drops what the model gets wrong: UUIDs, hashes, request IDs, timestamps, paths, placeholders and documented example keys.
 2. **Mask.** Each value becomes a placeholder derived from a secret per-install key (HMAC-SHA256). The same value always gets the same placeholder, so the provider's prompt cache keeps working. You choose what is masked: turn off a type (names, dates…), add your own patterns, and list exceptions. Values live only in memory and are cleared when keepmum exits.
-3. **Restore.** Placeholders in the model's answers are swapped back on your Mac, including in streamed text and in tool inputs (file edits, shell commands). Network tools such as WebFetch, WebSearch and MCP tools keep placeholders, so a prompt-injected request cannot send a real value to the internet.
+3. **Restore.** Placeholders in the model's answers are swapped back on your Mac, including in streamed text and in tool inputs (file edits, shell commands). Tools that reach the network get only what they need: an MCP server gets back the values it returned itself (Gmail can open the thread it found), web search and web fetch keep placeholders, and none of them ever gets a secret. A prompt-injected request cannot send your keys to the internet.
 4. **Fail closed.** If scanning fails, the body is malformed or compressed in a way keepmum cannot read, a request targets an endpoint keepmum does not scan, or a client opens a WebSocket, the request is blocked and never sent raw.
 
 ## Requirements
@@ -141,6 +141,23 @@ keepmum include ~/Projects/some-repo     # scan it again
 
 `keepmum exclude` sets `env.ANTHROPIC_BASE_URL` to keepmum's upstream in the project's `.claude/settings.local.json` (at the git repository's root, as Claude Code reads it), which outranks `keepmum protect`. That file is never committed: keepmum refuses if git tracks it and otherwise adds it to `.git/info/exclude`. Claude Code applies it once you trust the folder; until then the project still goes through keepmum. Open sessions there switch at once when you exclude, but keep going straight to the API after `keepmum include` until they restart. In an excluded project the VS Code wrapper starts Claude Code without keepmum, and `keepmum claude` refuses. The Mac app lists exclusions in Settings.
 
+### Tools that reach the network
+
+The model never knows: it writes the placeholder, and keepmum decides on your Mac what the tool really receives.
+
+```sh
+keepmum tools                          # MCP servers and web tools agents offered, and what each may receive
+keepmum tools allow gmail EMAIL PERSON # Gmail may also have addresses and names you typed
+keepmum tools set gmail contacts       # or: placeholders | own | default
+keepmum tools trust gmail              # its tools changed: trust them as they are now
+```
+
+- **Values it gave you** (the default for MCP servers): a value that came back in a server's results may go back to that server, so a search can be followed by opening what it found. Another server never sees it.
+- **Also contact details**, or chosen types: values of those types go to the server wherever they came from, such as an address you typed.
+- **Placeholders only:** nothing real, the default for web search and web fetch, which pass what they get to the public internet (giving them more asks for `--yes`).
+
+Whatever the setting, a network tool never gets a secret, never more than 5 real values in one call (a search needs one or two; dumping a contact list needs dozens), and nothing while one of its server's tools differs from the one keepmum first saw or you last trusted. A server that rewrites a tool's description, or another server taking its name, gets placeholders until `keepmum tools trust`. The servers, a hash of each tool's definition, and how often a call kept placeholders live in `~/.config/keepmum/tools.json`; tool names, never values. The Mac app lists them in Settings › Tools, puts a dot on the menu bar icon for a new or changed server, and suggests a change when calls kept placeholders a setting would let through. Settings that give a tool more are recorded in the audit log as turning protection down.
+
 ### Audit what keepmum did
 
 keepmum keeps a tamper-evident audit log: every request (who sent it, where it went, counts by type, which rules found what, and which tools got real values back or kept placeholders), every change to its protection (marked when it turns protection down, with the command that made it, or "config file" for an edit by hand), agents and projects taken out of its path, and each start and stop, so gaps in coverage show. Never a value, a preview or a placeholder: allowlist entries and your own patterns appear as keyed fingerprints.
@@ -181,11 +198,12 @@ off = []               # built-in rules turned off, e.g. ["key-in-prose"] (`keep
 strings = []
 patterns = []
 
-[restore]              # per tool: "restore" real values, or "keep" placeholders
-default = "restore"
+[restore]              # per tool: "restore" every value, "keep" placeholders, "own" (what that server returned),
+default = "restore"    #   or a list of types: its own values and these (`keepmum tools`); never SECRET
 WebFetch = "keep"
 WebSearch = "keep"
-"mcp__*" = "keep"
+"mcp__*" = "own"
+"mcp__claude_ai_Gmail__*" = ["EMAIL", "PERSON"]
 
 [server]
 port = 7788            # for `keepmum serve`
@@ -207,9 +225,10 @@ keep_days = 90         # how long the audit log keeps entries (`keepmum audit`)
 | Stats token for the Mac app | `~/.config/keepmum/stats-token` (0600) |
 | Logs: paths, types, counts and timings, never values | `~/.config/keepmum/keepmum.log` (0600) |
 | Running proxy's port | `~/.config/keepmum/runtime.json` (0600) |
-| Request history for the Activity page: time, endpoint, outcome, counts by type; never values | `~/.config/keepmum/history.jsonl` (0600), last 20,000 requests |
+| Request history for the Activity page: time, endpoint, outcome, counts by type, tool calls' decisions; never values | `~/.config/keepmum/history.jsonl` (0600), last 20,000 requests |
 | Audit log: requests (counts, rules, restore decisions per tool), protection changes, starts and stops; never values | `~/.config/keepmum/audit.jsonl` (0600), with its head in `audit.head.json`; `[audit] keep_days`, 90 by default |
-| Masked values | Process memory only, cleared on exit |
+| Network tools seen: server and tool names, a hash of each tool's definition, kept-call counts per day and type; never values | `~/.config/keepmum/tools.json` (0600), counts for the last 30 days |
+| Masked values, and which tool servers returned each | Process memory only, cleared on exit |
 | The Logs page: per masked value its type, rule and length, and the first and last character of values of 8 or more characters | Process memory only (the last 2,000), cleared on exit; `[log] previews = false` keeps types and rules only |
 | The Logs page's context: up to 80 characters each side of a masked value, with every masked value and placeholder in it shown as its type (`‹SECRET›`), as the provider received it | Process memory only, with the findings; `[log] context = false` turns it off and forgets what was kept |
 
@@ -239,6 +258,7 @@ No language model judges spans at request time. The Apple on-device model and Qw
 - **The rules alone miss what only context reveals.** With `keepmum model off`, names, addresses and a secret with neither a known shape nor a telling name around it go out unmasked.
 - **Images and PDFs pass through unscanned.**
 - **Local transcripts keep real values.** Your agent's history on your disk is restored, so it holds real values. keepmum protects what leaves your Mac, not what is stored on it.
+- **An MCP server can pass on what it gets.** A server that may have its own values back, or the types you allow it, can still send them elsewhere: a mail server sending a message, say. Never a secret, and never more than 5 values a call, but allow types only for servers you trust.
 - **Shell commands receive real values.** An agent can still run a command that sends a restored secret somewhere. Use it together with a sandbox such as [Claude Code's](https://code.claude.com/docs/en/sandboxing), whose network allowlist stops that. keepmum controls what the provider sees; the sandbox controls what commands can do.
 - **English-first.** The local model is strongest on English text.
 - **macOS on Apple silicon only.**

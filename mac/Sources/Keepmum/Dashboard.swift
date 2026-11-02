@@ -277,7 +277,7 @@ struct SettingsPage: View {
 
     var body: some View {
         VStack(spacing: Space.l) {
-            PageHeader(title: "Settings", subtitle: "Setup, masking, exclusions and display")
+            PageHeader(title: "Settings", subtitle: "Setup, masking, tools, exclusions and display")
             if isSnapshot {
                 form
                 Spacer(minLength: 0)
@@ -292,6 +292,7 @@ struct SettingsPage: View {
         return VStack(alignment: .leading, spacing: Space.xl) {
             SetupSection(engine: engine)
             MaskingSection(engine: engine, observing: s.observe == true, modelError: s.detection.modelError)
+            ToolsSection(store: store, engine: engine)
             ExclusionsSection(engine: engine)
             FormSection(title: "Display") {
                 FormRow(title: "Appearance") {
@@ -339,6 +340,25 @@ struct SettingsPage: View {
             if !last { Hairline() }
         }
     }
+}
+
+/// `mcp__claude_ai_Gmail__search_threads` -> "Gmail".
+func toolLabel(_ tool: String) -> String {
+    guard tool.hasPrefix("mcp__") else { return tool }
+    let server = tool.dropFirst(5).components(separatedBy: "__").first ?? ""
+    let name = server.hasPrefix("claude_ai_") ? String(server.dropFirst(10)) : server
+    return name.replacingOccurrences(of: "_", with: " ")
+}
+
+/// Why a tool call kept placeholders, for an Activity row's tooltip.
+func keptHelp(_ t: Snapshot.Event.ToolCall) -> String {
+    let what = (t.types ?? [:]).sorted { $0.key < $1.key }.map { "\($0.value) \(Theme.label($0.key).lowercased())" }.joined(separator: ", ")
+    let why = switch t.reason ?? "" {
+    case "paused": "its tools changed since you trusted them"
+    case "too_many": "one call would have received more than 5 real values"
+    default: "its setting does not include these types"
+    }
+    return "\(t.tool) got placeholders for \(what): \(why). Settings › Tools changes what it may receive."
 }
 
 struct ActivityTable: View {
@@ -398,6 +418,11 @@ struct ActivityTable: View {
                     HStack(spacing: Space.xs) {
                         Image(systemName: Theme.icon(type)).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
                         Text("\(Theme.label(type)) \(n)").font(.km(.callout)).foregroundStyle(earlier ? Theme.textSecondary : Theme.text)
+                    }
+                }
+                if !compact {
+                    ForEach(e.keptTools, id: \.self) { t in
+                        Chip(text: "\(toolLabel(t.tool)) kept \(t.values)", tone: Theme.warning).help(keptHelp(t))
                     }
                 }
             }

@@ -292,12 +292,26 @@ def config_changes(old: dict, new: dict) -> list[dict]:
     a, b = old.get("restore") or {}, new.get("restore") or {}
     for tool in sorted(set(a) | set(b)):
         if a.get(tool) != b.get(tool):
-            # A tool that now gets real values back, where it kept placeholders before, weakens.
-            was = a.get(tool, a.get("default", "restore"))
-            now = b.get(tool, b.get("default", "restore"))
+            # A tool that now gets real values it did not get before weakens.
+            from .restore import rule_for
+
+            # A key added or removed: what the next broader rule ("mcp__*", the default) gave.
+            was = rule_for(tool, a)[1]
+            now = rule_for(tool, b)[1]
             out.append({"setting": f"restore.{tool}", "from": a.get(tool), "to": b.get(tool),
-                        "weakens": was == "keep" and now == "restore"})
+                        "weakens": _lets_out_more(was, now)})
     return out
+
+
+def _lets_out_more(was, now) -> bool:
+    """Whether restore setting `now` gives a tool real values `was` did not: keep < own < a list
+    of types (more types, more values) < restore."""
+    def rank(x):
+        return 2 if isinstance(x, list) else {"keep": 0, "own": 1, "restore": 3}.get(x, 3)
+
+    if isinstance(was, list) and isinstance(now, list):
+        return bool(set(now) - set(was))
+    return rank(now) > rank(was)
 
 
 # --- Reading and checking -------------------------------------------------------------
@@ -427,6 +441,9 @@ def summary(entry: dict) -> str:
         return f"keepmum {entry.get('mode')} started (pid {entry.get('pid')}, {entry.get('detector')})"
     if e == "stop":
         return f"keepmum {entry.get('mode')} stopped (pid {entry.get('pid')})"
+    if e == "tools":
+        changed = entry.get("changed") or []
+        return f"{entry.get('server')} trusted again" + (f" after its tools changed ({', '.join(changed)})" if changed else "")
     if e == "pruned":
         return f"{entry.get('dropped')} entries older than {entry.get('keep_days')} days removed"
     return e or "?"
@@ -439,4 +456,6 @@ def weakens(entry: dict) -> bool:
         return bool(entry.get("weakens"))
     if e == "protect":
         return entry.get("action") == "off"
+    if e == "tools":  # changed tool definitions trusted: the server gets real values again
+        return bool(entry.get("changed"))
     return e == "exclude"

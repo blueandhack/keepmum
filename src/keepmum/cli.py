@@ -573,6 +573,134 @@ def rules_on(names: list[str] = typer.Argument(..., help="Built-in rule names tu
     _save_rules(cfg, "rules", "off", [r for r in cfg.off_rules if r not in names], "on")
 
 
+tools_app = typer.Typer(help="Tools that reach the network (MCP servers, web search): which real values each may receive.",
+                        invoke_without_command=True)
+app.add_typer(tools_app, name="tools")
+
+_SETTINGS_HELP = {"placeholders": "placeholders only", "own": "values it gave you",
+                  "contacts": "values it gave you, and contact details", "custom": "values it gave you, and",
+                  "restore": "every value, secrets included"}
+
+
+def _registry_server(name: str) -> str:
+    from .tools import ToolRegistry
+
+    key = ToolRegistry().find(name)
+    if key is None:
+        typer.echo(f"keepmum tools: no server {name!r} seen yet; `keepmum tools` lists the ones agents offered", err=True)
+        raise typer.Exit(2)
+    return key
+
+
+@tools_app.callback()
+def tools_list(ctx: typer.Context, as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """The servers agents offered, what each may receive, and the calls that kept placeholders this week."""
+    if ctx.invoked_subcommand is not None:
+        return
+    import json
+
+    from .tools import ToolRegistry
+
+    servers = ToolRegistry().snapshot(_config().restore)
+    if as_json:
+        typer.echo(json.dumps({"servers": servers}))
+        return
+    if not servers:
+        typer.echo("no network tools seen yet: they show up after an agent's first request through keepmum", err=True)
+    for x in servers:
+        setting = _SETTINGS_HELP.get(x["setting"], x["setting"])
+        if x["setting"] == "custom":
+            setting += " " + ", ".join(x["types"])
+        flags = [f for f, on in (("new", x["new"]), ("PAUSED: tools changed", x["paused"])) if on]
+        if not x["own_rule"] and not x["default"]:
+            flags.append(f"from {x['rule']}")
+        kept = sum(x["kept_week"].values())
+        typer.echo(f"{x['label']:20} {setting}" + (f"  ({'; '.join(flags)})" if flags else "")
+                   + (f"  · {kept} kept this week: {', '.join(sorted(x['kept_week']))}" if kept else ""), err=True)
+
+
+@tools_app.command("set")
+def tools_set(
+    server: str = typer.Argument(..., help="A server, as `keepmum tools` names it (gmail, mcp__gmail)."),
+    setting: str = typer.Argument(..., help="placeholders, own, contacts, or default (back to keepmum's default)."),
+    yes: bool = typer.Option(False, "--yes", help="Confirm giving real values to a public tool (web search, web fetch)."),
+) -> None:
+    """Choose what one server may receive."""
+    from .tools import CONTACTS
+
+    values = {"placeholders": "keep", "own": "own", "contacts": list(CONTACTS), "default": None}
+    if setting not in values:
+        typer.echo("keepmum tools: SETTING must be placeholders, own, contacts or default", err=True)
+        raise typer.Exit(2)
+    _save_tool(_registry_server(server), values[setting], yes, "set")
+
+
+@tools_app.command("allow")
+def tools_allow(
+    server: str = typer.Argument(..., help="A server, as `keepmum tools` names it."),
+    types: list[str] = typer.Argument(..., help="Types it may also receive: PERSON, EMAIL, PHONE, ADDRESS, DATE, URL, ACCOUNT."),
+    yes: bool = typer.Option(False, "--yes", help="Confirm giving real values to a public tool (web search, web fetch)."),
+) -> None:
+    """Let a server also receive values of these types (never secrets)."""
+    from .detect import TYPES
+    from .restore import rule_for
+    from .tools import rule_key
+
+    wanted = [t.upper() for t in types]
+    bad = [t for t in wanted if t not in TYPES or t == "SECRET"]
+    if bad:
+        typer.echo(f"keepmum tools: {bad[0]} cannot be allowed" + (": a network tool never gets a secret" if bad[0] == "SECRET"
+                   else f"; types are {', '.join(t for t in TYPES if t != 'SECRET')}"), err=True)
+        raise typer.Exit(2)
+    key = _registry_server(server)
+    current = rule_for(rule_key(key), _config().restore)[1]
+    have = list(current) if isinstance(current, list) else []
+    _save_tool(key, [*have, *(t for t in dict.fromkeys(wanted) if t not in have)], yes, "allow")
+
+
+def _save_tool(server: str, value, yes: bool, command: str) -> None:
+    from .audit import _lets_out_more
+    from .config import ConfigError
+    from .restore import rule_for
+    from .tools import ToolRegistry, pinned, rule_key
+
+    cfg = _config()
+    key = rule_key(server)
+    was = rule_for(key, cfg.restore)[1]
+    now = value if value is not None else rule_for(key, {k: v for k, v in cfg.restore.items() if k != key})[1]
+    if not pinned(server) and _lets_out_more(was, now) and not yes:
+        typer.echo(f"keepmum tools: {server} sends what it gets to the public internet (a search engine, any web "
+                   "page). Add --yes if you mean it", err=True)
+        raise typer.Exit(2)
+    try:
+        _update_config(cfg.path, "restore", key, value, f"keepmum tools {command}")
+    except (ConfigError, OSError) as e:
+        typer.echo(f"keepmum tools: {e}", err=True)
+        raise typer.Exit(1)
+    ToolRegistry().reviewed(server)
+    typer.echo("saved; running proxies apply it on their next request", err=True)
+
+
+@tools_app.command("trust")
+def tools_trust(server: str = typer.Argument(..., help="A server whose tools changed, as `keepmum tools` names it.")) -> None:
+    """Trust a server's tools as they are now, after they changed (until then it gets placeholders only)."""
+    from .audit import AuditLog, caller
+    from .tools import ToolRegistry
+
+    key = _registry_server(server)
+    changed = ToolRegistry().trust(key)
+    AuditLog().append("tools", action="trust", server=key, changed=changed or None, by=caller("keepmum tools trust"))
+    typer.echo(f"trusted {key}" + (f"; changed: {', '.join(changed)}" if changed else ""), err=True)
+
+
+@tools_app.command("reviewed")
+def tools_reviewed(server: str = typer.Argument(None, help="A server; every server when left out.")) -> None:
+    """Mark new servers as seen, keeping their setting, so the menu bar stops pointing at them."""
+    from .tools import ToolRegistry
+
+    ToolRegistry().reviewed(_registry_server(server) if server else None)
+
+
 @app.command()
 def exclude(
     path: Path = typer.Argument(None, help="A folder in the project (default: the current folder)."),

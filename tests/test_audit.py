@@ -251,8 +251,8 @@ def test_requests_are_audited_without_values(tmp_path):
     req, blocked = read(log.path)
     assert req["event"] == "request" and req["client"] == "claude-code" and req["outcome"] == "forwarded"
     assert req["masked"] == {"SECRET": 1} and req["new"] == 1 and req["found"] == {"github-token": 1}
-    assert req["tools"] == [{"tool": "Bash", "action": "restore", "values": 1},
-                            {"tool": "WebFetch", "action": "keep", "values": 1}]
+    assert req["tools"] == [{"tool": "Bash", "action": "restore", "values": 1, "reason": "local", "types": {"SECRET": 1}},
+                            {"tool": "WebFetch", "action": "keep", "values": 1, "reason": "placeholders", "types": {"SECRET": 1}}]
     assert blocked["outcome"] == "blocked" and blocked["path"] == "/v1/files"
     assert verify(log.path)["ok"]
 
