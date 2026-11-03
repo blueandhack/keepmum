@@ -8,7 +8,7 @@ keepmum is a local proxy that sits between your coding agent (Claude Code, Codex
 
 Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned request to the provider. The name comes from "keep mum": to say nothing about a secret.
 
-> **Status: pre-release.** keepmum works end to end, but it has not been audited. Treat it as a safety layer, not a guarantee. See [Limitations](#limitations).
+> **Status: alpha.** The first release, [0.1.0 alpha 1](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a1), came out on Nov 3, 2026. keepmum works end to end, but it has not been audited, and things will change. Treat it as a safety layer, not a guarantee. See [Limitations](#limitations).
 
 ![The keepmum dashboard: requests out and replies back, per coding agent](mac/docs/overview-light.png)
 
@@ -34,15 +34,15 @@ opencode    ─┘                            └──▶ Google (Gemini API, C
 ## Requirements
 
 - A Mac with Apple silicon, and macOS 14 or later
-- Python 3.12+, [uv](https://docs.astral.sh/uv/), and Xcode or its command line tools (to build pf-serve)
 - Claude Code, Codex, Gemini CLI, pi or opencode
+- For the command line only (the Mac app bundles all of it): Python 3.12+, [uv](https://docs.astral.sh/uv/), and Xcode or its command line tools (to build pf-serve)
 - About 1.7 GB of free memory while keepmum runs (the local model), and 1.6 GB of disk for it; neither with `keepmum model off`
 
 ## Install
 
 ### The Mac app (everything included)
 
-Download `Keepmum-<version>.dmg` from the [Releases](https://github.com/blueandhack/keepmum/releases) page (or build it: [mac/README.md](mac/README.md)), drag Keepmum into Applications, open it, and follow **Settings › Setup**: download the model, start the background service, and switch on protection for each coding agent you use (Claude Code, Codex, pi). The app bundles keepmum, its Python runtime and pf-serve; nothing else needs installing. Every session of a protected agent then goes through keepmum; for Claude Code that is the terminal, VS Code and the desktop app.
+Download `Keepmum-<version>.dmg` from the [Releases](https://github.com/blueandhack/keepmum/releases) page (or build it: [mac/README.md](mac/README.md)), drag Keepmum into Applications, open it, and follow **Settings › Setup**: download the model, start the background service, and switch on protection for each coding agent you use (Claude Code, Codex, pi, opencode; Gemini CLI runs through `keepmum gemini`, see [Use](#use)). The app bundles keepmum, its Python runtime and pf-serve; nothing else needs installing. Every session of a protected agent then goes through keepmum; for Claude Code that is the terminal, VS Code and the desktop app.
 
 ### The command line
 

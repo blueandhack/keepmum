@@ -1,10 +1,10 @@
 # keepmum — Local Secret & PII Redaction for Coding Agents (Build Spec)
 
-Oct 25, 2026 · @Yujia Lin · updated Oct 29, 2026 for Codex, pi and opencode, pf-serve, the Mac app, and the rules without the model
+Oct 25, 2026 · @Yujia Lin · updated Oct 29, 2026 for Codex, pi and opencode, pf-serve, the Mac app, and the rules without the model; Nov 3, 2026 for Gemini CLI, other gateways, the guards on restore, and the first alpha
 
 ## Summary
 
-keepmum is a local proxy that removes secrets and personal data from coding-agent requests (Claude Code, Codex, pi, opencode) before they leave the Mac, then restores the real values locally. Nothing is sent to any third party: detection runs fully on-device. The name comes from "keep mum": to say nothing about a secret.
+keepmum is a local proxy that removes secrets and personal data from coding-agent requests (Claude Code, Codex, Gemini CLI, pi, opencode) before they leave the Mac, then restores the real values locally. Nothing is sent to any third party: detection runs fully on-device. The name comes from "keep mum": to say nothing about a secret.
 
 Build order: **Phase 0 is a benchmark** that measures which detectors are fast and accurate enough. The real proxy is built only after those numbers are in.
 
@@ -29,7 +29,7 @@ The goal is a one-command tool: `keepmum claude` starts Claude Code with every r
 
 **Non-goals (v1)**
 
-- ~~Other AI clients (Codex, Cursor, Gemini CLI).~~ Codex and pi were added on Oct 27, 2026, opencode on Oct 29 (Milestones). Cursor and Gemini CLI remain out of scope.
+- ~~Other AI clients (Codex, Cursor, Gemini CLI).~~ Codex and pi were added on Oct 27, 2026, opencode on Oct 29, Gemini CLI on Nov 1 (Milestones). Cursor remains out of scope.
 - Linux, Windows, or Intel Macs.
 - Compliance certification. keepmum is a safety layer, not an anonymization guarantee.
 - Rewriting Claude Code's local transcript files.
@@ -42,7 +42,7 @@ The goal is a one-command tool: `keepmum claude` starts Claude Code with every r
 | Hardware | Apple silicon; reference machine is an M4 with 48 GB |
 | Network | Detection fully offline; the only outbound connections are the forwarded request to the provider and `keepmum setup`'s one model download |
 | Language | Python 3.12+, managed with `uv`; the model runs in pf-serve, a native program (C++ on ggml) |
-| Distribution | Keepmum.app (self-contained, notarized DMG) and `uv tool install`; a Homebrew cask later |
+| Distribution | Keepmum.app (self-contained, notarized DMG on GitHub Releases; first: 0.1.0a1, Nov 3, 2026) and `uv tool install`; a Homebrew cask later |
 | Name | `keepmum` — check GitHub, PyPI and Homebrew before first publish; fall back to `keepmum-redact` if taken |
 
 ## Architecture
@@ -284,8 +284,11 @@ keepmum/
 - [x] **Built-in rules turned off (Oct 29, 2026).** `[rules] off` (`keepmum rules off|on`, the Detection page's Top rules) turns off a rule or check by name; rules that find secrets need `--yes` or a confirmation. The vault records which detectors found each value, so the known-values pass lets a value masked earlier go once every detector that found it is off or was your own rule and is gone, or the value has an exception. Before this, an exception added mid-session did not unmask a value already masked.
 - [x] **Logs page (Oct 29, 2026).** `GET /_keepmum/findings` (stats token) lists the values masked in new text, newest first: type, detector and rule, length, agent, outcome, and the first and last character of values of 8 or more characters. Kept in memory (the last 2,000), never in `history.jsonl`; `[log] previews = false` drops the characters, including those already kept. The Mac app's Logs page searches and filters it. This relaxes the earlier rule that the feed carries no part of a value, at the user's request; values under 8 characters still show none.
 - [x] **Logs context (Nov 1, 2026).** Each finding also carries up to 80 characters of the text before and after the value, with every masked value and placeholder in that window, whole or cut by it, shown as its type (`‹SECRET›`): in mask mode, what the provider received. Memory only, with the findings; `[log] context = false` drops it, including what was kept, and is recorded in the audit log. The Mac app shows it in a row's details, and draws each value as its first and last character around one star per hidden character. Findings also list every detector that found the value (`by`: `yours:<name>`, `rule:<id>`, `model`), not only the one credited, and mark a value matched again from earlier in the conversation (`earlier`) with the detectors that first found it, from the vault.
-- [x] **Audit log (Oct 30, 2026).** The first of three privacy and security features that set keepmum apart from general gateways (then an exposure scan of local transcripts, then an egress guard for shell commands). See *Audit log* below. Verified end to end with `keepmum serve` against a local stand-in provider: start, the request with its restore decision, an `observe on` marked as weakening, and the stop on SIGTERM, in a chain that verifies, with no value or placeholder in the file.
-- [ ] **M6 Ship.** README, Homebrew tap, name check on GitHub, PyPI and Homebrew. *Oct 26, 2026: Keepmum.app is self-contained (bundled Python runtime, pf-serve, a LaunchAgent via SMAppService) and sets itself up: model download, background service, `keepmum protect`. Left: Developer ID signing and notarization, a DMG, a Homebrew cask, updates, and Windows (pf-serve already builds there; the app would need its own UI).*
+- [x] **Audit log (Oct 30, 2026).** The first of three privacy and security features that set keepmum apart from general gateways (then an exposure scan of local transcripts, then an egress guard for shell commands, whose first layer shipped on Nov 3, 2026: see Shell destinations). See *Audit log* below. Verified end to end with `keepmum serve` against a local stand-in provider: start, the request with its restore decision, an `observe on` marked as weakening, and the stop on SIGTERM, in a chain that verifies, with no value or placeholder in the file.
+- [x] **Other gateways (Nov 2, 2026).** `keepmum protect on` goes in front of a gateway an agent already uses, through a route per gateway; see *Other gateways* above. Verified with Claude Code, Codex, pi and opencode against a stand-in gateway: placeholders only at the gateway, its own key, and `off` restoring every config file byte for byte.
+- [x] **Web addresses in replies (Nov 2, 2026).** A placeholder inside an http(s) address in reply text stays a placeholder, so a rendered image or link cannot carry a value out; see Restore. Verified with Claude Code: the text got the real value, the image address the placeholder.
+- [x] **Shell destinations (Nov 3, 2026).** A token whose issuer is known stays a placeholder in a shell command that names another host (`destinations.py`, Open questions). Verified with Claude Code running two curl commands: attacker.test received the placeholder, api.github.com the token. Cases: `docs/test-cases/shell-destinations.md`.
+- [ ] **M6 Ship.** README, Homebrew tap, name check on GitHub, PyPI and Homebrew. *Oct 26, 2026: Keepmum.app is self-contained (bundled Python runtime, pf-serve, a LaunchAgent via SMAppService) and sets itself up: model download, background service, `keepmum protect`. Nov 3, 2026: signed with Developer ID, notarized, and released as a DMG on GitHub Releases, [0.1.0a1](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a1) (pre-release). Left: a Homebrew cask, PyPI, updates, and Windows (pf-serve already builds there; the app would need its own UI).*
 
 ## Audit log
 
@@ -364,4 +367,4 @@ The one test that must never fail: a canary secret sent through keepmum never ap
 - ~~Should Bash tool inputs get restored values?~~ Yes, with one check (Nov 3, 2026): a token whose rule names its issuer (72 of them: GitHub, Stripe, AWS, OpenAI…) stays a placeholder in a command that names a host the issuer does not use. `destinations.py` lists the hosts per rule and reads hosts from URLs, `user@host:path` and the arguments of curl, wget, nc, ssh, dig and the like; this Mac is always allowed, a command naming no host gets the value (`gh auth login --with-token`), and private keys go to no host. Values with no known issuer are not checked: keepmum cannot know where a password belongs. Config [destinations] adds hosts (a self-hosted GitLab); adding one is audited as turning protection down. A command built to hide its destination still gets past it, so a sandbox remains the control for that.
 - ~~Should `pii` default to on?~~ No (Phase 0): with PII on, 17–27% of hard negatives are flagged, and ACCOUNT, URL and DATE precision is 0.13–0.36.
 - ~~Should the OS floor come down?~~ Yes: macOS 14, now that the Apple model is gone.
-- ~~Is a Swift binary worth it?~~ Not now: the app bundles Python (about 95 MB) and pf-serve, which also builds for Windows and Linux.
+- ~~Is a Swift binary worth it?~~ Not now: the app bundles Python and pf-serve, which also builds for Windows and Linux, in 56 MB (a 32 MB DMG) since the trim of Nov 2, 2026.

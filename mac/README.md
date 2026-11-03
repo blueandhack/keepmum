@@ -4,7 +4,7 @@
 
 A menu-bar app that sets keepmum up, runs it in the background and shows what it does, in light and dark mode. The logo is a sealed m: the m of "mum" standing on a line that closes it, like a shut mouth. keepmum keeps mum about your secrets.
 
-- **Overview:** key numbers and the live flow: two flow diagrams on shared columns, requests going out (client → keepmum's scan → clean, masked, observed or blocked → provider) and replies coming back (provider → keepmum's restore → client). Band width is the number of requests over the last hour, 24 hours or 7 days, and each live request travels its route as a dot. Each coding agent (Claude Code, Codex, pi) gets its own band, told apart by its User-Agent or the header `keepmum protect` adds. Hovering a band highlights it; hovering an agent or provider highlights its whole route in both diagrams.
+- **Overview:** key numbers and the live flow: two flow diagrams on shared columns, requests going out (client → keepmum's scan → clean, masked, observed or blocked → provider) and replies coming back (provider → keepmum's restore → client). Band width is the number of requests over the last hour, 24 hours or 7 days, and each live request travels its route as a dot. Each coding agent (Claude Code, Codex, Gemini CLI, pi, opencode) gets its own band, told apart by its User-Agent or the header `keepmum protect` adds. Hovering a band highlights it; hovering an agent or provider highlights its whole route in both diagrams.
 - **Activity:** every request, newest first, kept across restarts in `~/.config/keepmum/history.jsonl`: outcome (masked, clean, blocked, observed), what was masked and restored, and scan time, filterable by outcome, with older pages on demand; plus a per-minute chart.
 - **Audit:** whether the audit log is intact (`keepmum audit verify`, checked against the head the app saved at its last good check, so a rewrite of the whole log in between shows too), the head to copy and keep elsewhere, and every settings change, protection change, exclusion, start and stop, newest first, with the ones that turned protection down marked and who made them. Settings changed from the app are recorded as made from Keepmum.app.
 - **Logs:** every value masked in new text, newest first, searchable and filterable by type: the agent, the type, the value's shape (`g**********w`, one star per hidden character; values shorter than 8 characters show only stars), the length, and who found it: each built-in rule by name, **Model** when the local model found it too (or alone), **Yours** for your own rules, and **Earlier** for a value masked earlier in the conversation, with who found it then; a menu filters by any of these. Click a row for its details and its context: the text around it as the provider received it, with every masked value shown as its type (`‹SECRET›`). Kept in keepmum's memory only: the list starts empty when keepmum starts.
@@ -54,16 +54,19 @@ A release is a notarized `Keepmum-<version>.dmg` on the repository's GitHub Rele
 **Each release:**
 
 ```sh
-# 1. bump `version` in pyproject.toml, commit
+# 1. set the version in pyproject.toml and src/keepmum/__init__.py, run `uv lock`, commit
 mac/release.sh                                  # tests, build, Developer ID signature, notarize, staple -> dist/
-git tag -s v0.1.0 -m "keepmum 0.1.0" && git push origin main v0.1.0
-gh release create v0.1.0 dist/Keepmum-0.1.0.dmg dist/Keepmum-0.1.0.dmg.sha256 \
-  --verify-tag --title "keepmum 0.1.0" --generate-notes --prerelease
+git push origin main
+git tag -s v0.1.0a2 -m "keepmum 0.1.0 alpha 2" && git push origin v0.1.0a2
+gh release create v0.1.0a2 dist/Keepmum-0.1.0a2.dmg dist/Keepmum-0.1.0a2.dmg.sha256 \
+  --verify-tag --prerelease --title "keepmum 0.1.0 alpha 2" --notes-file notes.md
 ```
+
+Versions follow PEP 440: alphas are `0.1.0a1`, `0.1.0a2`…, then `0.1.0`. The tag and the DMG carry the full version. Apple's version fields in the app (`CFBundleShortVersionString`, `CFBundleVersion`) take numbers and dots only, so `build-app.sh` writes `0.1.0` there and the full version under `KeepmumVersion`. The first release, 0.1.0a1, came out on Nov 3, 2026.
 
 `release.sh` refuses an uncommitted tree, notarizes the app and then the DMG, staples both tickets (so the app opens offline after it is copied out), and ends by asking Gatekeeper (`spctl`) for the verdict another Mac would reach. A rejected submission prints Apple's log. `SKIP_NOTARIZE=1 ALLOW_DIRTY=1 mac/release.sh` runs every other step with your development identity, to test it.
 
-Users download the DMG, drag Keepmum into Applications, open it, and follow Settings › Setup. Drop `--prerelease` once keepmum leaves pre-release. Release builds happen on a Mac you control rather than in CI, so the signing certificate never leaves it.
+Users download the DMG, drag Keepmum into Applications, open it, and follow Settings › Setup. Drop `--prerelease` from the first version without a letter (`0.1.0`). After publishing, download the release into an empty folder and check it as a user would: `shasum -a 256 -c Keepmum-<version>.dmg.sha256`, `spctl --assess --type open --context context:primary-signature -v Keepmum-<version>.dmg`, `xcrun stapler validate Keepmum-<version>.dmg`. Release builds happen on a Mac you control rather than in CI, so the signing certificate never leaves it.
 
 **Logos.** Claude Code and the Anthropic API appear with their official logos (`Brand/`, from Anthropic's [press kit](https://www.anthropic.com/press-kit), used unmodified to identify those services; see [Brand/NOTICE.md](Brand/NOTICE.md)). Claude, Claude Code and Anthropic are trademarks of Anthropic, PBC; keepmum is an independent project, not affiliated with or endorsed by Anthropic. "This Mac" shows a laptop or a Mac mini, depending on whether the Mac has a battery.
 
