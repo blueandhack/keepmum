@@ -298,7 +298,7 @@ uv sync
 uv run pytest                                # detection, proxy (Messages and Responses APIs), streams, settings, clients
 uv run python bench/gen.py                   # generate the benchmark datasets
 uv run python bench/run.py                   # accuracy and speed; see bench/README.md
-swift docs/video/flow.swift flow.mp4         # the 48-second flow video (detect, mask, send, restore), 1080p
+swift docs/video/flow.swift flow.mp4         # the 59-second flow video (detect, mask, send, restore, guard), 1080p
 ```
 
 The design and milestones are in [SPEC.md](docs/SPEC.md).
