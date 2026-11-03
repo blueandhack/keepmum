@@ -110,7 +110,7 @@ Every sensitive value becomes a deterministic placeholder, so the same secret al
 | Assistant text | Restore, except inside an http(s) address (Nov 2, 2026) |
 | `thinking` blocks | Keep placeholder (signed; must be resent unchanged) |
 | `tool_use` input for Edit, Write, MultiEdit, NotebookEdit | Restore |
-| `tool_use` input for Bash | Restore (open question below) |
+| `tool_use` input for Bash and every agent's shell | Restore, except a token whose issuer is known going to another host (Nov 3, 2026) |
 | `tool_use` input for WebFetch, WebSearch | Keep placeholder |
 | `tool_use` input for every MCP tool (`mcp__*`) | "own": a value restored only if that server's own results held it (each value notes the servers whose tool results it was masked in, in memory only). A list of types adds values of those types from anywhere |
 
@@ -361,7 +361,7 @@ The one test that must never fail: a canary secret sent through keepmum never ap
 
 **Open questions**
 
-- Should Bash tool inputs get restored values? Restoring lets commands like `curl -H "Authorization: ..."` work, but it is also the easiest exfiltration path.
+- ~~Should Bash tool inputs get restored values?~~ Yes, with one check (Nov 3, 2026): a token whose rule names its issuer (72 of them: GitHub, Stripe, AWS, OpenAI…) stays a placeholder in a command that names a host the issuer does not use. `destinations.py` lists the hosts per rule and reads hosts from URLs, `user@host:path` and the arguments of curl, wget, nc, ssh, dig and the like; this Mac is always allowed, a command naming no host gets the value (`gh auth login --with-token`), and private keys go to no host. Values with no known issuer are not checked: keepmum cannot know where a password belongs. Config [destinations] adds hosts (a self-hosted GitLab); adding one is audited as turning protection down. A command built to hide its destination still gets past it, so a sandbox remains the control for that.
 - ~~Should `pii` default to on?~~ No (Phase 0): with PII on, 17–27% of hard negatives are flagged, and ACCOUNT, URL and DATE precision is 0.13–0.36.
 - ~~Should the OS floor come down?~~ Yes: macOS 14, now that the Apple model is gone.
 - ~~Is a Swift binary worth it?~~ Not now: the app bundles Python (about 95 MB) and pf-serve, which also builds for Windows and Linux.

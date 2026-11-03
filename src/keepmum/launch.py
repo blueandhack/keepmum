@@ -74,6 +74,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
         info["detector"] = pipeline.name
         proxy.policy = new.restore
         proxy.gateways = {**new.gateways, **(gateways or {})}
+        proxy.destinations = new.destinations
         if not rules_only:
             switch.want(new.model)
 
@@ -84,6 +85,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
                   previews=lambda: observe.config.log_previews,
                   context=lambda: observe.config.log_context, audit=audit, tools=ToolRegistry())
     proxy.gateways = {**cfg.gateways, **(gateways or {})}
+    proxy.destinations = cfg.destinations
     switch = ModelSwitch(pipeline, proxy._scan_lock)
     return proxy
 

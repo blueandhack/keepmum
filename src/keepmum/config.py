@@ -21,6 +21,9 @@
     [gateways]             # other gateways keepmum forwards to (`keepmum protect on` adds them): name = URL
     local-3425 = "http://127.0.0.1:3425"
 
+    [destinations]         # hosts a shell command may send a rule's tokens to, besides keepmum's list (destinations.py)
+    gitlab-token = ["gitlab.corp.example"]
+
     [restore]              # per tool: "restore", "keep", "own" or a list of types; "mcp__*" style prefixes allowed
     default = "restore"
     WebFetch = "keep"
@@ -56,6 +59,7 @@ _SCHEMA = {
     "audit": {"keep_days": int},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
+_HOST = re.compile(r"(?i)(?:[a-z0-9_-]+\.)*[a-z0-9-]+\.[a-z]{2,63}|localhost|\d{1,3}(?:\.\d{1,3}){3}")
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
@@ -98,6 +102,7 @@ class Config:
     allow_patterns: list[str] = field(default_factory=list)
     restore: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_POLICY))
     gateways: dict[str, str] = field(default_factory=dict)  # name -> URL (gateway.py)
+    destinations: dict[str, list[str]] = field(default_factory=dict)  # rule id -> hosts (destinations.py)
     log_level: str = "info"
     log_previews: bool = True
     log_context: bool = True
@@ -120,7 +125,7 @@ def load(path: Path | None = None) -> Config:
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}") from e
     for section, values in raw.items():
-        if section in ("restore", "gateways"):
+        if section in ("restore", "gateways", "destinations"):
             continue
         if section not in _SCHEMA or not isinstance(values, dict):
             raise ConfigError(f"{path}: unknown section [{section}]")
@@ -199,6 +204,17 @@ def load(path: Path | None = None) -> Config:
         if why:
             raise ConfigError(f"{path}: gateways.{name} {why}")
         cfg.gateways[name] = url.rstrip("/")
+    destinations = raw.get("destinations", {})
+    if not isinstance(destinations, dict):
+        raise ConfigError(f"{path}: [destinations] must be a table")
+    from .detect.rules import builtin_rules
+
+    for rule, hosts in destinations.items():
+        if rule not in builtin_rules():
+            raise ConfigError(f"{path}: destinations.{rule}: no built-in rule has that name (`keepmum rules builtin`)")
+        if not isinstance(hosts, list) or not all(isinstance(h, str) and _HOST.fullmatch(h) for h in hosts):
+            raise ConfigError(f"{path}: destinations.{rule} must be a list of host names, like [\"gitlab.corp.example\"]")
+        cfg.destinations[rule] = sorted({h.lower() for h in hosts})
     cfg.log_level = log.get("level", cfg.log_level)
     cfg.log_previews = log.get("previews", cfg.log_previews)
     cfg.log_context = log.get("context", cfg.log_context)

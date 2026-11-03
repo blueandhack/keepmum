@@ -105,14 +105,16 @@ struct Snapshot: Decodable, Sendable {
             /// "restore": real values went in; "keep": placeholders stayed.
             var action: String
             var values: Int
-            /// local, own, allowed; or for kept ones placeholders, secret, paused, not_allowed, too_many.
+            /// local, own, allowed; or for kept ones placeholders, secret, paused, not_allowed, too_many,
+            /// destination (a shell command sending a token to a host its issuer does not use).
             var reason: String? = nil
             var types: [String: Int]? = nil
         }
 
-        /// Calls that kept placeholders a setting could change (not secrets, not "placeholders only").
+        /// Calls that kept placeholders a setting could change (not secrets, not "placeholders only"),
+        /// and shell commands that would have sent a token to a host its issuer does not use.
         var keptTools: [ToolCall] {
-            (tools ?? []).filter { $0.action == "keep" && ["not_allowed", "paused", "too_many"].contains($0.reason ?? "") }
+            (tools ?? []).filter { $0.action == "keep" && ["not_allowed", "paused", "too_many", "destination"].contains($0.reason ?? "") }
         }
 
         enum Kind: String, CaseIterable { case masked, clean, blocked, observed }

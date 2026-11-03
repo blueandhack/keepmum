@@ -176,6 +176,7 @@ class Proxy:
         self.gateways: dict[str, str] = {}
         # The servers seen in agents' tool lists (tools.ToolRegistry); None: no fingerprints, no counts.
         self.tools = tools
+        self._destinations: dict[str, list[str]] = {}  # config [destinations] (destinations.py)
         self.policy = policy or DEFAULT_POLICY
         self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10))
         self.stats = stats or Stats()
@@ -198,7 +199,16 @@ class Proxy:
 
     @policy.setter
     def policy(self, policy: dict) -> None:
-        self._policy = ToolPolicy(policy, self.tools)
+        self._policy = ToolPolicy(policy, self.tools, self._destinations)
+
+    @property
+    def destinations(self) -> dict[str, list[str]]:
+        return self._destinations
+
+    @destinations.setter
+    def destinations(self, hosts: dict[str, list[str]]) -> None:
+        self._destinations = dict(hosts)
+        self._policy = ToolPolicy(self._policy, self.tools, self._destinations)
 
     def target(self, path: str, chatgpt_account: bool = False) -> Target:
         if path.startswith(ROUTE):

@@ -254,6 +254,7 @@ def config_state(cfg) -> dict:
         "allow_patterns": sorted(_fingerprint("pattern", p) for p in cfg.allow_patterns),
         "restore": dict(sorted(cfg.restore.items())), "upstream": cfg.upstream,
         "gateways": sorted(f"{name} = {url}" for name, url in cfg.gateways.items()),
+        "destinations": sorted(f"{rule} = {h}" for rule, hosts in cfg.destinations.items() for h in hosts),
         "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
     }
 
@@ -265,10 +266,10 @@ _SETTINGS = {
     "observe": ("detect.observe", True), "model": ("detect.model", False), "pii": ("detect.pii", False),
     "pass": ("detect.pass", "added"), "rules_off": ("rules.off", "added"), "mask_rules": ("rules.mask", "removed"),
     "allow_strings": ("allowlist.strings", "added"), "allow_patterns": ("allowlist.patterns", "added"),
-    "upstream": ("server.upstream", "any"), "gateways": ("gateways", "added"), "previews": ("log.previews", None), "context": ("log.context", None),
+    "upstream": ("server.upstream", "any"), "gateways": ("gateways", "added"), "destinations": ("destinations", "added"), "previews": ("log.previews", None), "context": ("log.context", None),
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
-_ADDED_LATER = {"context", "gateways"}
+_ADDED_LATER = {"context", "gateways", "destinations"}
 
 
 def config_changes(old: dict, new: dict) -> list[dict]:

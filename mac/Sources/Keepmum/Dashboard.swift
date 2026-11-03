@@ -352,6 +352,10 @@ func toolLabel(_ tool: String) -> String {
 
 /// Why a tool call kept placeholders, for an Activity row's tooltip.
 func keptHelp(_ t: Snapshot.Event.ToolCall) -> String {
+    if t.reason == "destination" {
+        return "\(t.tool) kept \(t.values) placeholder(s): the command would have sent a token to a host its issuer "
+            + "does not use. If that host is yours, add it under [destinations] in ~/.config/keepmum/config.toml."
+    }
     let what = (t.types ?? [:]).sorted { $0.key < $1.key }.map { "\($0.value) \(Theme.label($0.key).lowercased())" }.joined(separator: ", ")
     let why = switch t.reason ?? "" {
     case "paused": "its tools changed since you trusted them"

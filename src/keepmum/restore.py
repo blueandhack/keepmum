@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import shlex
 from collections import Counter
 
 from .detect import TYPES
 from .vault import PLACEHOLDER, Vault
+
+log = logging.getLogger("keepmum")
 
 # Per tool: "restore" puts real values into the tool's input before it runs locally; "keep"
 # leaves placeholders, so a prompt-injected request cannot send a real value over the network;
@@ -29,11 +33,13 @@ ACTIONS = ("restore", "keep", "own")
 
 
 class ToolPolicy(dict):
-    """The restore policy, with the registry of servers seen (tools.ToolRegistry) when there is one."""
+    """The restore policy, with the registry of servers seen (tools.ToolRegistry) when there is one,
+    and the hosts config [destinations] adds for issuer rules (destinations.py)."""
 
-    def __init__(self, policy: dict, registry=None):
+    def __init__(self, policy: dict, registry=None, destinations: dict[str, list[str]] | None = None):
         super().__init__(policy)
         self.registry = registry
+        self.destinations = destinations or {}
 
 
 def rule_for(name: str, policy: dict) -> tuple[str, object]:
@@ -177,7 +183,11 @@ def tool_values(name: str, value, vault: Vault, policy: dict) -> tuple[set[str] 
         if real is not None:
             found[ph] += 1
     if action == "restore":
-        return None, [("restore", "local", ph.split("_")[1], n) for ph, n in found.items()]
+        wrong = _wrong_destinations(name, value, found, vault, policy)
+        if not wrong:
+            return None, [("restore", "local", ph.split("_")[1], n) for ph, n in found.items()]
+        return set(found) - set(wrong), [("keep" if ph in wrong else "restore", "destination" if ph in wrong else "local",
+                                          ph.split("_")[1], n) for ph, n in found.items()]
     from .tools import BULK, server_of
 
     server = server_of(name)
@@ -208,6 +218,46 @@ def tool_values(name: str, value, vault: Vault, policy: dict) -> tuple[set[str] 
     if registry is not None:
         registry.note_kept(server, [k for a, r, k, n in decisions if r == "not_allowed"])
     return allowed, decisions
+
+
+def _command_texts(value):
+    """The strings of a shell tool's input that could be commands (not its description). An argv
+    list is also read as one command line, so `["curl", "host"]` is still curl and its host."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        if value and all(isinstance(x, str) for x in value):
+            yield shlex.join(value)
+        for x in value:
+            yield from _command_texts(x)
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            if k != "description":
+                yield from _command_texts(v)
+
+
+def _wrong_destinations(name: str, value, found: Counter, vault: Vault, policy: dict) -> set[str]:
+    """The placeholders a shell command would send to a host their issuer does not use (destinations.py)."""
+    from .destinations import ISSUERS, SHELL_TOOLS, allowed_hosts, hosts_in, shown, wrong_hosts
+
+    if name not in SHELL_TOOLS or not found:
+        return set()
+    hosts = set().union(*(hosts_in(t) for t in _command_texts(value)))
+    if not hosts:
+        return set()
+    wrong = set()
+    for ph in found:
+        sources = vault.sources_of(vault.value(ph))
+        allowed = allowed_hosts(sources, getattr(policy, "destinations", None))
+        bad = wrong_hosts(hosts, allowed) if allowed is not None else []
+        if bad:
+            wrong.add(ph)
+            extra = getattr(policy, "destinations", None) or {}
+            rules = sorted(r for r in (s.removeprefix("rules:") for s in sources) if r in ISSUERS or r in extra)
+            log.warning("%s: kept a placeholder for a value found by %s: the command sends it to %s, a host its "
+                        "issuer does not use (config [destinations] adds hosts)", name, ", ".join(rules),
+                        ", ".join(shown(h) for h in bad))
+    return wrong
 
 
 def restore_tool(name: str, value, vault: Vault, policy: dict, counts: Counter | None, parse: bool = False):
