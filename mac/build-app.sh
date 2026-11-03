@@ -9,6 +9,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 BUNDLE_ID=${BUNDLE_ID:-app.keepmum.Keepmum}
 VERSION=${VERSION:-0.0.1}
+# Apple's version fields take numbers and dots only: 0.1.0a1 (keepmum's PEP 440 version) is 0.1.0 there.
+BUNDLE_VERSION=$(sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/' <<<"$VERSION")
 APP=build/Keepmum.app
 
 CONFIG=${SWIFT_CONFIG:-release}
@@ -32,8 +34,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Keepmum</string>
   <key>CFBundleIconFile</key><string>Keepmum</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>CFBundleShortVersionString</key><string>${BUNDLE_VERSION}</string>
+  <key>CFBundleVersion</key><string>${BUNDLE_VERSION}</string>
+  <key>KeepmumVersion</key><string>${VERSION}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
