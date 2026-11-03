@@ -86,13 +86,13 @@ def _pipeline_or_exit(pii: bool, rules_only: bool, who: str):
         raise typer.Exit(2)
 
 
-def _proxy_or_exit(pii, rules_only, upstream, who):  # who: "serve" or "claude", also the stats mode
+def _proxy_or_exit(pii, rules_only, upstream, who, gateways=None):  # who: "serve" or "claude", also the stats mode
     from .detect.pipeline import ModelUnavailable
     from .launch import build_proxy
 
     cfg = _config()
     try:
-        return cfg, build_proxy(cfg, pii=pii, rules_only=rules_only, upstream=upstream, mode=who)
+        return cfg, build_proxy(cfg, pii=pii, rules_only=rules_only, upstream=upstream, mode=who, gateways=gateways)
     except ModelUnavailable as e:
         typer.echo(f"keepmum {who}: {e}", err=True)
         raise typer.Exit(2)
@@ -152,16 +152,27 @@ def codex(ctx: typer.Context) -> None:
     if binary is None:
         typer.echo("keepmum codex: `codex` is not on PATH", err=True)
         raise typer.Exit(2)
+    from .clients import codex_run_provider
+    from .protect import ProtectError
+
     cfg = _config()
-    port = shared_serve_port(cfg, need="responses")
+    try:
+        # In front of the provider Codex's config selects, when that is another gateway.
+        provider, extra = codex_run_provider(cfg.port, cfg.gateways)
+    except ProtectError as e:
+        typer.echo(f"keepmum codex: {e}", err=True)
+        raise typer.Exit(2)
+    # The service knows the gateways in the config; one it does not know needs a proxy of its own.
+    port = None if extra else shared_serve_port(cfg, need="responses")
     if port is not None:
-        raise typer.Exit(_run_child([binary, *codex_args(port), *ctx.args], dict(os.environ)))
-    cfg, proxy = _proxy_or_exit(None, False, None, "codex")
+        raise typer.Exit(_run_child([binary, *codex_args(port, provider), *ctx.args], dict(os.environ)))
+    cfg, proxy = _proxy_or_exit(None, False, None, "codex", gateways=extra)
     log_to_file(cfg.log_level)
     server = BackgroundServer(proxy)
     server.start()
     try:
-        code = _run_child([binary, *codex_args(server.port), *ctx.args], dict(os.environ))
+        provider, _ = codex_run_provider(server.port, {**cfg.gateways, **extra})
+        code = _run_child([binary, *codex_args(server.port, provider), *ctx.args], dict(os.environ))
     finally:
         server.stop()
     raise typer.Exit(code)
@@ -287,7 +298,7 @@ def protect(
     """Send every Claude Code, Codex, pi and opencode session through `keepmum serve` (on), stop (off), or show which."""
     import json
 
-    from .clients import CLIENTS, protect_clients
+    from .clients import CLIENTS, protect_clients, via_phrase
 
     cfg = _config()
     if "gemini" in (client or []):
@@ -300,13 +311,21 @@ def protect(
     if action not in ("on", "off", "status") or any(c not in CLIENTS for c in client or []):
         typer.echo("keepmum protect: use on, off or status, and --client claude|codex|pi|opencode", err=True)
         raise typer.Exit(2)
-    result = protect_clients(action, cfg.port, client or None)
+    from .config import config_file
+    from .gateway import Adopter
+
+    # An agent already pointed at another gateway gets keepmum in front of it; a new gateway is
+    # added to [gateways] (and audited) before any agent is pointed at its route.
+    adopt = Adopter(cfg.port, cfg.gateways, lambda name, url: _update_config(
+        cfg.path or config_file(), "gateways", name, url, "keepmum protect on"))
+    result = protect_clients(action, cfg.port, client or None, adopt=adopt if action == "on" else None)
     if action in ("on", "off"):
         from .audit import AuditLog, caller
 
         changed = [name for name, st in result.items() if st.get("installed") and not st.get("error")]
         if changed:
-            AuditLog().append("protect", action=action, clients=changed, by=caller(f"keepmum protect {action}"))
+            AuditLog().append("protect", action=action, clients=changed, by=caller(f"keepmum protect {action}"),
+                              **({"via": adopt.adopted} if adopt.adopted else {}))
     if as_json:
         typer.echo(json.dumps(result))
         return
@@ -318,10 +337,12 @@ def protect(
             line = f"error: {st['error']}"
         elif st.get("on"):
             line = "on: goes through keepmum" + (f" ({', '.join(st['providers'])})" if st.get("providers") else "")
+            if st.get("via"):
+                line += via_phrase(st)
         else:
-            other = st.get("other")
+            other = st.get("other_url") or st.get("other")
             other = ", ".join(other) if isinstance(other, list) else other
-            line = "off" + (f": already uses {other}, left alone" if other else "")
+            line = "off" + (f": goes to {other} directly; `keepmum protect on` puts keepmum in front" if other else "")
         typer.echo(f"{names[name]:12} {line}", err=True)
         if st.get("warning"):
             typer.echo(f"{'':12} warning: {st['warning']}", err=True)
@@ -714,16 +735,23 @@ def exclude(
         for p in excluded_projects():
             typer.echo(f"{p['path']}  -> {p['url']}" + ("" if p["active"] else "  (setting removed: goes through keepmum)"))
         return
+    from .protect import status
+
     cfg = _config()
+    # Where keepmum would have forwarded: the gateway it is in front of, if any, else the upstream.
     try:
-        root = do_exclude(path or Path.cwd(), cfg.upstream)
+        to = status(cfg.port).via or cfg.upstream
+    except ProtectError:
+        to = cfg.upstream
+    try:
+        root = do_exclude(path or Path.cwd(), to)
     except ProtectError as e:
         typer.echo(f"keepmum exclude: {e}", err=True)
         raise typer.Exit(1)
     from .audit import AuditLog, caller
 
-    AuditLog().append("exclude", project=str(root), to=cfg.upstream, by=caller("keepmum exclude"))
-    typer.echo(f"excluded {root}: Claude Code there goes straight to {cfg.upstream}, unscanned.\n"
+    AuditLog().append("exclude", project=str(root), to=to, by=caller("keepmum exclude"))
+    typer.echo(f"excluded {root}: Claude Code there goes straight to {to}, unscanned.\n"
                "It applies once the folder is trusted in Claude Code; sessions already open there switch now.", err=True)
 
 
@@ -767,7 +795,7 @@ def status(as_json: bool = typer.Option(True, "--json/--text", help="Print JSON 
     out = {"model": str(model) if model else None, "model_size": MODEL_SIZE, "pf_serve": str(binary) if binary else None,
            "protect": prot, "port": cfg.port, "serve_running": shared_serve_port(cfg) is not None,
            "observe": cfg.observe, "model_on": cfg.model, "clients": clients, "pii": cfg.pii, "pass": cfg.pass_types, "rules": _rules_json(cfg),
-           "excluded": excluded_projects()}
+           "excluded": excluded_projects(), "gateways": cfg.gateways}
     typer.echo(json.dumps(out) if as_json else "\n".join(f"{k}: {v}" for k, v in out.items()))
 
 

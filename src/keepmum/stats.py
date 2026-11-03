@@ -143,7 +143,12 @@ def provider_of(upstream: str) -> str:
         return "openai"
     if host.endswith("googleapis.com"):
         return "google"
-    return host or "unknown"
+    # Another gateway: its address, with the port when it runs on this Mac (127.0.0.1:3425).
+    try:
+        port = urlsplit(upstream).port
+    except ValueError:
+        port = None
+    return f"{host}:{port}" if port and host in ("127.0.0.1", "localhost", "::1") else host or "unknown"
 
 
 def flows(events, since: float) -> dict:

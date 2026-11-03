@@ -95,9 +95,27 @@ keepmum protect on      # Claude Code, Codex, pi and opencode now send every ses
 | pi | `~/.pi/agent/models.json` | `baseUrl` for the `anthropic`, `openai` and `openai-codex` providers |
 | opencode | `~/.config/opencode/opencode.json` | `provider.<id>.options.baseURL` for `anthropic` and `openai` |
 
-Each file is backed up next to itself first, and `off` removes only what `on` added. A tool you have already pointed at another gateway is left alone and reported. Claude Code sessions switch at once; Codex, pi and opencode pick the change up when they next start. keepmum edits opencode's `opencode.json` only while it is plain JSON (no comments), and a base URL set in `opencode.jsonc` wins and is reported, not changed.
+Each file is backed up next to itself first, and `off` removes only what `on` added. Claude Code sessions switch at once; Codex, pi and opencode pick the change up when they next start. keepmum edits opencode's `opencode.json` only while it is plain JSON (no comments), and a base URL set in `opencode.jsonc` wins and is reported, not changed.
 
 While protection is on, `keepmum serve` must keep running, or the protected agents cannot connect: the Mac app runs it at login. Claude Code turns off Remote Control when its base URL is not api.anthropic.com.
+
+### In front of another gateway
+
+If you already route agents through a gateway (Magpie, LiteLLM, OpenRouter, a company proxy), keep it. `keepmum protect on` puts keepmum in front of it: agent → keepmum → gateway → provider. The gateway still picks models, accounts and routes, and it only ever receives placeholders.
+
+```sh
+keepmum protect on
+# Claude Code  on: goes through keepmum, then http://127.0.0.1:3425
+# Codex        on: goes through keepmum, then http://127.0.0.1:3425/v1
+```
+
+Each gateway gets a route on keepmum, `http://127.0.0.1:7788/gateway/<name>`, saved under `[gateways]` in the config (and in the audit log). An agent that was set up for a gateway is pointed at that gateway's route, with the same path after it, so whatever the gateway serves (the Messages, Responses or Gemini API) keeps working. Anything keepmum does not scan, such as Chat Completions, is refused rather than sent. Only agents that already used the gateway go to it: an agent that went straight to its provider still does, and its key never reaches the gateway.
+
+- **Claude Code, pi, opencode:** the base URL becomes keepmum's route. `off` puts the gateway's URL back.
+- **Codex:** keepmum's provider copies yours (its key variable, headers and auth), with only the base URL changed. keepmum's `model_provider` line notes which provider it replaced (`# keepmum protect (was "magpie")`), and `off` selects that provider again. A provider using `wire_api = "chat"` is refused, because keepmum does not scan Chat Completions. Local models (`ollama`, `lmstudio`, `oss`) need no protection, since nothing leaves the Mac.
+- **One run:** `keepmum claude`, `keepmum codex` and `keepmum gemini` go in front of the gateway set in the environment or in Codex's config for that run only.
+
+A gateway's own app may write its address back into an agent's settings, for example when you switch models in it. That agent then goes around keepmum. `keepmum doctor` reports it, and the Mac app shows it in the menu bar with a **Protect** button. Run `keepmum protect on` again to fix it. A gateway must use https unless it runs on this Mac.
 
 ### Observe only
 
@@ -207,6 +225,9 @@ WebSearch = "keep"
 
 [server]
 port = 7788            # for `keepmum serve`
+
+[gateways]             # gateways keepmum forwards to, each at http://127.0.0.1:7788/gateway/<name> (`keepmum protect on` adds them)
+local-3425 = "http://127.0.0.1:3425"
 
 [log]
 level = "info"         # logs contain types and counts, never values

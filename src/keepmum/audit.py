@@ -252,6 +252,7 @@ def config_state(cfg) -> dict:
         "allow_strings": sorted(_fingerprint("string", s) for s in cfg.allow_strings),
         "allow_patterns": sorted(_fingerprint("pattern", p) for p in cfg.allow_patterns),
         "restore": dict(sorted(cfg.restore.items())), "upstream": cfg.upstream,
+        "gateways": sorted(f"{name} = {url}" for name, url in cfg.gateways.items()),
         "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
     }
 
@@ -263,10 +264,10 @@ _SETTINGS = {
     "observe": ("detect.observe", True), "model": ("detect.model", False), "pii": ("detect.pii", False),
     "pass": ("detect.pass", "added"), "rules_off": ("rules.off", "added"), "mask_rules": ("rules.mask", "removed"),
     "allow_strings": ("allowlist.strings", "added"), "allow_patterns": ("allowlist.patterns", "added"),
-    "upstream": ("server.upstream", "any"), "previews": ("log.previews", None), "context": ("log.context", None),
+    "upstream": ("server.upstream", "any"), "gateways": ("gateways", "added"), "previews": ("log.previews", None), "context": ("log.context", None),
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
-_ADDED_LATER = {"context"}
+_ADDED_LATER = {"context", "gateways"}
 
 
 def config_changes(old: dict, new: dict) -> list[dict]:
@@ -434,7 +435,9 @@ def summary(entry: dict) -> str:
             parts.append(f"{c['setting']} {change}" + (" (weakens)" if c["weakens"] and len(changes) > 1 else ""))
         return "; ".join(parts)
     if e == "protect":
-        return f"protection {entry.get('action')} for {', '.join(entry.get('clients') or [])}"
+        via = entry.get("via") or {}
+        return (f"protection {entry.get('action')} for {', '.join(entry.get('clients') or [])}"
+                + "".join(f"; {who} through keepmum to {url}" for who, url in sorted(via.items())))
     if e in ("exclude", "include"):
         return f"{entry.get('project')} {'excluded: goes straight to the provider, unscanned' if e == 'exclude' else 'scanned again'}"
     if e == "start":

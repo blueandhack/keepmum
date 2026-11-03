@@ -53,7 +53,7 @@ def test_codex_api_key_login_goes_to_the_openai_route(homes):
 def test_codex_leaves_another_provider_alone(homes):
     cfg = homes / "codex" / "config.toml"
     cfg.write_text('model_provider = "azure"\n')
-    with pytest.raises(ProtectError, match="already selects model_provider 'azure'"):
+    with pytest.raises(ProtectError, match="model_provider 'azure'"):
         clients.codex_enable(PORT)
     assert cfg.read_text() == 'model_provider = "azure"\n'
     assert clients.codex_status(PORT)["other"] == "azure"

@@ -39,8 +39,16 @@ final class Engine {
         var error: String?
         /// On, but some of its traffic still goes around keepmum (opencode 1.x with a ChatGPT login).
         var warning: String?
-        /// Another gateway the user set for this tool: keepmum leaves it alone.
+        /// Another gateway the user set for this tool: turning protection on puts keepmum in front of it.
         var other: OtherValue?
+        /// Where that other setting goes (`other` is a provider name for Codex).
+        var otherUrl: String?
+        /// On, in front of another gateway: where keepmum forwards this agent's requests.
+        var via: String?
+        /// pi and opencode: the providers that go on to `via` when the others go to their provider directly.
+        var viaProviders: [String]?
+        /// Straight to a gateway keepmum was in front of: its app most likely wrote itself back.
+        var around: String?
 
         /// Codex reports one provider name, pi and opencode a list of provider names.
         enum OtherValue: Decodable, Equatable {
@@ -139,6 +147,12 @@ final class Engine {
         status?.clients?[id] ?? (id == "claude" ? Client(installed: true, on: protected, error: status?.protect.error) : nil)
     }
     var anyProtected: Bool { protected || (status?.clients?.values.contains { $0.on == true } ?? false) }
+    /// The first coding agent that goes straight to a gateway keepmum is in front of: (id, name, URL).
+    var aroundClient: (id: String, name: String, url: String)? {
+        for (id, name) in agentNames { if let url = client(id)?.around { return (id, name, url) } }
+        return nil
+    }
+    let agentNames = [("claude", "Claude Code"), ("codex", "Codex"), ("pi", "pi"), ("opencode", "opencode")]
     var setupDone: Bool { canScan && serviceRunning && anyProtected }
 
     func start() {
@@ -427,7 +441,8 @@ final class Engine {
 
     /// For snapshots: an engine that is set up and protecting Claude Code; with `starting`, one
     /// whose background service was just started and has yet to answer.
-    static func preview(starting: Bool = false) -> Engine {
+    /// With `around`, Claude Code was pointed back at the gateway keepmum was in front of.
+    static func preview(starting: Bool = false, around: Bool = false) -> Engine {
         let e = Engine()
         e.previewing = true
         e.status = Status(model: "~/.local/share/keepmum/models/privacy-filter-q8.gguf", modelSize: 1_637_572_192,
@@ -438,8 +453,14 @@ final class Engine {
                           pii: true, pass: ["PERSON", "DATE"],
                           rules: .init(mask: [.init(name: "Employee ID", pattern: "EMP-\\d{6}", type: "ACCOUNT")],
                                        allowStrings: ["sk_test_docs_example"], allowPatterns: ["^demo-[a-z]+$"], off: ["phone-labeled"]),
-                          clients: ["codex": .init(installed: true, on: true), "pi": .init(installed: true, on: false)])
+                          clients: ["codex": .init(installed: true, on: true, via: "http://127.0.0.1:3425/v1"),
+                                    "pi": .init(installed: true, on: false, other: .many(["openai"]), otherUrl: "https://llm.corp.example/v1")])
         e.serviceStatus = .enabled
+        if around {
+            e.status?.protect = .init(settings: "~/.claude/settings.json", on: false, baseUrl: "http://127.0.0.1:3425")
+            e.status?.clients?["claude"] = .init(installed: true, on: false, other: .one("http://127.0.0.1:3425"),
+                                                 otherUrl: "http://127.0.0.1:3425", around: "http://127.0.0.1:3425")
+        }
         if starting {
             e.status?.serveRunning = false
             e.serviceChange = .starting

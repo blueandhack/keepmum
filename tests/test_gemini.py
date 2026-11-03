@@ -104,7 +104,7 @@ def make(tmp_path, observe=False):
     up = httpx.AsyncClient(transport=httpx.ASGITransport(app=mock.app), base_url="http://up")
     stats = Stats()
     proxy = Proxy(redactor(), upstream="http://up", client=up, stats=stats, stats_token="t", observe=observe,
-                  gemini_upstream="http://up", code_assist_upstream="http://up")
+                  gemini_upstream="https://generativelanguage.googleapis.com", code_assist_upstream="https://cloudcode-pa.googleapis.com")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
     return mock, client, stats
 

@@ -48,6 +48,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from .gateway import ROUTE, api_of_route
 from .gemini import GeminiStreamRestorer, restore_gemini
 from .redact import Redactor
 from .responses import ResponsesStreamRestorer, restore_responses
@@ -171,6 +172,8 @@ class Proxy:
         self.upstream = upstream.rstrip("/")
         self.prefixed = {"/openai": openai_upstream.rstrip("/"), "/chatgpt": chatgpt_upstream.rstrip("/"),
                          "/gemini": gemini_upstream.rstrip("/"), "/codeassist": code_assist_upstream.rstrip("/")}
+        # Other gateways keepmum forwards to (config [gateways], gateway.py): name -> URL.
+        self.gateways: dict[str, str] = {}
         # The servers seen in agents' tool lists (tools.ToolRegistry); None: no fingerprints, no counts.
         self.tools = tools
         self.policy = policy or DEFAULT_POLICY
@@ -198,6 +201,11 @@ class Proxy:
         self._policy = ToolPolicy(policy, self.tools)
 
     def target(self, path: str, chatgpt_account: bool = False) -> Target:
+        if path.startswith(ROUTE):
+            name, _, rest = path[len(ROUTE):].partition("/")
+            base = self.gateways.get(name, "")
+            # An unknown gateway has no base: never forwarded (handle refuses it).
+            return Target(provider_of(base) if base else "unknown", base, "/" + rest, api_of_route("/" + rest))
         if chatgpt_account and path.startswith("/openai/v1/"):
             rest = "/backend-api/codex" + path[len("/openai/v1"):]
             return Target("openai", self.prefixed["/chatgpt"], rest, api_of(rest))
@@ -224,7 +232,13 @@ class Proxy:
             self._record(path, "blocked", 403, origin=self._origin(request, Target("google", "", path, None)))
             return api_error(403, "permission_error", "keepmum does not scan Vertex AI, so nothing was sent; "
                              "sign in to Gemini CLI with an API key or with Google")
+        if path.startswith(ROUTE):
+            self._observe()  # re-reads the config file if it changed: `protect on` may have just added this gateway
         t = self.target(path, "chatgpt-account-id" in request.headers)
+        if path.startswith(ROUTE) and not t.base:
+            self._record(path, "blocked", 404, origin=self._origin(request, t))
+            return api_error(404, "not_found_error", f"no gateway named {path[len(ROUTE):].split('/')[0]!r} "
+                             "([gateways] in ~/.config/keepmum/config.toml), so nothing was sent")
         if t.api == "metadata" and request.method == "POST":
             return await self._forward_raw(request, t, await request.body(), note="Code Assist setup, no content")
         if t.api and request.method == "POST":

@@ -29,7 +29,8 @@ BYPASS_KEYS = ("ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE
 
 
 def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, upstream: str | None = None,
-                mode: str = "serve") -> Proxy:
+                mode: str = "serve", gateways: dict[str, str] | None = None) -> Proxy:
+    """`gateways` (name -> URL) are added for this run to config [gateways], which can change."""
     from .config import LiveConfig
     from .detect.pipeline import default_pipeline
     from .redact import Redactor
@@ -38,11 +39,12 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
 
     from . import __version__
 
-    from .protect import is_keepmum_url
 
     fixed_pii = pii is not None
     pii = cfg.pii if pii is None else pii
-    if upstream and is_keepmum_url(upstream, cfg.port):
+    from .gateway import is_ours
+
+    if upstream and is_ours(upstream, cfg.port):
         upstream = None  # protection points Claude Code at keepmum: never forward to ourselves
     from .detect.pipeline import ModelSwitch
 
@@ -71,6 +73,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
             info["pii"] = new.pii
         info["detector"] = pipeline.name
         proxy.policy = new.restore
+        proxy.gateways = {**new.gateways, **(gateways or {})}
         if not rules_only:
             switch.want(new.model)
 
@@ -80,6 +83,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
                   stats=Stats(history=history), stats_token=stats_token(), info=info, observe=observe,
                   previews=lambda: observe.config.log_previews,
                   context=lambda: observe.config.log_context, audit=audit, tools=ToolRegistry())
+    proxy.gateways = {**cfg.gateways, **(gateways or {})}
     switch = ModelSwitch(pipeline, proxy._scan_lock)
     return proxy
 
@@ -87,7 +91,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
 def bypass_risks(cwd: Path, port: int | None = None) -> list[str]:
     """Places that could route Claude Code around keepmum. Any hit means: do not start.
     An ANTHROPIC_BASE_URL pointing at keepmum itself on `port` (`keepmum protect`) is not a risk."""
-    from .protect import is_excluded, is_keepmum_url, settings_path
+    from .gateway import is_ours
+    from .protect import is_excluded, settings_path
 
     risks = [f"environment variable {k} is set" for k in BYPASS_KEYS[1:] if os.environ.get(k)]
     excluded = is_excluded(cwd)  # reported by the callers as an exclusion, not a risk
@@ -104,11 +109,13 @@ def bypass_risks(cwd: Path, port: int | None = None) -> list[str]:
         if not isinstance(env, dict):
             continue
         for k in BYPASS_KEYS:
-            ours = k == "ANTHROPIC_BASE_URL" and port is not None and is_keepmum_url(str(env.get(k)), port)
+            ours = k == "ANTHROPIC_BASE_URL" and port is not None and is_ours(env.get(k), port)
             ours = ours or (k == "ANTHROPIC_BASE_URL" and excluded is not None and f.name == "settings.local.json"
                             and env.get(k) == excluded)
             if k in env and not ours:
-                risks.append(f"{f} sets env {k}")
+                gateway = f == user and k == "ANTHROPIC_BASE_URL" and str(env[k]).startswith(("http://", "https://"))
+                risks.append(f"{f} sets env {k}" + (f" to {env[k]}; if that is a gateway, `keepmum protect on` "
+                                                   "puts keepmum in front of it" if gateway else ""))
     return risks
 
 

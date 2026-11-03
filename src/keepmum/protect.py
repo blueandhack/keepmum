@@ -6,6 +6,9 @@ variable exported in the shell. A running session picks up the change when the f
 removing it reaches only sessions started afterwards. Project settings can still override it,
 which `bypass_risks` reports.
 
+When it already sends Claude Code to another gateway (Magpie, LiteLLM), keepmum goes in front of it
+(gateway.py): the value becomes keepmum's route for that gateway, and `off` puts the gateway back.
+
 Only that one key is touched. The file is strict JSON, written atomically, with a backup of the
 previous version next to it.
 """
@@ -49,9 +52,10 @@ class Status:
     path: Path
     on: bool
     value: str | None  # what the user settings file sets ANTHROPIC_BASE_URL to, if anything
+    via: str | None = None  # the gateway keepmum forwards Claude Code to, when it is in front of one
 
     def as_dict(self) -> dict:
-        return {"settings": str(self.path), "on": self.on, "base_url": self.value}
+        return {"settings": str(self.path), "on": self.on, "base_url": self.value, **({"via": self.via} if self.via else {})}
 
 
 def _read(path: Path) -> dict:
@@ -77,35 +81,62 @@ def _write(path: Path, data: dict, backup: bool = True) -> None:
     tmp.replace(path)
 
 
-def status(port: int) -> Status:
+def _gateways() -> dict[str, str]:
+    from .config import ConfigError, load
+
+    try:
+        return load().gateways
+    except ConfigError:
+        return {}
+
+
+def status(port: int, gateways: dict[str, str] | None = None) -> Status:
+    from .gateway import is_ours, unroute
+
     path = settings_path()
     value = _read(path).get("env", {}).get(KEY)
-    return Status(path, isinstance(value, str) and is_keepmum_url(value, port), value)
+    via = unroute(value, port, _gateways() if gateways is None else gateways) if isinstance(value, str) else None
+    return Status(path, is_ours(value, port), value, via)
 
 
-def enable(port: int) -> Status:
+def enable(port: int, adopt=None) -> Status:
+    """Point Claude Code at keepmum. Already pointed at another gateway: `adopt(url, who)` returns
+    keepmum's route for it (gateway.Adopter); without `adopt`, refused."""
+    from .gateway import is_ours
+
     path = settings_path()
     data = _read(path)
     env = data.setdefault("env", {})
     current = env.get(KEY)
-    if current is not None and not (isinstance(current, str) and is_keepmum_url(current, port)):
-        raise ProtectError(f"{path} already sends Claude Code to {current}; set it as keepmum's upstream "
-                           "([server] upstream in ~/.config/keepmum/config.toml) and remove it there first")
-    if current != keepmum_url(port):
-        env[KEY] = keepmum_url(port)
+    want = keepmum_url(port)
+    if current is not None and not is_ours(current, port):
+        if adopt is None or not isinstance(current, str):
+            raise ProtectError(f"{path} already sends Claude Code to {current}; `keepmum protect on` puts keepmum in front of it")
+        want = adopt(current, "Claude Code")
+    elif current is not None:
+        want = current  # already keepmum's, straight or in front of a gateway
+    if current != want:
+        env[KEY] = want
         _write(path, data)
-    return status(port)
+    return status(port, getattr(adopt, "gateways", None))
 
 
 def disable(port: int) -> Status:
+    """Take keepmum out: Claude Code goes back to the gateway keepmum was in front of, or to Anthropic."""
+    from .gateway import is_ours, unroute
+
     path = settings_path()
     data = _read(path)
     env = data.get("env", {})
     current = env.get(KEY)
-    if current is not None and isinstance(current, str) and is_keepmum_url(current, port):
-        del env[KEY]
-        if not env:
-            data.pop("env")
+    if is_ours(current, port):
+        back = unroute(current, port, _gateways())
+        if back:
+            env[KEY] = back
+        else:
+            del env[KEY]
+            if not env:
+                data.pop("env")
         _write(path, data)
     return status(port)
 

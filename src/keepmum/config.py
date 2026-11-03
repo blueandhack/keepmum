@@ -18,6 +18,9 @@
     strings = []
     patterns = []
 
+    [gateways]             # other gateways keepmum forwards to (`keepmum protect on` adds them): name = URL
+    local-3425 = "http://127.0.0.1:3425"
+
     [restore]              # per tool: "restore", "keep", "own" or a list of types; "mcp__*" style prefixes allowed
     default = "restore"
     WebFetch = "keep"
@@ -53,6 +56,28 @@ _SCHEMA = {
     "audit": {"keep_days": int},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def gateway_problem(url: str, port: int | None = None) -> str | None:
+    """Why keepmum cannot forward to `url` as a gateway, or None. Plain http only to this Mac:
+    anywhere else it would carry the agent's key in the clear. Never keepmum itself."""
+    from urllib.parse import urlsplit
+
+    try:
+        u = urlsplit(url)
+        u.port  # noqa: B018 (raises on a bad port)
+    except ValueError:
+        return "is not a URL"
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return "must be an http(s) URL"
+    if u.query or u.fragment or u.username or u.password:
+        return "must not have a query, a fragment or a user name"
+    if u.scheme == "http" and u.hostname not in LOOPBACK:
+        return "must use https (plain http only to this Mac: 127.0.0.1 or localhost)"
+    if port is not None and u.hostname in LOOPBACK and (u.port or 80) == port:
+        return f"is keepmum itself (port {port})"
+    return None
 
 
 class ConfigError(ValueError):
@@ -72,6 +97,7 @@ class Config:
     allow_strings: list[str] = field(default_factory=list)
     allow_patterns: list[str] = field(default_factory=list)
     restore: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_POLICY))
+    gateways: dict[str, str] = field(default_factory=dict)  # name -> URL (gateway.py)
     log_level: str = "info"
     log_previews: bool = True
     log_context: bool = True
@@ -94,7 +120,7 @@ def load(path: Path | None = None) -> Config:
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}") from e
     for section, values in raw.items():
-        if section == "restore":
+        if section in ("restore", "gateways"):
             continue
         if section not in _SCHEMA or not isinstance(values, dict):
             raise ConfigError(f"{path}: unknown section [{section}]")
@@ -163,6 +189,16 @@ def load(path: Path | None = None) -> Config:
         elif action not in ("restore", "keep", "own"):
             raise ConfigError(f"{path}: restore.{tool} must be \"restore\", \"keep\", \"own\" or a list of types")
     cfg.restore = {**DEFAULT_POLICY, **restore}
+    gateways = raw.get("gateways", {})
+    if not isinstance(gateways, dict):
+        raise ConfigError(f"{path}: [gateways] must be a table")
+    for name, url in gateways.items():
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", name):
+            raise ConfigError(f"{path}: gateways.{name}: a name is lowercase letters, digits and dashes")
+        why = "must be a string" if not isinstance(url, str) else gateway_problem(url, cfg.port)
+        if why:
+            raise ConfigError(f"{path}: gateways.{name} {why}")
+        cfg.gateways[name] = url.rstrip("/")
     cfg.log_level = log.get("level", cfg.log_level)
     cfg.log_previews = log.get("previews", cfg.log_previews)
     cfg.log_context = log.get("context", cfg.log_context)

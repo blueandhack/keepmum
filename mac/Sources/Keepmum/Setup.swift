@@ -47,7 +47,7 @@ struct SetupSection: View {
             }
             if engine.isBundled {
                 FormSection(title: "Coding agents",
-                            footer: "Each switch points that agent at keepmum. Claude Code's open sessions switch right away; the others on their next session. Gemini CLI has no setting keepmum can rely on, so it is protected one run at a time.") {
+                            footer: "Each switch points that agent at keepmum. An agent already set up for another gateway, such as Magpie or LiteLLM, keeps it: keepmum goes in front and forwards there, and turning the switch off puts it back. Claude Code's open sessions switch right away; the others on their next session. Gemini CLI has no setting keepmum can rely on, so it is protected one run at a time.") {
                     ClientRow(engine: engine, id: "claude", name: "Claude Code", icon: "CC", detail: "~/.claude/settings.json")
                     Hairline()
                     ClientRow(engine: engine, id: "codex", name: "Codex", icon: "Cx", detail: "~/.codex/config.toml")
@@ -145,7 +145,7 @@ private struct ClientRow: View {
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(name).font(.km(.body)).foregroundStyle(installed ? Theme.text : Theme.textSecondary)
                 Text(subtitle(c, installed: installed, on: on)).font(.km(.caption))
-                    .foregroundStyle(c?.error != nil || (on && c?.warning != nil) ? Theme.blocked : Theme.textSecondary)
+                    .foregroundStyle(c?.error != nil || (on && c?.warning != nil) || c?.around != nil ? Theme.blocked : Theme.textSecondary)
                     .lineLimit(1).truncationMode(.middle).help(c?.warning ?? "")
             }
             Spacer(minLength: Space.s)
@@ -163,10 +163,23 @@ private struct ClientRow: View {
     private func subtitle(_ c: Engine.Client?, installed: Bool, on: Bool) -> String {
         if !installed { return "Not installed" }
         if let error = c?.error { return error }
-        if !on, let other = c?.other { return "Already uses \(other.text); keepmum leaves it alone" }
+        if let around = c?.around { return "Goes to \(hostPort(around)) directly, around keepmum. Switch on again" }
+        if !on, let other = c?.other { return "Uses \(hostPort(c?.otherUrl ?? other.text)); switch on to put keepmum in front" }
         if on, let warning = c?.warning { return warning }
+        if on, let via = c?.via, let some = c?.viaProviders {
+            return "Through keepmum; \(some.joined(separator: ", ")) then to \(hostPort(via))"
+        }
+        if on, let via = c?.via { return "Through keepmum to \(hostPort(via))" }
         return detail
     }
+}
+
+/// A gateway's address without its scheme: "127.0.0.1:3425/v1", "openrouter.ai/api".
+func hostPort(_ url: String) -> String {
+    url.split(separator: ",").map { part in
+        let s = part.trimmingCharacters(in: .whitespaces)
+        return s.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
+    }.joined(separator: ", ")
 }
 
 /// The menu bar's one-line answer to "is Claude Code protected right now?"
@@ -203,7 +216,7 @@ struct ProtectionRow: View {
 
     /// The coding agents protected right now, by name.
     private var protectedNames: [String] {
-        [("claude", "Claude Code"), ("codex", "Codex"), ("pi", "pi"), ("opencode", "opencode")].compactMap { engine.client($0.0)?.on == true ? $0.1 : nil }
+        engine.agentNames.compactMap { engine.client($0.0)?.on == true ? $0.1 : nil }
     }
 
     private var title: String {

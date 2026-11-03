@@ -36,7 +36,8 @@ struct MenuLabel: View {
         let unique = store.snapshot.vaultSize ?? 0
         HStack(spacing: 3) {
             let live = store.connection == .live || store.connection == .sample
-            Image(nsImage: !live ? Brand.menuBarIdle : store.toolsNeedReview ? Brand.menuBarAttention : Brand.menuBarActive)
+            let attention = store.toolsNeedReview || engine.aroundClient != nil
+            Image(nsImage: !live ? Brand.menuBarIdle : attention ? Brand.menuBarAttention : Brand.menuBarActive)
             if unique > 0 { Text(unique.compact).monospacedDigit() }
         }
         .task { store.start(); engine.start() }
@@ -91,6 +92,20 @@ struct MenuPanel: View {
             ProtectionRow(engine: engine) {
                 engine.settingsRequested = true
                 DashboardWindow.show(openWindow)
+            }
+            if let around = engine.aroundClient {
+                // The gateway's own app pointed the agent back at itself (switching a model, say).
+                HStack(spacing: Space.s) {
+                    Image(systemName: "exclamationmark.shield").foregroundStyle(Theme.blocked)
+                    Text("\(around.name) skips keepmum").font(.km(.callout)).foregroundStyle(Theme.text)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        .help("It goes to \(hostPort(around.url)) directly, unscanned: that gateway's app most likely set it back")
+                    Spacer(minLength: Space.s)
+                    PillButton(title: "Protect") { Task { await engine.setProtection(true, client: around.id) } }
+                        .disabled(!engine.isBundled || engine.busy || !engine.serviceRunning)
+                }
+                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
+                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
             }
             if let review = store.toolServers.first(where: { $0.paused }) ?? store.toolServers.first(where: { $0.new }) {
                 let others = store.toolServers.filter { $0.new || $0.paused }.count - 1
@@ -264,6 +279,10 @@ enum Snapshotter {
         render(Dashboard(store: store, engine: .preview(starting: true), page: .settings).frame(width: 1200, height: 780),
                to: "\(dir)/settings-starting-light.png", dark: false)
         render(MenuPanel(store: store, engine: .preview(starting: true)), to: "\(dir)/menu-starting-light.png", dark: false)
+        // A gateway's app pointed Claude Code back at itself, around keepmum.
+        render(MenuPanel(store: store, engine: .preview(around: true)), to: "\(dir)/menu-around-light.png", dark: false)
+        render(Dashboard(store: store, engine: .preview(around: true), page: .settings).frame(width: 1200, height: 2140),
+               to: "\(dir)/settings-around-light.png", dark: false)
         // The menu bar icon, plain and with the dot that points at Settings › Tools.
         for (name, image) in [("menubar", Brand.menuBarActive), ("menubar-attention", Brand.menuBarAttention)] {
             if let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {

@@ -118,6 +118,15 @@ def run() -> int:
                else "protection on, but keepmum serve is not running: Claude Code cannot connect")
     else:
         _check(r, OK, "protection off: only `keepmum claude` and the VS Code wrapper go through keepmum")
+    from .clients import protect_clients, via_phrase
+
+    names = {"claude": "Claude Code", "codex": "Codex", "pi": "pi", "opencode": "opencode"}
+    for client, st in protect_clients("status", port).items():
+        if st.get("around"):
+            _check(r, FAIL, f"{names[client]} goes to {st['around']} directly, around keepmum (a gateway's app may have "
+                   "set it back); `keepmum protect on` puts keepmum in front again")
+        elif st.get("on") and st.get("via"):
+            _check(r, OK, f"{names[client]} goes through keepmum" + via_phrase(st))
     if os.environ.get("ANTHROPIC_BASE_URL"):
         _check(r, WARN, "ANTHROPIC_BASE_URL is set: `keepmum claude` will use it as its upstream")
 
