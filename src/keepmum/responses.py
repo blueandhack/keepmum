@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-from .restore import DEFAULT_POLICY, StreamRestorer, _hold_from, restore_text, restore_tool
+from .restore import DEFAULT_POLICY, StreamRestorer, _hold_from, next_run, restore_reply, restore_tool
 from .vault import Vault
 
 
@@ -32,7 +32,7 @@ def restore_item(item, vault: Vault, policy: dict = DEFAULT_POLICY, counts: Coun
         return item
     kind = item.get("type")
     if kind == "message" and isinstance(item.get("content"), list):
-        return {**item, "content": [{**c, "text": restore_text(c["text"], vault, counts)}
+        return {**item, "content": [{**c, "text": restore_reply(c["text"], vault, counts)}
                                     if isinstance(c, dict) and isinstance(c.get("text"), str) else c
                                     for c in item["content"]]}
     if kind == "function_call" and isinstance(item.get("arguments"), str):
@@ -62,6 +62,7 @@ class ResponsesStreamRestorer(StreamRestorer):
     def __init__(self, vault: Vault, policy: dict[str, str] = DEFAULT_POLICY, counts: Counter | None = None):
         super().__init__(vault, policy, counts)
         self._text: dict[tuple, str] = {}    # (item_id, content_index) -> held-back tail
+        self._runs: dict[tuple, str] = {}    # (item_id, content_index) -> the run its text ends in
         self._calls: dict[str, dict] = {}    # item_id -> {"name", "parts", "last"}
 
     def _event(self, raw: bytes) -> bytes:
@@ -90,16 +91,18 @@ class ResponsesStreamRestorer(StreamRestorer):
             text = self._text.get(key, "") + data.get("delta", "")
             cut = _hold_from(text)
             self._text[key] = text[cut:]
-            ready = restore_text(text[:cut], v, c)
+            before = self._runs.get(key, "")
+            ready = restore_reply(text[:cut], v, c, before)
+            self._runs[key] = next_run(before, text[:cut])
             return self._emit(name, {**data, "delta": ready}) if ready else b""
         if kind == "response.output_text.done":
             key = (data.get("item_id"), data.get("content_index"))
             tail = self._text.pop(key, "")
             flush = self._emit(name and "response.output_text.delta", {
                 "type": "response.output_text.delta", "item_id": key[0], "content_index": key[1],
-                "output_index": data.get("output_index"), "delta": restore_text(tail, v, c),
+                "output_index": data.get("output_index"), "delta": restore_reply(tail, v, c, self._runs.pop(key, "")),
                 "sequence_number": data.get("sequence_number")}) if tail else b""
-            return flush + self._emit(name, {**data, "text": restore_text(data.get("text", ""), v, again)})
+            return flush + self._emit(name, {**data, "text": restore_reply(data.get("text", ""), v, again)})
 
         if kind == "response.output_item.added":
             item = data.get("item") or {}
@@ -133,7 +136,7 @@ class ResponsesStreamRestorer(StreamRestorer):
         if kind in ("response.content_part.added", "response.content_part.done"):
             part = data.get("part") or {}
             if isinstance(part.get("text"), str):
-                return self._emit(name, {**data, "part": {**part, "text": restore_text(part["text"], v, again)}})
+                return self._emit(name, {**data, "part": {**part, "text": restore_reply(part["text"], v, again)}})
             return raw
         if kind == "response.output_item.done":
             item = data.get("item")

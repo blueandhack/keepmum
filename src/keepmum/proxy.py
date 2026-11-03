@@ -52,7 +52,7 @@ from .gateway import ROUTE, api_of_route
 from .gemini import GeminiStreamRestorer, restore_gemini
 from .redact import Redactor
 from .responses import ResponsesStreamRestorer, restore_responses
-from .restore import DEFAULT_POLICY, StreamRestorer, ToolPolicy, restore_response, rule_for, take_tools
+from .restore import DEFAULT_POLICY, StreamRestorer, ToolPolicy, restore_response, rule_for, take_tools, take_urls
 from .stats import Stats, client_of, flows, provider_of
 from .tools import BULK, CONTACTS, definitions
 
@@ -393,6 +393,10 @@ class Proxy:
         """Count a request for the stats feed, and add it to the audit log. Bodyless checks that
         carried no content (a GET of /v1/models) are counted but not audited."""
         tools = take_tools(restored) if restored else []
+        in_urls = take_urls(restored) if restored else {}
+        if in_urls:
+            log.warning("%s: %d placeholder(s) inside web addresses in the reply kept: a client that shows the "
+                        "reply could otherwise send the real value there", path, sum(in_urls.values()))
         self.stats.record(path, outcome, status, scan_ms, counts, restored, new=new, origin=origin, tools=tools)
         if self.audit is None or (scan_ms is None and outcome in ("forwarded", "observed")):
             return
@@ -403,7 +407,8 @@ class Proxy:
         unresolved = restored.pop(UNRESOLVED, 0)
         self.audit.append("request", client=client, provider=provider, path=path, outcome=outcome, status=status,
                           masked=dict(counts or {}), new=new, found=dict(found or {}) or None,
-                          restored=restored or None, tools=tools or None, unresolved=unresolved or None)
+                          restored=restored or None, tools=tools or None, unresolved=unresolved or None,
+                          in_urls=in_urls or None)
 
     @staticmethod
     def _warn_unresolved(path: str, restored: Counter) -> None:

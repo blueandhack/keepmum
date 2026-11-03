@@ -23,6 +23,8 @@ from .restore import (
     DEFAULT_POLICY,
     StreamRestorer,
     _hold_from,
+    next_run,
+    restore_reply,
     restore_text,
     restore_tool,
 )
@@ -34,7 +36,7 @@ def _part(part, vault: Vault, policy: dict, counts: Counter):
         return part
     out = dict(part)
     if isinstance(out.get("text"), str):
-        out["text"] = restore_text(out["text"], vault, counts)
+        out["text"] = restore_reply(out["text"], vault, counts)
     for key in ("functionCall", "function_call"):
         call = out.get(key)
         if isinstance(call, dict) and "args" in call:
@@ -77,6 +79,7 @@ class GeminiStreamRestorer(StreamRestorer):
     def __init__(self, vault: Vault, policy: dict[str, str] = DEFAULT_POLICY, counts: Counter | None = None):
         super().__init__(vault, policy, counts)
         self._pending: dict[int, str] = {}  # candidate index -> held-back text
+        self._runs: dict[int, str] = {}  # candidate index -> the run its text ends in
         self._wrapped = False  # Code Assist: chunks come as {"response": ...}
 
     def _event(self, raw: bytes) -> bytes:
@@ -108,7 +111,9 @@ class GeminiStreamRestorer(StreamRestorer):
                     text = self._pending.get(index, "") + p["text"]
                     cut = _hold_from(text)
                     self._pending[index] = text[cut:]
-                    ready = restore_text(text[:cut], self.vault, self.counts)
+                    before = self._runs.get(index, "")
+                    ready = restore_reply(text[:cut], self.vault, self.counts, before)
+                    self._runs[index] = next_run(before, text[:cut])
                     if ready:
                         new_parts.append({**p, "text": ready})
                     elif "thoughtSignature" in p:
@@ -116,7 +121,8 @@ class GeminiStreamRestorer(StreamRestorer):
                 else:
                     new_parts.append(_part(p, self.vault, self.policy, self.counts))
             if c.get("finishReason") and self._pending.get(index):
-                new_parts.append({"text": restore_text(self._pending.pop(index), self.vault, self.counts)})
+                new_parts.append({"text": restore_reply(self._pending.pop(index), self.vault, self.counts,
+                                                        self._runs.pop(index, ""))})
             kept_parts = kept_parts or bool(new_parts)
             if isinstance(content, dict) and isinstance(parts, list):
                 c = {**c, "content": {**content, "parts": new_parts}}
@@ -135,7 +141,7 @@ class GeminiStreamRestorer(StreamRestorer):
         for index, text in sorted(self._pending.items()):
             if text:
                 chunk = {"candidates": [{"index": index, "content": {"role": "model",
-                                                                     "parts": [{"text": restore_text(text, self.vault, self.counts)}]}}]}
+                                                                     "parts": [{"text": restore_reply(text, self.vault, self.counts, self._runs.get(index, ""))}]}}]}
                 tail += self._emit(None, {"response": chunk} if self._wrapped else chunk)
         self._pending.clear()
         return tail + rest

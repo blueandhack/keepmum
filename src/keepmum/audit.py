@@ -10,7 +10,8 @@ What is recorded, and what never is:
 
 - request: who sent it (client), where it went (provider, path), what keepmum did (outcome,
   status), counts by type, which detectors found what in new text, and which tools got real
-  values back or kept placeholders. Never a value, a preview, a placeholder or a header.
+  values back or kept placeholders, and how many placeholders stayed inside web addresses in the
+  reply. Never a value, a preview, a placeholder or a header.
 - config: every change to a protection setting, with whether it weakens protection, and who
   made it (the keepmum command, the app, or an edit of the file). Allowlist entries and your
   own patterns are recorded as keyed fingerprints, since they may be values themselves.
@@ -422,6 +423,8 @@ def summary(entry: dict) -> str:
             bits.append("real values to " + ", ".join(got))
         if kept:
             bits.append("placeholders kept for " + ", ".join(kept))
+        if entry.get("in_urls"):
+            bits.append(f"{sum(entry['in_urls'].values())} kept in web addresses in the reply")
         return "; ".join(bits)
     if e == "config":
         changes = entry.get("changes") or []

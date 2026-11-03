@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 
 from .detect import TYPES
@@ -106,6 +107,54 @@ def restore_text(text: str, vault: Vault, counts: Counter | None = None, only: s
     return PLACEHOLDER.sub(swap, text)
 
 
+# Reply text a client shows: a placeholder inside a web address stays a placeholder. A client that
+# renders the reply (an image, a link, a link preview) would otherwise send the real value to that
+# address, wherever a prompt injection pointed it. Other schemes (postgres://, redis://) are
+# restored: no renderer fetches them. The run of text since the last whitespace decides.
+_WEB = re.compile(r"(?i)https?://|(?:^|[(\[<\"'=])//[^/\s]")
+_RUN_CAP = 4096
+URL = "url"  # counts key: (URL, type) for each placeholder kept in a web address
+
+
+def _run(text: str) -> str:
+    """The text after the last whitespace: the word, or address, `text` ends in."""
+    i = len(text)
+    while i and not text[i - 1].isspace():
+        i -= 1
+    return text[i:]
+
+
+def next_run(before: str, text: str) -> str:
+    """The run a reply ends in once `text` follows `before` (both as the model wrote them)."""
+    run = _run(text)
+    if len(run) == len(text):
+        run = before + run
+    if len(run) > _RUN_CAP:  # an address this long stays one: keep its scheme in view
+        run = ("http://" if _WEB.search(run) else "") + run[-_RUN_CAP:]
+    return run
+
+
+def restore_reply(text: str, vault: Vault, counts: Counter | None = None, before: str = "") -> str:
+    """restore_text for reply text a client shows, except placeholders inside an http(s) address.
+    `before`: the run the reply ended in before `text` (next_run), when it came in earlier pieces."""
+
+    def swap(m):
+        ph, value, suffix = resolve(m, vault)
+        if value is not None and _WEB.search(next_run(before, text[: m.start()])):
+            if counts is not None:
+                counts[(URL, ph.split("_")[1])] += 1
+            return m.group(0)
+        return restore_text(m.group(0), vault, counts)
+
+    return PLACEHOLDER.sub(swap, text)
+
+
+def take_urls(counts: Counter) -> dict[str, int]:
+    """Remove the placeholders kept in web addresses from counts: {type: how many}."""
+    keys = [k for k in counts if isinstance(k, tuple) and k[0] == URL]
+    return {k[1]: counts.pop(k) for k in sorted(keys)}
+
+
 def _values(value, vault: Vault, counts: Counter | None, only: set[str] | None = None):
     if isinstance(value, str):
         return restore_text(value, vault, counts, only)
@@ -195,7 +244,7 @@ def restore_response(body: dict, vault: Vault, policy: dict[str, str] = DEFAULT_
         if not isinstance(block, dict):
             out.append(block)
         elif block.get("type") == "text":
-            out.append({**block, "text": restore_text(block.get("text", ""), vault, counts)})
+            out.append({**block, "text": restore_reply(block.get("text", ""), vault, counts)})
         elif block.get("type") == "tool_use":
             out.append({**block, "input": restore_tool(block.get("name", ""), block.get("input"), vault, policy, counts)})
         else:
@@ -296,7 +345,7 @@ class StreamRestorer:
         index = data.get("index")
         if kind == "content_block_start":
             block = data.get("content_block") or {}
-            self._blocks[index] = {"type": block.get("type"), "name": block.get("name", ""), "pending": "", "json": []}
+            self._blocks[index] = {"type": block.get("type"), "name": block.get("name", ""), "pending": "", "json": [], "run": ""}
             return raw
         state = self._blocks.get(index)
         if kind == "content_block_delta" and state:
@@ -305,7 +354,8 @@ class StreamRestorer:
                 text = state["pending"] + delta.get("text", "")
                 cut = _hold_from(text)
                 state["pending"] = text[cut:]
-                ready = restore_text(text[:cut], self.vault, self.counts)
+                ready = restore_reply(text[:cut], self.vault, self.counts, state["run"])
+                state["run"] = next_run(state["run"], text[:cut])
                 return self._emit(name, {**data, "delta": {**delta, "text": ready}}) if ready else b""
             if delta.get("type") == "input_json_delta" and state["type"] == "tool_use":
                 state["json"].append(delta.get("partial_json", ""))
@@ -318,7 +368,7 @@ class StreamRestorer:
 
     def _flush(self, index: int, state: dict) -> bytes:
         if state["type"] == "text" and state["pending"]:
-            text = restore_text(state["pending"], self.vault, self.counts)
+            text = restore_reply(state["pending"], self.vault, self.counts, state["run"])
             delta = {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}}
             return self._emit("content_block_delta", delta)
         if state["type"] == "tool_use" and state["json"]:
