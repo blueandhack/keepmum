@@ -171,6 +171,7 @@ enum DashboardWindow {
         openWindow(id: "dashboard")
         DispatchQueue.main.async {  // the window exists once openWindow's update has run
             panel?.close()
+            opened()
             NSApp.activate()
             if let window {
                 window.makeKeyAndOrderFront(nil)
@@ -179,6 +180,10 @@ enum DashboardWindow {
         }
     }
 
+    /// The dashboard is on screen: keepmum joins the Dock. SwiftUI calls the window's onAppear only
+    /// the first time it opens, not when it is opened again after a close, so `show` and AppKit's
+    /// didBecomeKey say so too; otherwise keepmum stayed a menu bar app with its dashboard open,
+    /// with no Dock icon, and its window fell behind the app in use whenever the menu panel closed.
     static func opened() {
         isOpen = true
         applyDockPolicy()
@@ -188,11 +193,21 @@ enum DashboardWindow {
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
             let window = note.object as? NSWindow
             MainActor.assumeIsolated {
-                guard window?.identifier?.rawValue.hasPrefix("dashboard") == true else { return }
+                guard isDashboard(window) else { return }
                 isOpen = false
                 applyDockPolicy()
             }
         }
+        NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
+            let window = note.object as? NSWindow
+            MainActor.assumeIsolated {
+                if isDashboard(window) && !isOpen { opened() }
+            }
+        }
+    }
+
+    private static func isDashboard(_ window: NSWindow?) -> Bool {
+        window?.identifier?.rawValue.hasPrefix("dashboard") == true
     }
 
     /// In the Dock while the dashboard is open and the setting allows it; otherwise menu bar only.
@@ -213,7 +228,7 @@ enum DashboardWindow {
     }
 
     private static var window: NSWindow? {
-        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("dashboard") == true }
+        NSApp.windows.first { isDashboard($0) }
     }
 }
 
