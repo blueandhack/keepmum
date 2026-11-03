@@ -200,6 +200,11 @@ enum DashboardWindow {
         let policy: NSApplication.ActivationPolicy = isOpen && showsInDock ? .regular : .accessory
         guard NSApp.activationPolicy() != policy else { return }
         NSApp.setActivationPolicy(policy)
+        // A menu bar app that joins the Dock can get a blank tile (the Dock's icon cache for the
+        // bundle path, stale after a rebuild): hand it the icon from the bundle itself.
+        if policy == .regular, let icon = Bundle.main.image(forResource: "Keepmum") {
+            NSApp.applicationIconImage = icon
+        }
         // Changing the policy can send the app to the back: keep the dashboard where it was.
         if isOpen, let window {
             NSApp.activate()
