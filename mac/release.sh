@@ -48,7 +48,7 @@ notarize() {
 
 echo "== keepmum $VERSION"
 (cd "$ROOT" && uv run --frozen pytest -q -p no:cacheprovider)
-rm -rf "$APP" && SIGN_IDENTITY=${SIGN_IDENTITY:-} VERSION=$VERSION ./build-app.sh
+rm -rf "$APP" && SIGN_IDENTITY=${SIGN_IDENTITY:-} VERSION=$VERSION SWIFT_CONFIG=release RUNTIME_CACHE=0 SKIP_RUNTIME= ./build-app.sh
 
 # The app first, so its own ticket is stapled and it opens offline once copied out of the DMG.
 if [ -z "${SKIP_NOTARIZE:-}" ]; then

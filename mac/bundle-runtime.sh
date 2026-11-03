@@ -18,6 +18,20 @@ PYTHON_VERSION=${PYTHON_VERSION:-3.12.15}
 BUNDLE_ID=${BUNDLE_ID:-app.keepmum.Keepmum}
 RES=$APP/Contents/Resources
 work=$ROOT/mac/build/runtime
+
+# A build with the same inputs as the last one reuses its engine: they are hashed (keepmum's
+# source, the lock file, pf-serve's sources, this script, the Python version, the bundle id).
+# RUNTIME_CACHE=0 builds it afresh; release.sh always does.
+cache=$ROOT/mac/build/runtime-cache
+key=$( (cd "$ROOT" && echo "$PYTHON_VERSION $BUNDLE_ID" \
+  && find mac/bundle-runtime.sh pyproject.toml uv.lock src native/pf-serve -path native/pf-serve/.work -prune \
+       -o -name __pycache__ -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum) | shasum | cut -c1-16)
+if [ "${RUNTIME_CACHE:-1}" != 0 ] && [ "$(cat "$cache/key" 2>/dev/null)" = "$key" ]; then
+  rm -rf "$RES/python" "$RES/bin"
+  ditto "$cache/Contents" "$APP/Contents"
+  echo "engine unchanged since the last build ($key): reused"
+  exit 0
+fi
 rm -rf "$work" "$RES/python" "$RES/bin" && mkdir -p "$work" "$RES/bin" "$APP/Contents/Library/LaunchAgents"
 
 # CPython: a pinned uv-managed build (no shims added to ~/.local/bin), copied whole, minus what
@@ -87,3 +101,10 @@ PLIST
 HOME=$work "$RES/keepmum" --help >/dev/null
 HOME=$work "$RES/keepmum" tools set >/dev/null 2>&1 && exit 1 || [ $? -eq 2 ]
 du -sh "$RES/python" "$RES/bin"
+
+if [ "${RUNTIME_CACHE:-1}" != 0 ]; then  # unsigned: build-app.sh signs the copy in the app
+  rm -rf "$cache" && mkdir -p "$cache/Contents/Resources" "$cache/Contents/Library"
+  for f in python bin keepmum keepmum-agent; do ditto "$RES/$f" "$cache/Contents/Resources/$f"; done
+  ditto "$APP/Contents/Library/LaunchAgents" "$cache/Contents/Library/LaunchAgents"
+  echo "$key" > "$cache/key"
+fi

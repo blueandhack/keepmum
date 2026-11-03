@@ -24,6 +24,7 @@ A menu-bar app that sets keepmum up, runs it in the background and shows what it
 ```sh
 ./build-app.sh                  # build/Keepmum.app with the engine, signed with your Apple Development identity (or ad-hoc)
 SKIP_RUNTIME=1 ./build-app.sh   # the dashboard alone, for UI work
+SWIFT_CONFIG=debug ./build-app.sh  # unoptimized dashboard, ~1 s to rebuild after an edit
 open build/Keepmum.app
 ```
 
