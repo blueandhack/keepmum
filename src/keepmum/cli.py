@@ -434,24 +434,51 @@ def pii(action: str = typer.Argument("status", help="on, off, or status")) -> No
         typer.echo("Running proxies switch on their next request.", err=True)
 
 
-guard_app = typer.Typer(help="The prompt-injection guard: checks what tools return for planted instructions. "
-                        "Optional; its model (Shield Small, CC BY-NC 4.0, non-commercial use only) is downloaded "
-                        "by `keepmum guard setup`.", invoke_without_command=True)
+guard_app = typer.Typer(help="Optional checks: `injection` looks at what tools return for planted instructions; "
+                        "`harm` looks at what you type for requests a policy may not allow. Set one up with "
+                        "`keepmum guard setup injection|harm`.", invoke_without_command=True)
 app.add_typer(guard_app, name="guard")
+CHECKS = ("injection", "harm")
+_MODE_TEXT = {"off": "off", "warn": "warn (flagged requests are logged, then sent)",
+              "block": "block (flagged requests are refused)"}
+_EXTRA = "uv tool install --editable '.[guard]'"
 
 
 def _guard_status() -> dict:
-    from . import guard
+    from . import guard, harm
 
     cfg = _config()
-    return {"mode": cfg.guard_injection, "installed": guard.installed(), "accepted": guard.accepted(),
-            "runtime_missing": guard.runtime_missing(), "model": f"{guard.REPO}@{guard.RELEASE}",
-            "licence": guard.LICENCE, "threshold": guard.THRESHOLD}
+    return {
+        "injection": {"mode": cfg.guard_injection, "installed": guard.installed(), "accepted": guard.accepted(),
+                      "runtime_missing": guard.runtime_missing(), "model": f"{guard.REPO}@{guard.RELEASE}",
+                      "licence": guard.LICENCE, "threshold": guard.THRESHOLD},
+        "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
+                 "installed": {size: harm.installed(size) for size in harm.SIZES},
+                 "server": str(harm.find_server() or "") or None, "licence": harm.LICENCE,
+                 "threshold": harm.MODELS[cfg.guard_harm_model][5]},
+    }
+
+
+def _missing(check: str, size: str | None = None) -> str | None:
+    """Why `check` cannot run yet, or None."""
+    from . import guard, harm
+
+    if check == "injection":
+        if not guard.installed():
+            return "its model is not set up: run `keepmum guard setup injection` first"
+        if guard.runtime_missing():
+            return f"{guard.runtime_missing()} is not installed: install keepmum with the guard extra, `{_EXTRA}`"
+        return None
+    if not harm.installed(size):
+        return f"the {size} model is not downloaded: run `keepmum guard setup harm --model {size}` first"
+    if harm.find_server() is None:
+        return "llama-server is not installed: `brew install llama.cpp` (or set KEEPMUM_LLAMA_SERVER)"
+    return None
 
 
 @guard_app.callback()
 def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
-    """Whether the guard is on, and whether its model is set up."""
+    """Whether each check is on, and whether its model is set up."""
     if ctx.invoked_subcommand:
         return
     import json
@@ -462,109 +489,139 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
     if as_json:
         typer.echo(json.dumps(st))
         return
-    typer.echo({"off": "guard: off", "warn": "guard: warn (possible injections are logged; requests still go out)",
-                "block": "guard: block (requests carrying a possible injection are refused)"}[st["mode"]])
-    if st["installed"]:
-        typer.echo(f"model: {guard.ATTRIBUTION}; non-commercial use confirmed on "
-                   f"{time.strftime('%b %-d, %Y', time.localtime(st['accepted']['ts']))}")
+    inj, hm = st["injection"], st["harm"]
+    typer.echo(f"injection: {_MODE_TEXT[inj['mode']]}")
+    if inj["installed"]:
+        typer.echo(f"  model: {guard.ATTRIBUTION}; non-commercial use confirmed on "
+                   f"{time.strftime('%b %-d, %Y', time.localtime(inj['accepted']['ts']))}")
     else:
-        typer.echo("model: not set up (`keepmum guard setup`)")
-    if st["runtime_missing"]:
-        typer.echo(f"runtime: {st['runtime_missing']} is not installed: install keepmum with the guard extra, "
-                   "`uv tool install --editable '.[guard]'`")
+        typer.echo("  model: not set up (`keepmum guard setup injection`)")
+    if inj["runtime_missing"]:
+        typer.echo(f"  runtime: {inj['runtime_missing']} is not installed (`{_EXTRA}`)")
+    typer.echo(f"harm: {_MODE_TEXT[hm['mode']]}")
+    have = [size for size, ok in hm["installed"].items() if ok]
+    typer.echo(f"  model: Qwen3Guard-Gen {hm['model']} (Apache-2.0)"
+               + ("" if hm["installed"][hm["model"]] else f", not downloaded (`keepmum guard setup harm --model {hm['model']}`)")
+               + (f"; downloaded: {', '.join(have)}" if have else ""))
+    typer.echo(f"  runtime: {hm['server'] or 'llama-server not found (brew install llama.cpp)'}")
 
 
 @guard_app.command("setup")
-def guard_setup(accept_noncommercial: bool = typer.Option(
-        False, "--accept-noncommercial", help="Confirm non-commercial use without the prompt (for scripts).")) -> None:
-    """Show the model's licence, confirm non-commercial use, then download it (136 MB, pinned SHA-256s)."""
-    from . import guard
+def guard_setup(check: str = typer.Argument(..., help="injection or harm"),
+                model: str = typer.Option("0.6b", "--model", help="harm: 0.6b (805 MB) or 4b (4.7 GB)."),
+                accept_noncommercial: bool = typer.Option(
+                    False, "--accept-noncommercial", help="injection: confirm non-commercial use without the prompt.")) -> None:
+    """Download a check's model (pinned SHA-256); injection asks you to confirm non-commercial use first."""
+    from . import guard, harm
     from .audit import AuditLog, caller
 
-    typer.echo(guard.TERMS + "\n", err=True)
-    if not accept_noncommercial:
-        if not sys.stdin.isatty():
-            typer.echo("keepmum guard setup: confirm with --accept-noncommercial when not run in a terminal", err=True)
-            raise typer.Exit(2)
-        if not typer.confirm("Is your use of the guard non-commercial?", default=False, err=True):
-            typer.echo("Not set up. keepmum works as before without the guard.", err=True)
-            raise typer.Exit(1)
+    if check not in CHECKS or model not in harm.SIZES:
+        typer.echo("keepmum guard setup: use `injection`, or `harm` with --model 0.6b or 4b", err=True)
+        raise typer.Exit(2)
     last = [-1]
 
     def progress(done: int, total: int) -> None:
         pct = done * 100 // total
         if pct != last[0]:
             last[0] = pct
-            typer.echo(f"\r  {pct}% of {total / 1e6:.0f} MB", nl=False, err=True)
+            typer.echo(f"\r  {pct}% of {total / 1e6:,.0f} MB", nl=False, err=True)
 
-    try:
-        path = guard.download(progress)
-    except (guard.GuardError, OSError) as e:
-        typer.echo(f"\nkeepmum guard setup: {e}", err=True)
-        raise typer.Exit(1)
-    guard.accept(caller("keepmum guard setup"))
-    AuditLog().append("guard-model", action="installed", model=f"{guard.REPO}@{guard.REVISION}", licence=guard.LICENCE,
-                      by=caller("keepmum guard setup"))
+    if check == "injection":
+        typer.echo(guard.TERMS + "\n", err=True)
+        if not accept_noncommercial:
+            if not sys.stdin.isatty():
+                typer.echo("keepmum guard setup: confirm with --accept-noncommercial when not run in a terminal", err=True)
+                raise typer.Exit(2)
+            if not typer.confirm("Is your use of the injection check non-commercial?", default=False, err=True):
+                typer.echo("Not set up. keepmum works as before without it.", err=True)
+                raise typer.Exit(1)
+        try:
+            path = guard.download(progress)
+        except (guard.GuardError, OSError) as e:
+            typer.echo(f"\nkeepmum guard setup: {e}", err=True)
+            raise typer.Exit(1)
+        guard.accept(caller("keepmum guard setup injection"))
+        AuditLog().append("guard-model", action="installed", model=f"{guard.REPO}@{guard.REVISION}", licence=guard.LICENCE,
+                          by=caller("keepmum guard setup injection"))
+    else:
+        repo, commit, file, *_ = harm.MODELS[model]
+        typer.echo(f"Qwen3Guard-Gen {model} (Apache-2.0, Qwen team), {file} from {repo}", err=True)
+        try:
+            path = harm.download(model, progress)
+        except (harm.HarmError, OSError) as e:
+            typer.echo(f"\nkeepmum guard setup: {e}", err=True)
+            raise typer.Exit(1)
+        AuditLog().append("guard-model", action="installed", model=f"{repo}@{commit}/{file}", licence=harm.LICENCE,
+                          by=caller("keepmum guard setup harm"))
+        if model != _config().guard_harm_model:
+            typer.echo(f"\nThe harm check uses {_config().guard_harm_model}: `keepmum guard harm warn --model {model}` switches.",
+                       err=True)
     typer.echo(f"\nmodel ready: {path}", err=True)
-    if guard.runtime_missing():
-        typer.echo(f"{guard.runtime_missing()} is not installed: install keepmum with the guard extra, "
-                   "`uv tool install --editable '.[guard]'`", err=True)
-    typer.echo("Turn it on with `keepmum guard warn` (log and send) or `keepmum guard block` (refuse).", err=True)
+    why = _missing(check, model)
+    if why:
+        typer.echo(why, err=True)
+    typer.echo(f"Turn it on with `keepmum guard {check} warn` (log and send) or `keepmum guard {check} block` (refuse).", err=True)
 
 
-def _guard_mode(mode: str) -> None:
-    from . import guard
+def _set_mode(check: str, mode: str, model: str | None = None) -> None:
     from .config import ConfigError
 
-    if mode != "off":
-        if not guard.installed():
-            typer.echo("keepmum guard: the model is not set up: run `keepmum guard setup` first", err=True)
-            raise typer.Exit(2)
-        if guard.runtime_missing():
-            typer.echo(f"keepmum guard: {guard.runtime_missing()} is not installed: install keepmum with the guard "
-                       "extra, `uv tool install --editable '.[guard]'`", err=True)
-            raise typer.Exit(2)
+    if mode not in ("off", "warn", "block"):
+        typer.echo(f"keepmum guard {check}: use warn, block or off", err=True)
+        raise typer.Exit(2)
+    cfg = _config()
+    size = model or cfg.guard_harm_model
+    if mode != "off" and (why := _missing(check, size)):
+        typer.echo(f"keepmum guard {check}: {why}", err=True)
+        raise typer.Exit(2)
     try:
-        _update_config(_config().path, "guard", "injection", mode, f"keepmum guard {mode}")
+        if check == "harm" and model and model != cfg.guard_harm_model:
+            _update_config(cfg.path, "guard", "harm_model", model, f"keepmum guard harm --model {model}")
+        _update_config(cfg.path, "guard", check, mode, f"keepmum guard {check} {mode}")
     except (ConfigError, OSError) as e:
-        typer.echo(f"keepmum guard: {e}", err=True)
+        typer.echo(f"keepmum guard {check}: {e}", err=True)
         raise typer.Exit(1)
-    typer.echo({"off": "guard: off", "warn": "guard: warn (possible injections are logged; requests still go out)",
-                "block": "guard: block (requests carrying a possible injection are refused)"}[mode], err=True)
+    typer.echo(f"{check}: {_MODE_TEXT[mode]}" + (f", Qwen3Guard-Gen {size}" if check == "harm" and mode != "off" else ""),
+               err=True)
     typer.echo("Running proxies switch on their next request.", err=True)
 
 
-@guard_app.command("warn")
-def guard_warn() -> None:
-    """Check tool results; log a possible injection, count it and audit it, and send the request anyway."""
-    _guard_mode("warn")
+@guard_app.command("injection")
+def guard_injection(mode: str = typer.Argument(..., help="warn, block or off")) -> None:
+    """Check what tools return (web pages, files, MCP replies) for planted instructions."""
+    _set_mode("injection", mode)
 
 
-@guard_app.command("block")
-def guard_block() -> None:
-    """Check tool results; refuse a request that carries a possible injection, and every retry of it."""
-    _guard_mode("block")
+@guard_app.command("harm")
+def guard_harm(mode: str = typer.Argument(..., help="warn, block or off"),
+               model: str = typer.Option(None, "--model", help="0.6b or 4b (default: the current one).")) -> None:
+    """Check what you type for requests a policy may not allow."""
+    from . import harm
 
-
-@guard_app.command("off")
-def guard_off() -> None:
-    """Stop checking tool results (the model stays downloaded)."""
-    _guard_mode("off")
+    if model is not None and model not in harm.SIZES:
+        typer.echo("keepmum guard harm: --model is 0.6b or 4b", err=True)
+        raise typer.Exit(2)
+    _set_mode("harm", mode, model)
 
 
 @guard_app.command("remove")
-def guard_remove() -> None:
-    """Turn the guard off and delete its model and the licence confirmation."""
-    from . import guard
+def guard_remove(check: str = typer.Argument(..., help="injection or harm")) -> None:
+    """Turn a check off and delete its model (for injection, also the licence confirmation)."""
+    from . import guard, harm
     from .audit import AuditLog, caller
 
-    if _config().guard_injection != "off":
-        _guard_mode("off")
-    if guard.remove():
-        AuditLog().append("guard-model", action="removed", model=f"{guard.REPO}@{guard.REVISION}", licence=guard.LICENCE,
-                          by=caller("keepmum guard remove"))
-        typer.echo(f"removed {guard.model_dir()}", err=True)
-    else:
+    if check not in CHECKS:
+        typer.echo("keepmum guard remove: use injection or harm", err=True)
+        raise typer.Exit(2)
+    cfg = _config()
+    if (cfg.guard_injection if check == "injection" else cfg.guard_harm) != "off":
+        _set_mode(check, "off")
+    gone = ([guard.model_dir()] if guard.remove() else []) if check == "injection" else harm.remove()
+    for path in gone:
+        AuditLog().append("guard-model", action="removed", model=path.name, by=caller(f"keepmum guard remove {check}"),
+                          licence=guard.LICENCE if check == "injection" else harm.LICENCE)
+        typer.echo(f"removed {path}", err=True)
+    if not gone:
         typer.echo("nothing to remove", err=True)
 
 

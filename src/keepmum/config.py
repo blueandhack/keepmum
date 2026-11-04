@@ -32,8 +32,10 @@
     [audit]
     keep_days = 90         # how long the audit log keeps entries (`keepmum audit`)
 
-    [guard]                # the prompt-injection guard on tool results (guard.py; `keepmum guard setup` first)
-    injection = "off"      # "warn": log and send; "block": refuse the request
+    [guard]                # optional checks (`keepmum guard setup injection|harm` first)
+    injection = "off"      # tool results, for planted instructions (guard.py): "warn" logs and sends; "block" refuses
+    harm = "off"           # what the user typed, for harmful requests (harm.py): "warn" or "block"
+    harm_model = "0.6b"    # Qwen3Guard size: "0.6b" (about 1.1 GB while in use) or "4b" (about 4.9 GB)
 
     [log]
     level = "info"
@@ -60,7 +62,7 @@ _SCHEMA = {
     "rules": {"mask": list, "off": list},
     "log": {"level": str, "previews": bool, "context": bool},
     "audit": {"keep_days": int},
-    "guard": {"injection": str},
+    "guard": {"injection": str, "harm": str, "harm_model": str},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
 _HOST = re.compile(r"(?i)(?:[a-z0-9_-]+\.)*[a-z0-9-]+\.[a-z]{2,63}|localhost|\d{1,3}(?:\.\d{1,3}){3}")
@@ -112,6 +114,8 @@ class Config:
     log_context: bool = True
     audit_keep_days: int = 90
     guard_injection: str = "off"
+    guard_harm: str = "off"
+    guard_harm_model: str = "0.6b"
     path: Path | None = None
 
 
@@ -230,8 +234,13 @@ def load(path: Path | None = None) -> Config:
     if not 1 <= cfg.audit_keep_days <= 3650:
         raise ConfigError(f"{path}: audit.keep_days must be 1-3650")
     cfg.guard_injection = guard.get("injection", cfg.guard_injection)
-    if cfg.guard_injection not in ("off", "warn", "block"):
-        raise ConfigError(f"{path}: guard.injection must be \"off\", \"warn\" or \"block\"")
+    cfg.guard_harm = guard.get("harm", cfg.guard_harm)
+    for key, value in (("injection", cfg.guard_injection), ("harm", cfg.guard_harm)):
+        if value not in ("off", "warn", "block"):
+            raise ConfigError(f"{path}: guard.{key} must be \"off\", \"warn\" or \"block\"")
+    cfg.guard_harm_model = guard.get("harm_model", cfg.guard_harm_model)
+    if cfg.guard_harm_model not in ("0.6b", "4b"):
+        raise ConfigError(f"{path}: guard.harm_model must be \"0.6b\" or \"4b\"")
     return cfg
 
 

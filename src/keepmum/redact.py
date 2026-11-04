@@ -125,6 +125,10 @@ class Redactor:
         self.tool_results: list[tuple[str | None, str, bool]] = []
         self._tool: str | None = None
         self._in_result = False
+        # The same for the harm check (harm.py): what the user typed, as (None, text, new), without
+        # what agents add to a user turn. `_role` is the role of the message being masked.
+        self.user_texts: list[tuple[None, str, bool]] = []
+        self._role: str | None = None
 
     def _detect(self, text: str) -> tuple[tuple[Span, ...], bool]:
         """Detector spans, cached per text: the conversation history is resent every turn.
@@ -166,6 +170,11 @@ class Redactor:
         spans, seen = self._spans(text)
         if self._in_result:
             self.tool_results.append((self._tool, text, not seen))
+        elif self._role == "user":
+            from .harm import typed
+
+            if mine := typed(text):
+                self.user_texts.append((None, mine, not seen))
         if not seen:
             self.fresh += len(spans)
             for s in spans:
@@ -190,6 +199,18 @@ class Redactor:
             pos = s.end
         out.append(text[pos:])
         return "".join(out)
+
+    @contextlib.contextmanager
+    def _as(self, role):
+        before, self._role = self._role, role if isinstance(role, str) else None
+        try:
+            yield
+        finally:
+            self._role = before
+
+    def _in_message(self, m: dict, fn):
+        with self._as(m.get("role")):
+            return fn()
 
     @contextlib.contextmanager
     def _result_of(self, tool: str | None, read: bool = True):
@@ -219,7 +240,7 @@ class Redactor:
         out["system"] = self._with_hint(out.get("system"))
         if isinstance(out.get("messages"), list):
             out["messages"] = [
-                {**m, "content": self._content(m.get("content"))} if isinstance(m, dict) else m
+                {**m, "content": self._in_message(m, lambda m=m: self._content(m.get("content")))} if isinstance(m, dict) else m
                 for m in out["messages"]
             ]
         return out
@@ -240,7 +261,8 @@ class Redactor:
         if isinstance(out.get("requests"), list):
             out["requests"] = [self.redact_gemini_request(r) if isinstance(r, dict) else r for r in out["requests"]]
         if isinstance(out.get("contents"), list):
-            out["contents"] = [self._gemini_content(c) for c in out["contents"]]
+            out["contents"] = [self._in_message(c, lambda c=c: self._gemini_content(c)) if isinstance(c, dict)
+                               else self._gemini_content(c) for c in out["contents"]]
         elif isinstance(out.get("contents"), dict):
             out["contents"] = self._gemini_content(out["contents"])
         if isinstance(out.get("content"), dict):
@@ -323,21 +345,28 @@ class Redactor:
         if kind in RESPONSES_PASS_THROUGH:
             return item
         if kind == "message":
-            content = item.get("content")
-            if isinstance(content, str):
-                return {**item, "content": self.redact_text(content)}
-            if isinstance(content, list):
-                def _part(c):
-                    if not isinstance(c, dict):
-                        return c
-                    if isinstance(c.get("text"), str):
-                        return {**c, "text": self.redact_text(c["text"])}
-                    if isinstance(c.get("refusal"), str):
-                        return {**c, "refusal": self.redact_text(c["refusal"])}
-                    return c
+            with self._as(item.get("role")):
+                return self._responses_message(item)
+        return self._responses_call(item, kind)
 
-                return {**item, "content": [_part(c) for c in content]}
-            return item
+    def _responses_message(self, item):
+        content = item.get("content")
+        if isinstance(content, str):
+            return {**item, "content": self.redact_text(content)}
+        if isinstance(content, list):
+            def _part(c):
+                if not isinstance(c, dict):
+                    return c
+                if isinstance(c.get("text"), str):
+                    return {**c, "text": self.redact_text(c["text"])}
+                if isinstance(c.get("refusal"), str):
+                    return {**c, "refusal": self.redact_text(c["refusal"])}
+                return c
+
+            return {**item, "content": [_part(c) for c in content]}
+        return item
+
+    def _responses_call(self, item, kind):
         out = {**item, "arguments": self._json_string(item["arguments"])} if isinstance(item.get("arguments"), str) else dict(item)
         if kind in ("function_call_output", "custom_tool_call_output"):
             tool = self._calls.get(item.get("call_id"))

@@ -256,7 +256,7 @@ def config_state(cfg) -> dict:
         "gateways": sorted(f"{name} = {url}" for name, url in cfg.gateways.items()),
         "destinations": sorted(f"{rule} = {h}" for rule, hosts in cfg.destinations.items() for h in hosts),
         "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
-        "guard": cfg.guard_injection,
+        "guard": cfg.guard_injection, "harm": cfg.guard_harm, "harm_model": cfg.guard_harm_model,
     }
 
 
@@ -270,7 +270,7 @@ _SETTINGS = {
     "upstream": ("server.upstream", "any"), "gateways": ("gateways", "added"), "destinations": ("destinations", "added"), "previews": ("log.previews", None), "context": ("log.context", None),
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
-_ADDED_LATER = {"context", "gateways", "destinations", "guard"}
+_ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model"}
 _GUARD_RANK = {"off": 0, "warn": 1, "block": 2}
 
 
@@ -290,10 +290,14 @@ def config_changes(old: dict, new: dict) -> list[dict]:
             # observe on weakens; model or pii off weakens; any new upstream is flagged for a look.
             weakens = weak == "any" or (isinstance(weak, bool) and b == weak)
             out.append({"setting": name, "from": a, "to": b, "weakens": weakens})
-    if "guard" in old and old["guard"] != new.get("guard"):
-        # The guard checks less than before: block to warn, or either to off.
-        out.append({"setting": "guard.injection", "from": old["guard"], "to": new.get("guard"),
-                    "weakens": _GUARD_RANK.get(new.get("guard"), 0) < _GUARD_RANK.get(old["guard"], 0)})
+    for key, name in (("guard", "guard.injection"), ("harm", "guard.harm")):
+        if key in old and old[key] != new.get(key):
+            # A check that does less than before: block to warn, or either to off.
+            out.append({"setting": name, "from": old[key], "to": new.get(key),
+                        "weakens": _GUARD_RANK.get(new.get(key), 0) < _GUARD_RANK.get(old[key], 0)})
+    if "harm_model" in old and old["harm_model"] != new.get("harm_model"):
+        out.append({"setting": "guard.harm_model", "from": old["harm_model"], "to": new.get("harm_model"),
+                    "weakens": False})
     if old.get("keep_days") != new.get("keep_days") and "keep_days" in old:
         # A shorter retention removes evidence sooner.
         out.append({"setting": "audit.keep_days", "from": old["keep_days"], "to": new.get("keep_days"),
@@ -461,8 +465,14 @@ def summary(entry: dict) -> str:
         return f"{entry.get('dropped')} entries older than {entry.get('keep_days')} days removed"
     if e == "guard":
         hits = entry.get("hits") or []
-        where = ", ".join(f"{h.get('tool') or 'a tool'} ({h.get('score', 0):.2f})" for h in hits)
-        return (f"{entry.get('client', '?')} -> {entry.get('provider', '?')}; possible prompt injection in {where}; "
+        if entry.get("check") == "harm":
+            cats = sorted({c for h in hits for c in h.get("categories") or []})
+            what = f"harm check flagged what the user typed ({', '.join(cats) or 'no category'}, " \
+                   f"{max(h.get('score', 0) for h in hits):.2f})"
+        else:
+            what = "possible prompt injection in " + ", ".join(
+                f"{h.get('source') or h.get('tool') or 'a tool'} ({h.get('score', 0):.2f})" for h in hits)
+        return (f"{entry.get('client', '?')} -> {entry.get('provider', '?')}; {what}; "
                 + ("request not sent" if entry.get("action") == "blocked" else "sent with a warning"))
     if e == "guard-model":
         return f"guard model {entry.get('action')}: {entry.get('model')} ({entry.get('licence')})"

@@ -150,21 +150,36 @@ keepmum rules list                                                   # and `keep
 
 Personal data is off by default: only secrets and your own rules are masked until you turn it on (`keepmum pii on`, or Settings › Masking › Personal data in the Mac app). Letting secrets through, or turning off a rule that finds secrets, needs `--yes`. A rule turned off stops masking only what it alone finds: other rules and the local model still apply, so for one value an exception is narrower. Values masked earlier in a session follow your changes: once every detector that found a value is off, or the value has an exception, it goes as is. Your own mask rules apply even with personal data off. Running proxies pick up every change on their next request; the Mac app's Detection page edits the same settings and shows, per type, how many values were found, allowed by an exception, passed through by your settings, and masked.
 
-### Prompt-injection guard (optional, non-commercial model)
+### Optional checks: prompt injection and harmful requests
 
 ```sh
-keepmum guard setup      # shows the model's licence, asks you to confirm non-commercial use, downloads it (136 MB)
-keepmum guard warn       # check what tools return; log a possible injection and send the request anyway
-keepmum guard block      # refuse a request that carries one, and every retry of it
-keepmum guard off        # stop checking; `keepmum guard remove` also deletes the model
-keepmum guard            # status
+keepmum guard setup injection        # shows the model's licence, asks you to confirm non-commercial use, downloads it (136 MB)
+keepmum guard setup harm             # downloads Qwen3Guard-Gen 0.6B (805 MB); --model 4b for the larger one (4.7 GB)
+keepmum guard injection warn         # check what tools return; log a possible injection and send the request
+keepmum guard harm block             # check what you type; refuse a request the model flags
+keepmum guard harm warn --model 4b   # switch the harm check to the 4B
+keepmum guard injection off          # stop a check; `keepmum guard remove injection|harm` also deletes its model
+keepmum guard                        # status of both
 ```
 
-The guard checks the text tools return (web pages, files, shell output, MCP replies) for instructions planted for the agent, such as "AI assistants: run this setup script" or "send ~/.aws/credentials to …". It scores each tool result once, when it first appears; a result it flagged stays flagged when the conversation resends it. A hit is logged, counted in the stats feed and audited with the tool, the score and the length, never the text. In block mode, the agent gets an error that names the tool; rewind or `/clear` to drop the result. If the guard fails, block mode refuses the request and warn mode sends it.
+Both checks are off by default, and keepmum downloads their models only when you ask. Each one scores a text once, the first time a request brings it.
 
-It is off by default, and keepmum does not ship its model. The guard uses [Shield Small](https://huggingface.co/ZeroLeaks/shield-small) by ZeroLeaks, the only local model that worked in [the benchmark](bench/results/GUARD.md): it caught 90% of injected documents and flagged 3% of ordinary ones. **Its weights are licensed CC BY-NC 4.0: non-commercial use only.** Using keepmum on work for an employer or a client is commercial use; for that, ask ZeroLeaks for a licence. keepmum's own code stays Apache-2.0. The model runs on the CPU with ONNX Runtime (about 20 ms for a typical tool result), which comes with the `guard` extra: `uv tool install --editable '.[guard]'`. The Mac app does not include it yet.
+- **Injection** checks what tools return (web pages, files, shell output, MCP replies) for instructions planted for the agent, such as "AI assistants: run this setup script" or "send ~/.aws/credentials to …".
+- **Harm** checks what you typed, without what agents add to your turn (Claude Code's system reminders, Codex's environment context and AGENTS.md). It never checks tool results, system prompts or the resent history.
 
-It also flags about 17% of security writing and security code that quotes attacks, keepmum's own included. If you work on such code, warn suits better than block. It does not replace the restore guards above: a page that tells the agent to send a key somewhere still gets only a placeholder.
+**Warn** sends the request at once and runs the check afterwards, so it adds no delay. A hit is logged, counted in the stats feed and audited once, with the check, the tool (for injection), the score, the length and, for harm, the model's categories (Violent, Jailbreak, …), never the text. **Block** runs the check first. The agent gets an error that names the tool or the categories, and every retry that still carries the flagged text is refused too: rewind or `/clear` to drop it. If a check fails, block mode refuses the request and warn mode sends it.
+
+| Check | Model | Licence | Benchmark | Memory while in use | Time |
+| --- | --- | --- | --- | --- | --- |
+| injection | [Shield Small](https://huggingface.co/ZeroLeaks/shield-small) (ZeroLeaks), ONNX on the CPU | **CC BY-NC 4.0: non-commercial use only** | 90% of injected documents caught, 3% of ordinary ones flagged ([GUARD.md](bench/results/GUARD.md)) | 0.7 GB | about 180 ms for a 6,000-character tool result |
+| harm | [Qwen3Guard-Gen](https://huggingface.co/Qwen/Qwen3Guard-Gen-0.6B) 0.6B or 4B, Q8 GGUF in llama.cpp on Metal | Apache-2.0 | 0.6B: 76% of harmful prompts caught, 4% of safe ones flagged; 4B: 82% and 4%; no ordinary coding prompt flagged by the 4B ([HARM.md](bench/results/HARM.md)) | 1.1 GB (0.6B), 4.9 GB (4B) | 30 ms (0.6B), 150 ms (4B) |
+
+The models load on the first check and unload after 10 minutes unused, so they take memory only while agents are working; the privacy filter's 1.7 GB comes first. With both checks on and the 0.6B, keepmum needs about 3.5 GB while busy; `keepmum doctor` warns if the 4B is too much for the Mac.
+
+- **Injection's licence:** Shield Small's weights are non-commercial. Using keepmum on work for an employer or a client is commercial use; for that, ask ZeroLeaks for a licence. keepmum's own code stays Apache-2.0. Its runtime, ONNX Runtime, comes with the `guard` extra: `uv tool install --editable '.[guard]'`.
+- **Harm's runtime** is `llama-server` from llama.cpp (`brew install llama.cpp`, or `KEEPMUM_LLAMA_SERVER`). The harm check uses a threshold set on benchmark data, not the model's own verdict, which flagged a quarter of ordinary coding prompts ("kill the process on port 8080").
+- **The Mac app** does not include either runtime yet.
+- **False alarms:** the injection check flags about 17% of security writing and security code that quotes attacks, keepmum's own included, so warn suits such work better than block. Neither check replaces the restore guards above: a page that tells the agent to send a key somewhere still gets only a placeholder.
 
 ### Leave a project out
 
@@ -259,7 +274,9 @@ context = true         # and the text around each, with every masked value in it
 keep_days = 90         # how long the audit log keeps entries (`keepmum audit keep 365`)
 
 [guard]
-injection = "off"      # the prompt-injection guard: "warn" or "block" (`keepmum guard setup` first)
+injection = "off"      # check tool results for prompt injection: "warn" or "block" (`keepmum guard setup injection` first)
+harm = "off"           # check what you type for harmful requests: "warn" or "block" (`keepmum guard setup harm` first)
+harm_model = "0.6b"    # or "4b"
 ```
 
 ## What keepmum stores, and where
@@ -273,13 +290,13 @@ injection = "off"      # the prompt-injection guard: "warn" or "block" (`keepmum
 | Request history for the Activity page: time, endpoint, outcome, counts by type, tool calls' decisions; never values | `~/.config/keepmum/history.jsonl` (0600), last 20,000 requests |
 | Audit log: requests (counts, rules, restore decisions per tool), protection changes, starts and stops; never values | `~/.config/keepmum/audit.jsonl` (0600), with its head in `audit.head.json`; `[audit] keep_days`, 90 by default |
 | Network tools seen: server and tool names, a hash of each tool's definition, kept-call counts per day and type; never values | `~/.config/keepmum/tools.json` (0600), counts for the last 30 days |
-| The guard's model (only after `keepmum guard setup`) and your confirmation of non-commercial use | `~/.local/share/keepmum/guard/shield-small-s15e/`, with `ACCEPTED.json`; `keepmum guard remove` deletes both |
-| Guard hits: tool, score and length; never the text | Process memory (the stats feed, the last 200) and the audit log |
+| The optional checks' models, only after `keepmum guard setup`, and your confirmation of non-commercial use for the injection model | `~/.local/share/keepmum/guard/` (`shield-small-s15e/` with `ACCEPTED.json`, `qwen3guard/`); `keepmum guard remove injection|harm` deletes them |
+| Check hits: check, tool, score, length and categories; never the text | Process memory (the stats feed, the last 200) and the audit log |
 | Masked values, and which tool servers returned each | Process memory only, cleared on exit |
 | The Logs page: per masked value its type, rule and length, and the first and last character of values of 8 or more characters | Process memory only (the last 2,000), cleared on exit; `[log] previews = false` keeps types and rules only |
 | The Logs page's context: up to 80 characters each side of a masked value, with every masked value and placeholder in it shown as its type (`‹SECRET›`), as the provider received it | Process memory only, with the findings; `[log] context = false` turns it off and forgets what was kept |
 
-keepmum makes no network calls except the request it forwards, `keepmum setup`'s one model download, and `keepmum guard setup`'s if you run it. There is no telemetry and no update check.
+keepmum makes no network calls except the request it forwards, `keepmum setup`'s one model download, and `keepmum guard setup`'s downloads if you run them. There is no telemetry and no update check.
 
 ## Mac app
 

@@ -47,9 +47,24 @@ Qwen3Guard is scored as P(Unsafe) + P(Controversial). P(Unsafe) alone at 0.5 giv
 - ToxicChat is licensed for non-commercial use: it is used here for evaluation only and not redistributed.
 - Peak RSS undercounts for models on MPS, because the weights live in GPU memory. In bf16, the 4B needs about 8 GB and the 0.6B about 1.2 GB.
 
+## Quantized, as keepmum runs it (Q8 and Q4_K_M GGUFs in llama.cpp)
+
+Same data and protocol, with llama-server (llama.cpp, Metal) instead of PyTorch: [`harm-20261104-004512.md`](harm-20261104-004512.md). That run's memory column includes llama-server's default 8 GB prompt cache (`--cache-ram`), which keepmum turns off; the memory below was measured with it off, after 300 prompts.
+
+| Model | AUC | Recall | Safe flagged | XSTest safe flagged | Coding prompts flagged (all 44) | p50 | Memory |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **Qwen3Guard-Gen 0.6B Q8_0** | 0.95 | 0.76 | 0.04 | 0.05 | 1 | 28 ms | **1.1 GB** |
+| Qwen3Guard-Gen 0.6B Q4_K_M | 0.95 | 0.72 | 0.04 | 0.05 | 1 | 29 ms | |
+| **Qwen3Guard-Gen 4B Q8_0** | 0.96 | 0.82 | 0.04 | 0.03 | 0 | 150 ms | **4.9 GB** |
+| Qwen3Guard-Gen 4B Q4_K_M | 0.96 | 0.82 | 0.03 | 0.02 | 0 | 157 ms | |
+
+Q8 matches bf16 at both sizes, to the second decimal. Q4_K_M costs the 0.6B four points of recall and costs the 4B nothing, but at the 4B's size it saves 2 GB of download and almost nothing in speed. keepmum uses Q8_0 for both, with each one's own dev threshold: 0.970 (0.6B) and 0.981 (4B).
+
 ## Verdict
 
 1. **A harm check is feasible as an opt-in feature, and its model can ship.** Use Qwen3Guard-Gen 0.6B by default (fast, small) with the 4B as the accurate option, both Apache-2.0. Use the calibrated threshold (about 0.97–0.98 on P(Unsafe) + P(Controversial)), never the model's own verdict.
 2. **Scan only what the user typed**, never tool results, system prompts or the resent history. That is where an acceptable-use policy applies, and it keeps the cost to one short text per turn.
 3. **Default to warn, not block.** Even the best model flags about 3% of safe-but-scary prompts, and providers already refuse truly harmful requests. A local check adds most value as a record (audit log, dashboard) for teams that need one.
-4. **Runtime:** Qwen3Guard is a Qwen3 decoder, so it runs as a quantized GGUF in llama.cpp, the same ggml family as pf-serve, with no PyTorch. Next step if this goes ahead: benchmark a q8 GGUF against these bf16 numbers, then add a `[guard] harm = "off" | "warn" | "block"` setting alongside `injection`.
+4. **Runtime:** Qwen3Guard is a Qwen3 decoder, so it runs as a quantized GGUF in llama.cpp, the same ggml family as pf-serve, with no PyTorch. The Q8 GGUFs keep the bf16 numbers (above).
+
+*Nov 4, 2026, later:* built as `keepmum guard harm warn|block` (`[guard] harm`, `harm_model`), with the Q8_0 GGUFs at pinned commits and these thresholds. See the README's "Optional checks".

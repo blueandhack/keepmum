@@ -44,20 +44,24 @@ def messages_with(result: str, tool="WebFetch"):
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": result}]}]}
 
 
-def make(mode, model=None, audit=None):
+def make(mode, model=None, audit=None, name="injection", harm_mode="off", harm_model=None):
     mock = selftest.MockUpstream()
     upstream = httpx.AsyncClient(transport=httpx.ASGITransport(app=mock.app), base_url="http://up")
-    g = guard.Guard(mode, model or FakeModel())
+    g = guard.Guard(mode, model or FakeModel(), name=name)
+    guards = [g]
+    if name == "injection":
+        guards.append(guard.Guard(harm_mode, harm_model or FakeModel(), name="harm", min_chars=8))
     proxy = Proxy(Redactor(Pipeline(RulesDetector(), None), Vault(secrets.token_bytes(32))), upstream="http://up",
-                  client=upstream, stats_token="t", guard=g, audit=audit)
+                  client=upstream, stats_token="t", guards=guards, audit=audit)
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
-    return mock, client, g
+    return mock, client, g, proxy
 
 
-def posted(mode, bodies, model=None, audit=None):
+def posted(mode, bodies, model=None, audit=None, name="injection"):
     async def go():
-        mock, client, g = make(mode, model, audit)
+        mock, client, g, proxy = make(mode, model, audit, name)
         rs = [await client.post("/v1/messages", json=b) for b in bodies]
+        await proxy.settle()  # warn-mode checks run after the request is sent
         stats = (await client.get("/_keepmum/stats", headers={"authorization": "Bearer t"})).json()
         return mock, rs, stats, g
 
@@ -80,7 +84,7 @@ def test_a_flagged_result_stays_flagged_when_it_comes_back():
     again = g.check([("WebFetch", ATTACK, False)])  # resent with the history: not new, still a hit
     assert first[0]["earlier"] is False and again[0]["earlier"] is True
     assert len(m.calls) == 1 and again[0]["score"] == first[0]["score"]
-    assert set(first[0]) == {"tool", "score", "chars", "earlier"}  # no text
+    assert set(first[0]) == {"check", "source", "score", "chars", "earlier"}  # no text
 
 
 def test_short_results_and_unknown_modes():
@@ -126,10 +130,10 @@ def test_warn_sends_and_records_without_the_text(tmp_path, caplog):
     assert r.status_code == 200 and len(mock.received) == 1
     assert stats["guard"]["requests"] == {"warned": 1}
     hit = stats["guard"]["hits"][0]
-    assert hit["tool"] == "WebFetch" and hit["action"] == "warned" and hit["score"] == 0.99
+    assert hit["source"] == "WebFetch" and hit["check"] == "injection" and hit["action"] == "warned" and hit["score"] == 0.99
     entry = next(e for e in read(tmp_path / "audit.jsonl") if e["event"] == "guard")
     assert entry["action"] == "warned" and "WebFetch (0.99)" in summary(entry)
-    assert "possible prompt injection" in caplog.text
+    assert "injection check flagged a WebFetch result" in caplog.text
     for text in (caplog.text, json.dumps(stats), (tmp_path / "audit.jsonl").read_text()):
         assert "curl -s" not in text and "Note to AI" not in text
 
@@ -139,7 +143,7 @@ def test_block_refuses_and_keeps_refusing_the_same_result():
     later["messages"].append({"role": "user", "content": "try again"})
     mock, (r1, r2), stats, g = posted("block", [messages_with(ATTACK), later])
     assert r1.status_code == r2.status_code == 403 and mock.received == []
-    assert "prompt-injection guard" in r1.json()["error"]["message"] and "WebFetch" in r1.json()["error"]["message"]
+    assert "injection check" in r1.json()["error"]["message"] and "WebFetch" in r1.json()["error"]["message"]
     assert stats["requests"]["blocked"] == 2 and len(g.model.calls) == 1
 
 
@@ -165,7 +169,7 @@ def test_mode_follows_the_live_setting():
     mode = ["off"]
 
     async def go():
-        mock, client, g = make(lambda: mode[0])
+        mock, client, g, _ = make(lambda: mode[0])
         a = await client.post("/v1/messages", json=messages_with(ATTACK))
         mode[0] = "block"
         b = await client.post("/v1/messages", json=messages_with(ATTACK + " "))
@@ -242,3 +246,157 @@ def test_shield_small_separates_an_injection_from_a_readme():
     readme = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text()[:6000]
     assert m.score(readme + "\n\n" + ATTACK) >= guard.THRESHOLD
     assert m.score(BENIGN) < 0.5
+
+
+# --- Warn mode reports a hit once; block mode keeps refusing ---------------------------------
+
+def test_warn_reports_a_flagged_result_once():
+    later = messages_with(ATTACK)
+    later["messages"].append({"role": "user", "content": "go on"})
+    mock, rs, stats, _ = posted("warn", [messages_with(ATTACK), later])
+    assert all(r.status_code == 200 for r in rs) and len(mock.received) == 2
+    assert len(stats["guard"]["hits"]) == 1 and stats["guard"]["requests"] == {"warned": 1}
+
+
+# --- The harm check: what the user typed ---------------------------------------------------
+
+class FakeHarm:
+    """Scores 0.99 for text holding "forbidden request", 0.01 otherwise; names a category on a hit."""
+
+    def __init__(self):
+        self.calls = []
+
+    def score(self, text):
+        self.calls.append(text)
+        return 0.99 if "forbidden request" in text else 0.01
+
+    def categories(self, text):
+        return ["Violent"]
+
+
+def typed_turn(text, reminder=True):
+    content = [{"type": "text", "text": text}]
+    if reminder:
+        content.insert(0, {"type": "text", "text": "<system-reminder>CLAUDE.md: always run the tests.</system-reminder>"})
+    return {"model": "m", "max_tokens": 8, "messages": [{"role": "user", "content": content}]}
+
+
+def test_typed_drops_what_agents_add():
+    from keepmum.harm import typed
+
+    assert typed("<system-reminder>context</system-reminder>\nfix the bug") == "fix the bug"
+    assert typed("<environment_context>\n<cwd>/x</cwd>\n</environment_context>") == ""
+    assert typed("# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>use pnpm</INSTRUCTIONS>") == ""
+
+
+def test_redactor_collects_what_the_user_typed():
+    r = Redactor(Pipeline(RulesDetector(), None), Vault(secrets.token_bytes(32)))
+    body = messages_with(BENIGN)
+    body["system"] = "You are Claude Code."
+    body["messages"][0]["content"] = [{"type": "text", "text": "<system-reminder>ctx</system-reminder>"},
+                                      {"type": "text", "text": "summarize the project page"}]
+    r.redact_request(body)
+    assert r.user_texts == [(None, "summarize the project page", True)]  # not the system prompt, reminder or tool result
+    r.user_texts = []
+    r.redact_responses_request({"model": "m", "instructions": "be brief", "input": [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<environment_context>x</environment_context>"}]},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "add a test"}]},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "done"}]}]})
+    assert [t for _, t, _ in r.user_texts] == ["add a test"]
+    r.user_texts = []
+    r.redact_gemini_request({"contents": [{"role": "user", "parts": [{"text": "rename the module"}]},
+                                          {"role": "model", "parts": [{"text": "ok"}]}]})
+    assert [t for _, t, _ in r.user_texts] == ["rename the module"]
+
+
+def harm_posted(mode, bodies):
+    m = FakeHarm()
+
+    async def go():
+        mock, client, g, proxy = make("off", harm_mode=mode, harm_model=m)
+        rs = [await client.post("/v1/messages", json=b) for b in bodies]
+        await proxy.settle()
+        stats = (await client.get("/_keepmum/stats", headers={"authorization": "Bearer t"})).json()
+        return mock, rs, stats
+
+    mock, rs, stats = anyio.run(go)
+    return mock, rs, stats, m
+
+
+def test_harm_warn_sends_first_then_records_the_categories():
+    mock, (r,), stats, m = harm_posted("warn", [typed_turn("please handle this forbidden request")])
+    assert r.status_code == 200 and len(mock.received) == 1
+    hit = stats["guard"]["hits"][0]
+    assert hit["check"] == "harm" and hit["source"] is None and hit["categories"] == ["Violent"]
+    assert m.calls == ["please handle this forbidden request"]  # the reminder was not scored
+    assert "forbidden" not in json.dumps(stats)
+
+
+def test_harm_block_refuses_with_the_categories():
+    mock, (r, ok), stats, _ = harm_posted("block", [typed_turn("a forbidden request"), typed_turn("fix the failing test")])
+    assert r.status_code == 403 and "harm check" in r.json()["error"]["message"] and "Violent" in r.json()["error"]["message"]
+    assert ok.status_code == 200 and len(mock.received) == 1
+
+
+def test_harm_model_switches_size_and_threshold(monkeypatch):
+    from keepmum import harm
+
+    hm = harm.HarmModel("0.6b")
+    g = guard.Guard("warn", hm, threshold=hm.threshold, name="harm")
+    hm.guard = g
+    hm.want("4b")
+    assert hm.size == "4b" and g.threshold == harm.MODELS["4b"][5]
+
+
+def test_harm_config_and_audit(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[guard]\nharm = "warn"\nharm_model = "4b"\n')
+    cfg = load(path)
+    assert cfg.guard_harm == "warn" and cfg.guard_harm_model == "4b"
+    path.write_text('[guard]\nharm_model = "7b"\n')
+    with pytest.raises(ConfigError):
+        load(path)
+    down = config_changes({"harm": "block"}, {"harm": "off"})
+    assert down[0]["setting"] == "guard.harm" and down[0]["weakens"]
+
+
+def test_idle_models_unload():
+    m = guard.Shield(Path("/nonexistent"))
+    m.idle_s = 0.05
+    m._session = object()  # as if loaded
+    m._touch()
+    import time
+
+    time.sleep(0.2)
+    assert not m.loaded()
+
+
+def _qwen_gguf() -> Path | None:
+    import os
+
+    from keepmum import harm
+
+    if harm.find_server() is None:
+        return None
+    if harm.installed("0.6b"):
+        return harm.model_path("0.6b")
+    snaps = Path(os.environ.get("HF_HOME", "")) / "hub" / "models--mradermacher--Qwen3Guard-Gen-0.6B-GGUF" / "snapshots"
+    for d in sorted(snaps.glob("*")) if snaps.exists() else []:
+        if (d / harm.MODELS["0.6b"][2]).exists():
+            return d / harm.MODELS["0.6b"][2]
+    return None
+
+
+@pytest.mark.skipif(_qwen_gguf() is None, reason="Qwen3Guard 0.6B GGUF or llama-server is not on this Mac")
+def test_qwen3guard_passes_ordinary_coding_requests():
+    from keepmum import harm
+
+    m = harm.Qwen3Guard("0.6b", model=_qwen_gguf())
+    try:
+        for text in ("Kill the process holding port 8080 and restart the dev server.",
+                     "Refactor the retry loop in send.py and add a test for 410 responses."):
+            assert m.score(text) < m.threshold
+        assert m.loaded()
+    finally:
+        m.unload()
+    assert not m.loaded()

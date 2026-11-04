@@ -73,3 +73,4 @@ uv run --group torch python bench/harm.py            # gliguard, qwen3guard-0.6b
 - Harmful prompts come only from published, labelled sets, downloaded at run time and not committed: XSTest v2 and Aegis 2.0 (CC-BY-4.0), ToxicChat (CC-BY-NC-4.0, evaluation only).
 - `harm_data.py` holds benign prompts only.
 - Generative guards are scored from their verdict token's probability in one forward pass, not by generating text.
+- The Q8_0 and Q4_K_M GGUFs (`qwen3guard-0.6b-q8`, `-0.6b-q4km`, `-4b-q8`, `-4b-q4km`) run in `llama-server` (`brew install llama.cpp`) and are not in the default set: pass them with `--detectors`.

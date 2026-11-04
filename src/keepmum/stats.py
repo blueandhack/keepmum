@@ -219,7 +219,7 @@ class Stats:
         # The Logs page: what new text held, one entry per masked value. In memory only, never in
         # the history file: a preview is the first and last character of a value.
         self.findings: deque[dict] = deque(maxlen=findings)
-        # The prompt-injection guard (guard.py): tool results it flagged. Tool, score, length; no text.
+        # The guards (guard.py, harm.py): texts they flagged. Check, source, score, length, categories; no text.
         self.guard_hits: deque[dict] = deque(maxlen=recent)
         self.guarded = Counter()  # requests with a hit, by action: warned, blocked
 
@@ -275,9 +275,10 @@ class Stats:
         with self._lock:
             self.guarded[action] += 1
             for h in hits:
-                self.guard_hits.append({"ts": ts, "tool": h.get("tool"), "score": round(h["score"], 3), "chars": h["chars"],
-                                        "earlier": h.get("earlier", False), "action": action,
-                                        "client": client, "provider": provider})
+                self.guard_hits.append({"ts": ts, "check": h.get("check", "injection"), "source": h.get("source"),
+                                        "score": round(h["score"], 3), "chars": h["chars"],
+                                        "categories": h.get("categories"), "earlier": h.get("earlier", False),
+                                        "action": action, "client": client, "provider": provider})
 
     def findings_page(self, limit: int = 2000) -> list[dict]:
         with self._lock:

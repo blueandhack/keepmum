@@ -2,7 +2,7 @@
 
 Off by default, and its model is never bundled. Shield Small (ZeroLeaks, release s15e) is the only
 local model that worked in the benchmark (bench/results/GUARD.md), and its weights are licensed
-CC BY-NC 4.0: non-commercial use only. `keepmum guard setup` shows those terms, asks the user to
+CC BY-NC 4.0: non-commercial use only. `keepmum guard setup injection` shows those terms, asks the user to
 confirm their use is non-commercial, then downloads the weights at a pinned commit and checks every
 file's SHA-256. keepmum's own code stays Apache-2.0; the licence is between the user and ZeroLeaks.
 
@@ -10,8 +10,13 @@ What it scans: the text of tool results (Messages tool_result, Responses functio
 Gemini functionResponse) that a request brings for the first time. Clients resend the whole
 conversation, so text seen before is not scored again; a result once flagged stays flagged.
 
-    warn   the request goes out; the hit is logged, counted in the stats feed and audited
-    block  the request is refused, and so is every later one that still carries the flagged result
+    warn   the request goes out at once, and the check runs after it (no added delay); a hit is
+           logged, counted in the stats feed and audited, once
+    block  the check runs first; the request is refused, and so is every later one that still
+           carries the flagged result
+
+The model loads on the first check and unloads after IDLE_S unused (`Idle`), so it takes memory
+only while agents are working. `Guard` is shared with the harm check (harm.py).
 
 Scores come from 256-token windows (stride 192, at most 32 windows: 28 from the start and 4 from
 the end, as the model card describes); a text gets its highest window. The default threshold, 0.92,
@@ -157,13 +162,42 @@ def remove() -> bool:
     return True
 
 
-class Shield:
-    """Shield Small on ONNX Runtime (CPU). Loaded on first use; calls are serialized."""
+IDLE_S = 600.0  # a model unused this long is unloaded, and loads again on the next check
+
+
+class Idle:
+    """Unloads a model after IDLE_S without use, so a guard costs memory only while agents are
+    working. A daemon thread checks once a minute; `unload()` is the model's own."""
+
+    idle_s = IDLE_S
+
+    def _touch(self) -> None:
+        self._used = time.monotonic()
+        if getattr(self, "_reaper", None) is None:
+            self._reaper = threading.Thread(target=self._reap, name=f"{type(self).__name__}-idle", daemon=True)
+            self._reaper.start()
+
+    def _reap(self) -> None:
+        while True:
+            time.sleep(min(60.0, self.idle_s))
+            with self._lock:
+                if self.loaded() and time.monotonic() - self._used >= self.idle_s:
+                    self.unload()
+
+
+class Shield(Idle):
+    """Shield Small on ONNX Runtime (CPU). Loaded on first use, unloaded when idle; calls are serialized."""
 
     def __init__(self, path: Path | None = None):
         self.path = path or model_dir()
         self._lock = threading.Lock()
         self._session = None
+
+    def loaded(self) -> bool:
+        return self._session is not None
+
+    def unload(self) -> None:
+        self._session = self._tok = None
 
     def _load(self) -> None:
         import numpy as np
@@ -203,6 +237,7 @@ class Shield:
         with self._lock:
             if self._session is None:
                 self._load()
+            self._touch()
             np = self._np
             best = 0.0
             bodies = self.windows(self._tok.encode(text, add_special_tokens=False).ids)
@@ -224,33 +259,55 @@ def _key(text: str) -> bytes:
 
 
 class Guard:
-    """Decides on the tool results of one request. `mode` is a callable (the live config)."""
+    """One check (`name`: "injection" or "harm") over the texts of one request. `mode` is a callable
+    (the live config). The model has score(text) -> float, and may have categories(text) -> list,
+    asked only for a new hit."""
 
-    def __init__(self, mode, model=None, threshold: float = THRESHOLD, keep: int = 4096):
+    def __init__(self, mode, model=None, threshold: float = THRESHOLD, keep: int = 4096, name: str = "injection",
+                 min_chars: int = MIN_CHARS):
         self._mode = mode if callable(mode) else (lambda: mode)
         self.model = model if model is not None else Shield()
         self.threshold = threshold
-        self._flagged: dict[bytes, float] = {}  # text hash -> score, for results flagged earlier
+        self.name = name
+        self.min_chars = min_chars
+        self._flagged: dict[bytes, dict] = {}  # text hash -> the hit, for texts flagged earlier
         self._keep = keep
+        self._lock = threading.Lock()
 
     @property
     def mode(self) -> str:
         m = self._mode()
         return m if m in MODES else "off"
 
-    def check(self, results: list[tuple[str | None, str, bool]]) -> list[dict]:
-        """Hits among (tool, text, new) tool results: new text is scored, and any text flagged before
-        is a hit again. A hit holds the tool, the score and the text's length, never the text."""
+    def check(self, items: list[tuple[str | None, str, bool]], earlier: bool = True) -> list[dict]:
+        """Hits among (source, text, new) items: new text is scored. A text flagged before is a hit
+        again with `earlier` (block mode refuses every request that still carries it); warn mode
+        leaves it out, so one hit is one warning. A hit holds the check, the source (a tool, or None
+        for what the user typed), the score, the length and any categories, never the text."""
         hits = []
-        for tool, text, new in results:
+        for source, text, new in items:
             key = _key(text)
-            if key in self._flagged:
-                hits.append({"tool": tool, "score": self._flagged[key], "chars": len(text), "earlier": True})
-            elif new and len(text) >= MIN_CHARS:
-                s = self.model.score(text)
-                if s >= self.threshold:
-                    if len(self._flagged) >= self._keep:
-                        self._flagged.pop(next(iter(self._flagged)))
-                    self._flagged[key] = s
-                    hits.append({"tool": tool, "score": s, "chars": len(text), "earlier": False})
+            with self._lock:
+                seen = self._flagged.get(key)
+            if seen is not None:
+                if earlier:
+                    hits.append({**seen, "source": source, "earlier": True})
+                continue
+            if not new or len(text) < self.min_chars:
+                continue
+            s = self.model.score(text)
+            if s < self.threshold:
+                continue
+            hit = {"check": self.name, "source": source, "score": s, "chars": len(text), "earlier": False}
+            categories = getattr(self.model, "categories", None)
+            if categories is not None:
+                try:
+                    hit["categories"] = categories(text)
+                except Exception:  # the verdict stands without its categories
+                    hit["categories"] = []
+            with self._lock:
+                if len(self._flagged) >= self._keep:
+                    self._flagged.pop(next(iter(self._flagged)))
+                self._flagged[key] = hit
+            hits.append(hit)
         return hits

@@ -48,8 +48,20 @@ DETECTORS = {
     "granite-guardian-3b": ("granite", "ibm-granite/granite-guardian-3.2-3b-a800m", "Apache-2.0"),
     "granite-hap-125m": ("cls", "ibm-granite/granite-guardian-hap-125m", "Apache-2.0"),
     "koala-moderation": ("koala", "KoalaAI/Text-Moderation", "OpenRAIL"),
+    # Quantized GGUFs on llama.cpp (llama-server, Metal): the runtime keepmum could use.
+    "qwen3guard-0.6b-q8": ("gguf", "mradermacher/Qwen3Guard-Gen-0.6B-GGUF", "Apache-2.0"),
+    "qwen3guard-0.6b-q4km": ("gguf", "mradermacher/Qwen3Guard-Gen-0.6B-GGUF", "Apache-2.0"),
+    "qwen3guard-4b-q8": ("gguf", "mradermacher/Qwen3Guard-Gen-4B-GGUF", "Apache-2.0"),
+    "qwen3guard-4b-q4km": ("gguf", "mradermacher/Qwen3Guard-Gen-4B-GGUF", "Apache-2.0"),
 }
-DEFAULT = ",".join(DETECTORS)
+# GGUF detectors: (file in the repo, the official repo whose chat template formats the prompt).
+GGUF = {
+    "qwen3guard-0.6b-q8": ("Qwen3Guard-Gen-0.6B.Q8_0.gguf", "Qwen/Qwen3Guard-Gen-0.6B"),
+    "qwen3guard-0.6b-q4km": ("Qwen3Guard-Gen-0.6B.Q4_K_M.gguf", "Qwen/Qwen3Guard-Gen-0.6B"),
+    "qwen3guard-4b-q8": ("Qwen3Guard-Gen-4B.Q8_0.gguf", "Qwen/Qwen3Guard-Gen-4B"),
+    "qwen3guard-4b-q4km": ("Qwen3Guard-Gen-4B.Q4_K_M.gguf", "Qwen/Qwen3Guard-Gen-4B"),
+}
+DEFAULT = ",".join(n for n in DETECTORS if n not in GGUF)  # GGUFs: --detectors
 GLIGUARD_TOXICITY = ["violence_and_weapons", "non_violent_crime", "sexual_content", "hate_and_discrimination",
                      "self_harm_and_suicide", "pii_exposure", "misinformation", "copyright_violation", "child_safety",
                      "political_manipulation", "unethical_conduct", "regulated_advice", "privacy_violation", "other"]
@@ -178,8 +190,80 @@ class GLiGuard:
         return max(unsafe, tox)
 
 
+class LlamaServerGuard:
+    """Qwen3Guard as a GGUF in llama-server (Metal): one completion token after "Safety:", read from
+    the server's top next-token probabilities. The prompt is the official chat template."""
+
+    def __init__(self, repo, name):
+        import shutil
+        import socket
+        import urllib.request
+
+        from huggingface_hub import hf_hub_download
+        from transformers import AutoTokenizer
+
+        file, template = GGUF[name]
+        server = shutil.which("llama-server")
+        if not server:
+            raise RuntimeError("llama-server is not installed (brew install llama.cpp)")
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            self.port = sock.getsockname()[1]
+        self.url = f"http://127.0.0.1:{self.port}"
+        self.tok = AutoTokenizer.from_pretrained(template)
+        self.proc = subprocess.Popen([server, "-m", hf_hub_download(repo, file), "--host", "127.0.0.1", "--port", str(self.port),
+                                      "-ngl", "99", "-c", "2048", "--parallel", "1", "--cache-ram", "0"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        import atexit
+
+        atexit.register(self.proc.terminate)
+        for _ in range(600):
+            try:
+                if urllib.request.urlopen(self.url + "/health", timeout=1).status == 200:
+                    break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            raise RuntimeError("llama-server did not start")
+        self.device = "metal (llama.cpp)"
+        tokenize = lambda w: self._post("/tokenize", {"content": w})["tokens"][0]
+        self.verdicts = {"safe": tokenize(" Safe"), "unsafe": tokenize(" Unsafe"), "controversial": tokenize(" Controversial")}
+        special = self._post("/tokenize", {"content": "<|im_start|>", "parse_special": True})["tokens"]
+        if len(special) != 1:
+            raise RuntimeError("llama-server does not parse the chat template's special tokens")
+        self.parts = {}
+
+    def _post(self, path, body):
+        import urllib.request
+
+        req = urllib.request.Request(self.url + path, data=json.dumps(body).encode(), headers={"content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read())
+
+    def score(self, text):
+        import math
+
+        prompt = self.tok.apply_chat_template([{"role": "user", "content": text}], tokenize=False) + "Safety:"
+        r = self._post("/completion", {"prompt": prompt, "n_predict": 1, "n_probs": 20, "temperature": 0,
+                                       "cache_prompt": False, "samplers": []})
+        top = r["completion_probabilities"][0]
+        probs = {t["id"]: (math.exp(t["logprob"]) if "logprob" in t else t["prob"])
+                 for t in top.get("top_logprobs") or top.get("top_probs") or []}
+        mass = {k: probs.get(i, 0.0) for k, i in self.verdicts.items()}
+        total = sum(mass.values()) or 1.0
+        mass = {k: v / total for k, v in mass.items()}
+        self.parts = {"unsafe": mass["unsafe"], "controversial": mass["controversial"]}
+        return mass["unsafe"] + mass["controversial"]
+
+    def rss_mb(self):
+        out = subprocess.run(["ps", "-o", "rss=", "-p", str(self.proc.pid)], capture_output=True, text=True).stdout.strip()
+        return int(out or 0) / 1024
+
+
 def make(name):
     kind, repo, _ = DETECTORS[name]
+    if kind == "gguf":
+        return LlamaServerGuard(repo, name)
     if kind == "gliner2":
         return GLiGuard(repo)
     if kind in ("qwen", "granite"):
@@ -201,8 +285,11 @@ def worker(name: str, out: Path) -> None:
         s = det.score(r["text"])
         scores[r["id"]] = {"score": s, "ms": (time.perf_counter() - t) * 1000,
                            **({"parts": dict(det.parts)} if getattr(det, "parts", None) else {})}
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20
+    if hasattr(det, "rss_mb"):  # the model lives in the llama-server process
+        rss = det.rss_mb()
     out.write_text(json.dumps({"detector": name, "device": getattr(det, "device", "cpu"), "load_s": load_s,
-                               "max_rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20, "scores": scores}))
+                               "max_rss_mb": rss, "scores": scores}))
 
 
 # --- Evaluation -----------------------------------------------------------------------------
@@ -321,6 +408,7 @@ def main():
     ap.add_argument("--detectors", default=DEFAULT, help=f"comma-separated, from: {', '.join(DETECTORS)}")
     ap.add_argument("--out", type=Path, default=RESULTS)
     ap.add_argument("--rescore", type=Path, help="re-render a harm-*.json from its saved scores")
+    ap.add_argument("--merge", type=Path, nargs="*", help="with --rescore: add the runs of these harm-*.json files")
     ap.add_argument("--worker", help=argparse.SUPPRESS)
     ap.add_argument("--worker-out", type=Path, help=argparse.SUPPRESS)
     a = ap.parse_args()
@@ -330,6 +418,8 @@ def main():
     recs = load_all()
     if a.rescore:
         saved = json.loads(a.rescore.read_text())
+        for extra in a.merge or []:
+            saved["runs"] += json.loads(extra.read_text())["runs"]
         saved["summaries"] = [summarize(run, recs) for run in saved["runs"]]
         a.rescore.write_text(json.dumps(saved, indent=1))
         a.rescore.with_suffix(".md").write_text(render(saved["summaries"], recs, saved["env"]))

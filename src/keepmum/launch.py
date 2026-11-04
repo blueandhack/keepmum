@@ -53,7 +53,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
                                 allow_patterns=cfg.allow_patterns, pass_types=cfg.pass_types, mask_rules=cfg.mask_rules,
                                 off_rules=cfg.off_rules)
     info = {"mode": mode, "pii": pii, "detector": pipeline.name, "version": __version__, "apis": ["messages", "responses", "gemini"],
-            "guard": cfg.guard_injection}
+            "guard": {"injection": cfg.guard_injection, "harm": cfg.guard_harm, "harm_model": cfg.guard_harm_model}}
     from .stats import History, Stats
 
     from .audit import AuditLog
@@ -73,7 +73,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
         if not fixed_pii:
             info["pii"] = new.pii
         info["detector"] = pipeline.name
-        info["guard"] = new.guard_injection
+        info["guard"] = {"injection": new.guard_injection, "harm": new.guard_harm, "harm_model": new.guard_harm_model}
+        harm_model.want(new.guard_harm_model)
         proxy.policy = new.restore
         proxy.gateways = {**new.gateways, **(gateways or {})}
         proxy.destinations = new.destinations
@@ -82,14 +83,19 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
 
     observe = LiveConfig(cfg.path, cfg, on_change=apply)
     from .guard import Guard
+    from .harm import HarmModel
 
-    # Its model loads on the first tool result it scores; the mode follows the config file.
-    guard = Guard(lambda: observe.config.guard_injection)
+    # Models load on their first check and unload when idle; modes follow the config file.
+    injection = Guard(lambda: observe.config.guard_injection, name="injection")
+    harm_model = HarmModel(cfg.guard_harm_model)
+    harm = Guard(lambda: observe.config.guard_harm, harm_model, threshold=harm_model.threshold, name="harm",
+                 min_chars=8)
+    harm_model.guard = harm
     history = History()
     proxy = Proxy(Redactor(pipeline, Vault()), upstream=upstream or cfg.upstream, policy=cfg.restore,
                   stats=Stats(history=history), stats_token=stats_token(), info=info, observe=observe,
                   previews=lambda: observe.config.log_previews,
-                  context=lambda: observe.config.log_context, audit=audit, tools=ToolRegistry(), guard=guard)
+                  context=lambda: observe.config.log_context, audit=audit, tools=ToolRegistry(), guards=[injection, harm])
     proxy.gateways = {**cfg.gateways, **(gateways or {})}
     proxy.destinations = cfg.destinations
     switch = ModelSwitch(pipeline, proxy._scan_lock)

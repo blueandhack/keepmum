@@ -49,7 +49,7 @@ The test set is small (48 injected and 61 benign documents in holdout), hand-wri
 
 ## Verdict
 
-*Nov 3, 2026, later:* keepmum now offers Shield Small as an opt-in download (`keepmum guard setup`): the licence is shown and non-commercial use confirmed first, the weights are pinned and checked, and the guard defaults to off. See the README's "Prompt-injection guard".
+*Nov 3, 2026, later:* keepmum now offers Shield Small as an opt-in download (`keepmum guard setup injection`): the licence is shown and non-commercial use confirmed first, the weights are pinned and checked, and the guard defaults to off. See the README's "Optional checks".
 
 1. **Do not ship a blocking guard on a classifier now.** The only model accurate enough to block on cannot be redistributed. The best Apache model misses six of ten injected documents and nearly all exfiltration and tool-call attacks, which are the ones keepmum cares about.
 2. **Keep the deterministic defense as the primary one.** keepmum's restore guards (web fetch, web search and shell commands to unknown hosts keep placeholders) stop the outcome an injection is after, sending a secret out, whether or not the injection is detected. A classifier would only ever be an early warning on top.
