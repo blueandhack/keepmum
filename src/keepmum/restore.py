@@ -255,7 +255,7 @@ def _wrong_destinations(name: str, value, found: Counter, vault: Vault, policy: 
             extra = getattr(policy, "destinations", None) or {}
             rules = sorted(r for r in (s.removeprefix("rules:") for s in sources) if r in ISSUERS or r in extra)
             log.warning("%s: kept a placeholder for a value found by %s: the command sends it to %s, a host its "
-                        "issuer does not use (config [destinations] adds hosts)", name, ", ".join(rules),
+                        "issuer does not use (`keepmum destinations add` adds hosts)", name, ", ".join(rules),
                         ", ".join(shown(h) for h in bad))
     return wrong
 

@@ -189,12 +189,14 @@ The user experience is one command, `keepmum claude` or `keepmum codex`, or the 
 | `keepmum model on\|off` | The rules and the local model, or the rules alone. |
 | `keepmum pii on\|off` | Mask personal data too, or only secrets and your own rules (the default). |
 | `keepmum types` / `keepmum rules` | What gets masked: types passed through, your own mask rules, exceptions, built-in rules turned off. |
+| `keepmum destinations [add\|remove]` | Hosts a shell command may send a rule's tokens to, besides its issuer's own. Adding needs `--yes`. |
+| `keepmum log previews\|context on\|off` | What the app's Logs page may show about masked values (memory only). |
 | `keepmum exclude` / `keepmum include` | Lets one project's Claude Code skip keepmum. |
 | `keepmum status` | Setup, protection and settings as JSON, for the Mac app. |
-| `keepmum audit list\|verify\|head\|export` | The tamper-evident audit log: requests, protection changes, starts and stops. |
+| `keepmum audit list\|verify\|head\|export\|keep` | The tamper-evident audit log: requests, protection changes, starts and stops. |
 | `keepmum scan <file or ->` | Prints findings with values masked; exits 1 if anything is found. Usable as a pre-commit hook. |
 | `keepmum setup` | Downloads the Privacy Filter model once and checks its pinned SHA-256. |
-| `keepmum doctor` | Checks macOS version, Apple silicon, pf-serve and the model (with a canary), the install salt, protection, routes around the proxy, port free. |
+| `keepmum doctor [--json]` | Checks macOS version, Apple silicon, pf-serve and the model (with a canary), the install salt, protection, routes around the proxy, port free. |
 | `keepmum selftest` | Sends a synthetic canary secret through the proxy to a local mock upstream and fails unless it arrives redacted. |
 
 **Config** (`~/.config/keepmum/config.toml`, all optional; unknown keys and bad values are errors)

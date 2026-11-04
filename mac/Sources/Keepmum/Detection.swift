@@ -6,6 +6,7 @@ struct DetectionPage: View {
     var store: StatsStore
     var engine: Engine
     @Environment(\.isSnapshot) private var isSnapshot
+    @State private var showAllRules = false
 
     var body: some View {
         if isSnapshot {
@@ -13,6 +14,7 @@ struct DetectionPage: View {
         } else {
             // Taller than the window once a notice shows at the top.
             ScrollView { content.padding(.bottom, Space.xl) }
+                .sheet(isPresented: $showAllRules) { AllRulesSheet(engine: engine) }
         }
     }
 
@@ -30,6 +32,10 @@ struct DetectionPage: View {
                     }
                     .fixedSize(horizontal: false, vertical: true)
                     Card(title: "Top rules", subtitle: "Masked values per rule") {
+                        if engine.isBundled {
+                            PillButton(title: "All rules…") { showAllRules = true }
+                        }
+                    } content: {
                         RuleList(rules: d.rules, engine: engine)
                     }
                 }

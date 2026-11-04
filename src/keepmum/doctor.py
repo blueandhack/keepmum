@@ -18,7 +18,34 @@ def _check(results, status, text):
     results.append((status, text))
 
 
-def run() -> int:
+def run(as_json: bool = False) -> int:
+    r = checks()
+    failed = sum(1 for s, _ in r if s == FAIL)
+    if as_json:
+        names = {OK: "ok", WARN: "warn", FAIL: "fail"}
+        print(json.dumps({"checks": [{"status": names[s], "text": t} for s, t in r], "failed": failed}))
+    else:
+        for status, text in r:
+            print(f"  {status} {text}")
+        print("all checks passed" if not failed else f"{failed} check(s) failed")
+    return 1 if failed else 0
+
+
+def _find(name: str) -> str | None:
+    """On PATH, or where installers put it: the Mac app runs this with launchd's short PATH."""
+    found = shutil.which(name)
+    if found:
+        return found
+    home = Path.home()
+    for d in (home / ".local/bin", home / ".claude/local", Path("/opt/homebrew/bin"), Path("/usr/local/bin"),
+              home / ".npm-global/bin", home / ".bun/bin", home / ".opencode/bin"):
+        if os.access(d / name, os.X_OK):
+            return str(d / name)
+    return None
+
+
+def checks() -> list[tuple[str, str]]:
+    """Every check, in order: (OK, WARN or FAIL, what was found)."""
     from . import launch
     from .config import ConfigError, load
 
@@ -93,14 +120,14 @@ def run() -> int:
     else:
         _check(r, OK, "audit log not started yet (keepmum starts it on first use)")
 
-    claude = shutil.which("claude")
+    claude = _find("claude")
     if claude:
         try:
             version = subprocess.run([claude, "--version"], capture_output=True, text=True, timeout=20).stdout.strip()
             _check(r, OK, f"Claude Code {version or 'found'}")
         except (subprocess.SubprocessError, OSError) as e:
             _check(r, WARN, f"`claude --version` failed ({e})")
-    elif any(shutil.which(c) for c in ("codex", "pi", "opencode")):
+    elif any(_find(c) for c in ("codex", "pi", "opencode")):
         _check(r, WARN, "`claude` not on PATH (other coding agents found)")
     else:
         _check(r, FAIL, "`claude` not on PATH")
@@ -138,13 +165,9 @@ def run() -> int:
         running = None
     if running:
         _check(r, OK, f"keepmum running (pid {running.get('pid')}, port {running.get('port')})")
-    _check(r, OK if free else WARN, f"port {port} {'free' if free else 'in use'} for `keepmum serve`")
-
-    for status, text in r:
-        print(f"  {status} {text}")
-    failed = sum(1 for s, _ in r if s == FAIL)
-    print("all checks passed" if not failed else f"{failed} check(s) failed")
-    return 1 if failed else 0
+    if not (running and running.get("port") == port):  # in use by keepmum itself is fine
+        _check(r, OK if free else WARN, f"port {port} {'free' if free else 'in use'} for `keepmum serve`")
+    return r
 
 
 def _tool_warnings(policy: dict) -> list[str]:

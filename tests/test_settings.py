@@ -451,3 +451,83 @@ def test_a_model_failure_is_not_cached():
     with pytest.raises(RuntimeError):
         p.detect("ask Priya Raman")
     assert values("ask Priya Raman", p.detect("ask Priya Raman")) == ["Priya Raman"]
+
+
+# --- Settings the Mac app changes: logs page, shell destinations, audit retention, doctor -----
+
+
+def _cli(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from keepmum.cli import app
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    return lambda *a: CliRunner().invoke(app, list(a)), tmp_path / ".config" / "keepmum" / "config.toml"
+
+
+def test_log_switches_are_saved_and_shown_in_status(tmp_path, monkeypatch):
+    run, path = _cli(tmp_path, monkeypatch)
+    assert run("log", "previews", "off").exit_code == 0 and config_mod.load(path).log_previews is False
+    assert run("log", "context", "off").exit_code == 0 and config_mod.load(path).log_context is False
+    assert run("log", "context", "maybe").exit_code == 2
+    status = json.loads(run("status", "--json").stdout)
+    assert status["previews"] is False and status["context"] is False and status["keep_days"] == 90
+    assert run("log", "previews", "on").exit_code == 0 and config_mod.load(path).log_previews is True
+
+
+def test_destinations_are_added_checked_and_removed(tmp_path, monkeypatch):
+    from keepmum.audit import read
+
+    run, path = _cli(tmp_path, monkeypatch)
+    assert run("destinations", "add", "gitlab-token", "gitlab.corp.example").exit_code == 2  # needs --yes
+    assert config_mod.load(path).destinations == {}
+    assert run("destinations", "add", "person", "x.example", "--yes").exit_code == 2  # not a secret rule
+    assert run("destinations", "add", "gitlab-token", "https://x.example/a", "--yes").exit_code == 2  # a URL, not a host
+    assert run("destinations", "add", "gitlab-token", "GitLab.Corp.Example.", "git2.corp.example", "--yes").exit_code == 0
+    assert config_mod.load(path).destinations == {"gitlab-token": ["git2.corp.example", "gitlab.corp.example"]}
+    assert json.loads(run("status", "--json").stdout)["destinations"] == config_mod.load(path).destinations
+    info = json.loads(run("destinations", "--json").stdout)
+    assert info["issuers"]["github-token"][0] == "github.com" and "gitlab-token" in info["rules"]
+    assert run("destinations", "remove", "gitlab-token", "git2.corp.example").exit_code == 0
+    assert config_mod.load(path).destinations == {"gitlab-token": ["gitlab.corp.example"]}
+    assert run("destinations", "remove", "gitlab-token").exit_code == 0 and config_mod.load(path).destinations == {}
+    assert run("destinations", "remove", "gitlab-token").exit_code == 2
+    entries = [e for e in read(path.parent / "audit.jsonl") if e["event"] == "config"]
+    added = next(e for e in entries if e["by"] == "keepmum destinations add")
+    assert added["weakens"]
+
+
+def test_audit_keep_is_bounded_and_shortening_weakens(tmp_path, monkeypatch):
+    from keepmum.audit import read
+
+    run, path = _cli(tmp_path, monkeypatch)
+    assert run("audit", "keep", "0").exit_code == 2
+    assert run("audit", "keep", "5000").exit_code == 1 and config_mod.load(path).audit_keep_days == 90
+    assert run("audit", "keep", "365").exit_code == 0 and config_mod.load(path).audit_keep_days == 365
+    assert run("audit", "keep", "30").exit_code == 0 and config_mod.load(path).audit_keep_days == 30
+    changes = [e for e in read(path.parent / "audit.jsonl") if e["event"] == "config"]
+    assert not changes[-2]["weakens"] and changes[-1]["weakens"]  # longer is fine, shorter weakens
+
+
+def test_doctor_json_lists_every_check(tmp_path, monkeypatch):
+    from keepmum import doctor
+
+    monkeypatch.setattr(doctor, "checks", lambda: [(doctor.OK, "fine"), (doctor.WARN, "look"), (doctor.FAIL, "broken")])
+    run, _ = _cli(tmp_path, monkeypatch)
+    result = run("doctor", "--json")
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {"checks": [{"status": "ok", "text": "fine"}, {"status": "warn", "text": "look"},
+                                                    {"status": "fail", "text": "broken"}], "failed": 1}
+
+
+def test_doctor_finds_agents_outside_path(tmp_path, monkeypatch):
+    from keepmum import doctor
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")  # what launchd gives the Mac app
+    exe = tmp_path / ".local" / "bin" / "claude"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    assert doctor._find("claude") == str(exe)
+    assert doctor._find("no-such-agent") is None

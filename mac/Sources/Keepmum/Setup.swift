@@ -233,8 +233,8 @@ struct ProtectionRow: View {
         if !names.isEmpty && !engine.serviceRunning { return "They cannot connect until keepmum restarts" }
         if names.count > 1 { return names.joined(separator: ", ") }
         if names.count == 1 { return "Every session goes through keepmum" }
-        if !engine.isBundled { return "Use keepmum claude or keepmum codex in a terminal" }
-        return engine.canScan && engine.serviceRunning ? "Only keepmum claude and keepmum codex are scanned" : "Finish setup to protect every session"
+        if !engine.isBundled { return "Use keepmum claude, codex or gemini in a terminal" }
+        return engine.canScan && engine.serviceRunning ? "Only agents started with keepmum claude, codex or gemini are scanned" : "Finish setup to protect every session"
     }
 
     private var color: Color {

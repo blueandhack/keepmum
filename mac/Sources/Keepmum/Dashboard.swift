@@ -293,7 +293,9 @@ struct SettingsPage: View {
             SetupSection(engine: engine)
             MaskingSection(engine: engine, observing: s.observe == true, modelError: s.detection.modelError)
             ToolsSection(store: store, engine: engine)
+            if engine.isBundled { ShellDestinationsSection(engine: engine) }
             ExclusionsSection(engine: engine)
+            if engine.isBundled { LogsPageSection(engine: engine) }
             FormSection(title: "Display") {
                 FormRow(title: "Appearance") {
                     Segmented(options: Appearance.allCases.map { ($0, $0.title) }, selection: $appearance)
@@ -307,8 +309,9 @@ struct SettingsPage: View {
                     Switch(isOn: store.sampleMode) { store.sampleMode = $0 }.accessibilityLabel("Preview data")
                 }
             }
+            if engine.isBundled { DoctorSection(engine: engine) }
             FormSection(title: "Connection",
-                        footer: "This app reads keepmum's stats feed: counts, types and timestamps, and for the Logs page the first and last character of long masked values (turn that off with [log] previews = false). It never receives a whole value or a placeholder, talks only to 127.0.0.1, and sends no telemetry.") {
+                        footer: "This app reads keepmum's stats feed: counts, types and timestamps, and for the Logs page the first and last character of long masked values (Settings › Logs page turns that off). It never receives a whole value or a placeholder, talks only to 127.0.0.1, and sends no telemetry.") {
                 row("Status") { StatusDot(connection: store.connection, observing: s.observe == true) }
                 row("Endpoint", "127.0.0.1:\(store.port)")
                 row("Mode", s.modeLabel)
@@ -354,7 +357,7 @@ func toolLabel(_ tool: String) -> String {
 func keptHelp(_ t: Snapshot.Event.ToolCall) -> String {
     if t.reason == "destination" {
         return "\(t.tool) kept \(t.values) placeholder(s): the command would have sent a token to a host its issuer "
-            + "does not use. If that host is yours, add it under [destinations] in ~/.config/keepmum/config.toml."
+            + "does not use. If that host is yours, add it in Settings › Shell commands."
     }
     let what = (t.types ?? [:]).sorted { $0.key < $1.key }.map { "\($0.value) \(Theme.label($0.key).lowercased())" }.joined(separator: ", ")
     let why = switch t.reason ?? "" {

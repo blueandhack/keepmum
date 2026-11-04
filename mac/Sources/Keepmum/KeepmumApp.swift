@@ -287,9 +287,13 @@ enum Snapshotter {
         for dark in [false, true] {
             render(MenuPanel(store: store, engine: .preview()), to: "\(dir)/menu-\(dark ? "dark" : "light").png", dark: dark)
             // Settings in full: the window scrolls it, a snapshot cannot.
-            render(Dashboard(store: store, engine: .preview(), page: .settings).frame(width: 1200, height: 2140),
+            render(Dashboard(store: store, engine: .preview(), page: .settings).frame(width: 1200, height: 2700),
                    to: "\(dir)/settings-full-\(dark ? "dark" : "light").png", dark: dark)
         }
+        // Every built-in rule, as the Detection page's sheet shows them.
+        let rulesEngine = Engine.preview()
+        rulesEngine.previewRules()
+        render(AllRulesSheet(engine: rulesEngine).background(Theme.canvas), to: "\(dir)/rules-sheet-light.png", dark: false)
         // A Logs row's details, as its popover shows them.
         for dark in [false, true] {
             render(FindingDetail(finding: Finding.samples[0]).frame(width: 440).background(Theme.canvas),

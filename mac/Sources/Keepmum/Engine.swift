@@ -31,6 +31,33 @@ final class Engine {
         var rules: Rules?
         /// Per coding agent: claude, codex, pi, opencode (`keepmum protect status`).
         var clients: [String: Client]?
+        /// `[destinations]`: hosts you added, per rule, that shell commands may send its tokens to.
+        var destinations: [String: [String]]?
+        /// `[log] previews` and `context`: what the Logs page may show (nil from older engines: on).
+        var previews: Bool?
+        var context: Bool?
+        /// `[audit] keep_days`.
+        var keepDays: Int?
+    }
+
+    /// `keepmum rules builtin --json`: one built-in rule, its type, and whether it is on.
+    struct BuiltinRule: Decodable, Equatable, Identifiable {
+        var id: String
+        var type: String
+        var on: Bool
+    }
+
+    /// `keepmum destinations --json`: each issuer's own hosts, and the rules that find secrets.
+    struct DestinationInfo: Decodable, Equatable {
+        var issuers: [String: [String]]
+        var rules: [String]
+    }
+
+    /// `keepmum doctor --json`.
+    struct DoctorCheck: Decodable, Equatable, Identifiable {
+        var status: String
+        var text: String
+        var id: String { status + text }
     }
 
     struct Client: Decodable, Equatable {
@@ -110,6 +137,13 @@ final class Engine {
     }
 
     private(set) var status: Status?
+    private(set) var builtinRules: [BuiltinRule] = []
+    private(set) var destinationInfo: DestinationInfo?
+    /// The last `keepmum doctor` run, and whether one is under way.
+    private(set) var doctor: [DoctorCheck]?
+    private(set) var doctorRunning = false
+    /// After an export: where it went, or why it failed.
+    var exportNote: String?
     private(set) var audit: [AuditEntry] = []
     private(set) var auditCheck: AuditCheck?
     /// The head saved at the last good check: a rewrite of the log since then fails against it.
@@ -345,7 +379,89 @@ final class Engine {
         await act { try await self.check(["tools", "reviewed"]) }
     }
 
+    // MARK: Shell destinations (`keepmum destinations`), the Logs page (`keepmum log`)
+
+    func loadDestinationInfo() async {
+        if previewing {
+            destinationInfo = .init(issuers: ["github-token": ["github.com", "githubusercontent.com", "ghcr.io"],
+                                              "gitlab-token": ["gitlab.com"]], rules: ["github-token", "gitlab-token", "vault-token"])
+            return
+        }
+        if destinationInfo != nil { return }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        if let out = try? await run(["destinations", "--json"]), out.code == 0 {
+            destinationInfo = try? decoder.decode(DestinationInfo.self, from: Data(out.stdout.utf8))
+        }
+    }
+
+    /// Let shell commands send a rule's tokens to one more host. Weakens protection: the UI asks first.
+    func addDestination(_ rule: String, _ host: String) async {
+        await act { try await self.check(["destinations", "add", rule, host, "--yes"]) }
+    }
+
+    func removeDestination(_ rule: String, _ host: String) async {
+        await act { try await self.check(["destinations", "remove", rule, host]) }
+    }
+
+    /// key: previews or context.
+    func setLog(_ key: String, _ on: Bool) async {
+        await act { try await self.check(["log", key, on ? "on" : "off"]) }
+    }
+
+    // MARK: Built-in rules, the doctor
+
+    func previewRules() {
+        builtinRules = [.init(id: "github-token", type: "SECRET", on: true), .init(id: "gitlab-token", type: "SECRET", on: true),
+                        .init(id: "key-in-prose", type: "SECRET", on: true), .init(id: "email", type: "EMAIL", on: true),
+                        .init(id: "phone-labeled", type: "PHONE", on: false), .init(id: "us-ssn", type: "ACCOUNT", on: true)]
+    }
+
+    func loadBuiltinRules() async {
+        if previewing { previewRules(); return }
+        if let out = try? await run(["rules", "builtin", "--json"]), out.code == 0,
+           let rules = try? JSONDecoder().decode([BuiltinRule].self, from: Data(out.stdout.utf8)) {
+            builtinRules = rules
+        }
+    }
+
+    /// `keepmum doctor`: this Mac, the model (it loads it once to test it), the files, and anything
+    /// that routes an agent around keepmum. Read-only.
+    func runDoctor() async {
+        guard !doctorRunning else { return }
+        doctorRunning = true
+        defer { doctorRunning = false }
+        struct Report: Decodable { var checks: [DoctorCheck] }
+        do {
+            let out = try await run(["doctor", "--json"])
+            if let report = try? JSONDecoder().decode(Report.self, from: Data(out.stdout.utf8)) {
+                doctor = report.checks
+            } else {
+                doctor = [.init(status: "fail", text: out.lastLine)]
+            }
+        } catch {
+            doctor = [.init(status: "fail", text: (error as? EngineError)?.message ?? error.localizedDescription)]
+        }
+    }
+
     // MARK: Audit (`keepmum audit`)
+
+    /// How long the log keeps entries. A shorter time weakens protection: the UI asks first.
+    func setAuditKeep(_ days: Int) async {
+        await act { try await self.check(["audit", "keep", String(days)]) }
+    }
+
+    /// Every entry, requests included: JSONL (as written, so its hashes still check) or CSV.
+    func exportAudit(to url: URL, csv: Bool) async {
+        exportNote = nil
+        do {
+            let out = try await run(["audit", "export", "--since", "3650d", "--format", csv ? "csv" : "jsonl", "--output", url.path])
+            exportNote = out.code == 0 ? out.lastLine.replacingOccurrences(of: url.path, with: url.lastPathComponent).capitalizedFirst
+                                       : out.lastLine
+        } catch {
+            exportNote = (error as? EngineError)?.message ?? error.localizedDescription
+        }
+    }
 
     /// The audit log's events other than requests, and a check of its chain. The head of a good
     /// check is kept, so the next check also catches the whole log being rewritten in between.
@@ -460,7 +576,8 @@ final class Engine {
                           rules: .init(mask: [.init(name: "Employee ID", pattern: "EMP-\\d{6}", type: "ACCOUNT")],
                                        allowStrings: ["sk_test_docs_example"], allowPatterns: ["^demo-[a-z]+$"], off: ["phone-labeled"]),
                           clients: ["codex": .init(installed: true, on: true, via: "http://127.0.0.1:3425/v1"),
-                                    "pi": .init(installed: true, on: false, other: .many(["openai"]), otherUrl: "https://llm.corp.example/v1")])
+                                    "pi": .init(installed: true, on: false, other: .many(["openai"]), otherUrl: "https://llm.corp.example/v1")],
+                          destinations: ["gitlab-token": ["gitlab.corp.example"]], previews: true, context: true, keepDays: 90)
         e.serviceStatus = .enabled
         if around {
             e.status?.protect = .init(settings: "~/.claude/settings.json", on: false, baseUrl: "http://127.0.0.1:3425")
@@ -483,6 +600,13 @@ final class Engine {
             .init(seq: 2911, ts: now - 95_000, event: "config", summary: "rules.off +phone-labeled", weakens: true, by: "keepmum rules off (from Keepmum.app)"),
             .init(seq: 1, ts: now - 400_000, event: "config", summary: "settings recorded; detect.pii false -> true", weakens: false, by: "keepmum serve"),
         ]
+        e.destinationInfo = .init(issuers: ["github-token": ["github.com", "githubusercontent.com", "ghcr.io"],
+                                            "gitlab-token": ["gitlab.com"]], rules: ["github-token", "gitlab-token", "vault-token"])
+        e.doctor = [.init(status: "ok", text: "macOS 15.4 (14 or later)"),
+                    .init(status: "ok", text: "model runs on MTL: Apple M4 and catches a canary"),
+                    .init(status: "ok", text: "audit log intact (4211 entries)"),
+                    .init(status: "warn", text: "~/.config/keepmum/config.toml is readable by other users (mode 644); chmod 600 recommended"),
+                    .init(status: "ok", text: "Claude Code goes through keepmum")]
         e.auditCheck = .init(ok: true, entries: 4211, first: .init(seq: 1, hash: "5c0e…"), last: .init(seq: 4211, hash: "9be41f07c2d8a35e1b60f4c9d27a8e53"), problems: [])
         return e
     }
@@ -491,6 +615,10 @@ final class Engine {
 struct EngineError: Error {
     var message: String
     init(_ message: String) { self.message = message }
+}
+
+extension String {
+    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
 }
 
 private final class LockedData: @unchecked Sendable {

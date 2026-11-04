@@ -7,6 +7,8 @@ import SwiftUI
 struct AuditPage: View {
     var engine: Engine
     @State private var onlyWeakening = false
+    /// A shorter retention, waiting for confirmation.
+    @State private var shortening: Int?
     @Environment(\.isSnapshot) private var isSnapshot
 
     var body: some View {
@@ -14,6 +16,7 @@ struct AuditPage: View {
         VStack(spacing: Space.l) {
             PageHeader(title: "Audit", subtitle: "A record keepmum cannot quietly change: every setting that turned protection down, and when keepmum ran.")
             chain
+            keeping
             Card(title: "Changes and coverage", subtitle: engine.audit.isEmpty ? "Nothing recorded yet" : "\(shown.count) of \(engine.audit.count), newest first") {
                 PillButton(title: onlyWeakening ? "Show everything" : "Only what weakened protection",
                            icon: onlyWeakening ? "line.3.horizontal" : "exclamationmark.shield") { onlyWeakening.toggle() }
@@ -54,10 +57,19 @@ struct AuditPage: View {
                     Text("\(check.entries.formatted()) entries chain together, and the log still holds what it held at the last check.")
                         .font(.km(.callout)).foregroundStyle(Theme.textSecondary)
                 } else if let check {
-                    ForEach(check.problems.prefix(4), id: \.self) { p in
-                        Text(p).font(.km(.callout)).foregroundStyle(Theme.text)
+                    let list = VStack(alignment: .leading, spacing: Space.xxs) {
+                        ForEach(check.problems, id: \.self) { p in
+                            Text(p).font(.km(.callout)).foregroundStyle(Theme.text).textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
-                    Text("Run `keepmum audit verify` for the full list.").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                    if check.problems.count > 4 && !isSnapshot {
+                        ScrollView { list.frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 120)
+                    } else {
+                        list
+                    }
+                    Text("\(check.problems.count) problem\(check.problems.count == 1 ? "" : "s"). Export the log to keep a copy of it as it is now.")
+                        .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
                 } else {
                     Text("The Audit page checks the log each time it opens.").font(.km(.callout)).foregroundStyle(Theme.textSecondary)
                 }
@@ -78,6 +90,65 @@ struct AuditPage: View {
         }
         .padding(Space.l)
         .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(ok ? Theme.surface : Theme.soft(Theme.blocked)))
+    }
+
+    /// How long the log keeps entries (`keepmum audit keep`), and an export for a review or a ticket.
+    private var keeping: some View {
+        let days = engine.status?.keepDays ?? 90
+        let options = Array(Set([30, 90, 180, 365, 730, days])).sorted()
+        return HStack(alignment: .center, spacing: Space.m) {
+            Image(systemName: "clock.arrow.circlepath").font(.km(.body)).foregroundStyle(Theme.textSecondary).frame(width: 20)
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                Text("Retention").font(.km(.body)).foregroundStyle(Theme.text)
+                Text(engine.exportNote ?? "Entries older than \(label(days: days)) are removed when the background service starts; the chain still checks.")
+                    .font(.km(.caption)).foregroundStyle(Theme.textSecondary).lineLimit(2)
+            }
+            Spacer(minLength: Space.s)
+            if isSnapshot {
+                FieldStandIn(text: label(days: days)).frame(width: 110)
+            } else {
+                Picker("Keep entries for", selection: Binding(get: { days }, set: { new in
+                    if new < days { shortening = new } else { Task { await engine.setAuditKeep(new) } }
+                })) {
+                    ForEach(options, id: \.self) { Text(label(days: $0)).tag($0) }
+                }
+                .labelsHidden().frame(width: 110)
+                .disabled(!engine.isBundled || engine.busy)
+            }
+            PillButton(title: "Export JSONL…", icon: "square.and.arrow.up") { export(csv: false) }
+                .help("Every entry as written, so its hashes still check: keepmum audit verify --file")
+                .disabled(!engine.isBundled)
+            PillButton(title: "Export CSV…") { export(csv: true) }
+                .help("One row per entry, for reading in a spreadsheet")
+                .disabled(!engine.isBundled)
+        }
+        .padding(.horizontal, Space.l).padding(.vertical, Space.m)
+        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.surface))
+        .alert("Keep entries for \(label(days: shortening ?? days)) only?", isPresented: Binding(get: { shortening != nil }, set: { if !$0 { shortening = nil } })) {
+            Button("Keep \(label(days: days))", role: .cancel) { shortening = nil }
+            Button("Shorten", role: .destructive) {
+                if let d = shortening { Task { await engine.setAuditKeep(d) } }
+                shortening = nil
+            }
+        } message: {
+            Text("Older entries are removed the next time the background service starts, and the change is recorded as weakening protection.")
+        }
+    }
+
+    private func label(days: Int) -> String {
+        days % 365 == 0 ? "\(days / 365) year\(days == 365 ? "" : "s")" : "\(days) days"
+    }
+
+    private func export(csv: Bool) {
+        let panel = NSSavePanel()
+        let day = Date().formatted(.iso8601.year().month().day())
+        panel.nameFieldStringValue = "keepmum-audit-\(day).\(csv ? "csv" : "jsonl")"
+        panel.message = csv ? "Every entry, one row each. Counts and names only, never values."
+                            : "Every entry as written: keepmum audit verify --file checks the copy. Counts and names only, never values."
+        panel.prompt = "Export"
+        if panel.runModal() == .OK, let url = panel.url {
+            Task { await engine.exportAudit(to: url, csv: csv) }
+        }
     }
 
     private func row(_ e: Engine.AuditEntry) -> some View {

@@ -432,6 +432,131 @@ def pii(action: str = typer.Argument("status", help="on, off, or status")) -> No
         typer.echo("Running proxies switch on their next request.", err=True)
 
 
+log_app = typer.Typer(help="What the Logs page of the Mac app may show about masked values (kept in memory only).",
+                      no_args_is_help=True)
+app.add_typer(log_app, name="log")
+
+
+def _log_switch(key: str, action: str, on_text: str, off_text: str) -> None:
+    from .config import ConfigError
+
+    cfg = _config()
+    if action in ("on", "off"):
+        try:
+            _update_config(cfg.path, "log", key, action == "on", f"keepmum log {key} {action}")
+        except (ConfigError, OSError) as e:
+            typer.echo(f"keepmum log: {e}", err=True)
+            raise typer.Exit(1)
+        on = action == "on"
+    elif action == "status":
+        on = getattr(cfg, f"log_{key}")
+    else:
+        typer.echo(f"keepmum log {key}: use on, off or status", err=True)
+        raise typer.Exit(2)
+    typer.echo(on_text if on else off_text, err=True)
+    if action != "status":
+        typer.echo("Running proxies switch on their next request.", err=True)
+
+
+@log_app.command("previews")
+def log_previews(action: str = typer.Argument("status", help="on, off, or status")) -> None:
+    """The first and last character of each long masked value (on, the default), or types and rules only."""
+    _log_switch("previews", action, "previews: the Logs page shows the first and last character of long masked values",
+                "previews: off; the Logs page shows types and rules only")
+
+
+@log_app.command("context")
+def log_context(action: str = typer.Argument("status", help="on, off, or status")) -> None:
+    """The text around each masked value, every masked value in it shown as its type (on, the default)."""
+    _log_switch("context", action, "context: the Logs page shows the text around each masked value",
+                "context: off; no text around masked values is kept")
+
+
+destinations_app = typer.Typer(help="Hosts a shell command may send a token to, besides the ones its issuer uses.",
+                               invoke_without_command=True)
+app.add_typer(destinations_app, name="destinations")
+
+
+def _destinations_json(cfg) -> dict:
+    from .destinations import ISSUERS
+    from .detect.rules import builtin_rules
+
+    return {"added": cfg.destinations, "issuers": {r: list(h) for r, h in ISSUERS.items()},
+            "rules": [r for r, t in builtin_rules().items() if t == "SECRET"]}
+
+
+@destinations_app.callback()
+def destinations_list(ctx: typer.Context, as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """The hosts you added, per rule. With no hosts added, each token goes only to its issuer's hosts."""
+    import json
+
+    if ctx.invoked_subcommand:
+        return
+    cfg = _config()
+    if as_json:
+        typer.echo(json.dumps(_destinations_json(cfg)))
+        return
+    if not cfg.destinations:
+        typer.echo("no hosts added: each token goes only to its issuer's hosts (`keepmum destinations add`)", err=True)
+    for rule, hosts in cfg.destinations.items():
+        typer.echo(f"{rule}: {', '.join(hosts)}", err=True)
+
+
+def _save_destinations(cfg, rule: str, hosts: list[str], command: str) -> None:
+    from .config import ConfigError
+
+    try:
+        _update_config(cfg.path, "destinations", rule, hosts or None, f"keepmum destinations {command}")
+    except (ConfigError, OSError) as e:
+        typer.echo(f"keepmum destinations: {e}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"{rule}: {', '.join(hosts) if hosts else 'only its issuer’s hosts'}", err=True)
+    typer.echo("Running proxies switch on their next request.", err=True)
+
+
+@destinations_app.command("add")
+def destinations_add(
+    rule: str = typer.Argument(..., help="A rule that finds secrets, e.g. gitlab-token (`keepmum rules builtin`)."),
+    hosts: list[str] = typer.Argument(..., help="Host names, e.g. gitlab.corp.example (subdomains included)."),
+    yes: bool = typer.Option(False, "--yes", help="Confirm: shell commands may then send this rule's tokens there."),
+) -> None:
+    """Let shell commands send a rule's tokens to more hosts: your company's GitLab, a GitHub Enterprise server."""
+    from .config import _HOST
+    from .detect.rules import builtin_rules
+
+    cfg = _config()
+    hosts = [h.strip().lower().rstrip(".") for h in hosts]
+    bad = [h for h in hosts if not _HOST.fullmatch(h)]
+    if bad:
+        typer.echo(f"keepmum destinations: {bad[0]!r} is not a host name; give one like gitlab.corp.example, "
+                   "without https:// or a path", err=True)
+        raise typer.Exit(2)
+    if builtin_rules().get(rule) != "SECRET":
+        typer.echo(f"keepmum destinations: {rule!r} is not a built-in rule that finds secrets; see `keepmum rules builtin`",
+                   err=True)
+        raise typer.Exit(2)
+    if not yes:
+        typer.echo(f"keepmum destinations: shell commands could then send {rule} tokens to {', '.join(hosts)} and its "
+                   "subdomains. Add --yes if those hosts are yours", err=True)
+        raise typer.Exit(2)
+    current = cfg.destinations.get(rule, [])
+    _save_destinations(cfg, rule, [*current, *(h for h in dict.fromkeys(hosts) if h not in current)], "add")
+
+
+@destinations_app.command("remove")
+def destinations_remove(
+    rule: str = typer.Argument(..., help="The rule the hosts were added for."),
+    hosts: list[str] = typer.Argument(None, help="Hosts to remove (default: every host added for the rule)."),
+) -> None:
+    """Remove hosts you added: the rule's tokens go only to its issuer's hosts again."""
+    cfg = _config()
+    if rule not in cfg.destinations:
+        typer.echo(f"keepmum destinations: no hosts added for {rule!r}", err=True)
+        raise typer.Exit(2)
+    gone = {h.lower().rstrip(".") for h in hosts or []}
+    _save_destinations(cfg, rule, [h for h in cfg.destinations[rule] if hosts and h not in gone], "remove")
+
+
 @app.command()
 def types(
     action: str = typer.Argument("list", help="list, mask or pass"),
@@ -820,16 +945,17 @@ def status(as_json: bool = typer.Option(True, "--json/--text", help="Print JSON 
     out = {"model": str(model) if model else None, "model_size": MODEL_SIZE, "pf_serve": str(binary) if binary else None,
            "protect": prot, "port": cfg.port, "serve_running": shared_serve_port(cfg) is not None,
            "observe": cfg.observe, "model_on": cfg.model, "clients": clients, "pii": cfg.pii, "pass": cfg.pass_types, "rules": _rules_json(cfg),
-           "excluded": excluded_projects(), "gateways": cfg.gateways}
+           "excluded": excluded_projects(), "gateways": cfg.gateways, "destinations": cfg.destinations,
+           "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days}
     typer.echo(json.dumps(out) if as_json else "\n".join(f"{k}: {v}" for k, v in out.items()))
 
 
 @app.command()
-def doctor() -> None:
+def doctor(as_json: bool = typer.Option(False, "--json", help="Print JSON (for the Mac app).")) -> None:
     """Check that this Mac can run keepmum, and that nothing routes around it."""
     from .doctor import run
 
-    raise typer.Exit(run())
+    raise typer.Exit(run(as_json))
 
 
 audit_app = typer.Typer(help="The audit log: what keepmum did with each request, and every change to its protection. "
@@ -940,6 +1066,26 @@ def audit_head(as_json: bool = typer.Option(False, "--json", help="Print JSON.")
         typer.echo(json.dumps({"seq": last["seq"], "hash": last["hash"], "ts": last.get("ts")}))
     else:
         typer.echo(f"{last['seq']}:{last['hash']}")
+
+
+@audit_app.command("keep")
+def audit_keep(days: int = typer.Argument(None, help="Days the log keeps entries (default 90); leave out to show it.")) -> None:
+    """How long the audit log keeps entries. A shorter time is recorded as weakening protection."""
+    from .config import ConfigError
+
+    cfg = _config()
+    if days is None:
+        typer.echo(f"the audit log keeps entries for {cfg.audit_keep_days} days", err=True)
+        return
+    if days < 1:
+        typer.echo("keepmum audit keep: at least 1 day", err=True)
+        raise typer.Exit(2)
+    try:
+        _update_config(cfg.path, "audit", "keep_days", days, f"keepmum audit keep {days}")
+    except (ConfigError, OSError) as e:
+        typer.echo(f"keepmum audit: {e}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"the audit log keeps entries for {days} days; the background service removes older ones", err=True)
 
 
 @audit_app.command("export")
