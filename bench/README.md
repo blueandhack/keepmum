@@ -58,3 +58,18 @@ uv run --group torch python bench/guard.py --detectors wolf-small --device cpu
   Llama Prompt Guard 2 (`prompt-guard-22m`, `prompt-guard-86m`) is gated: accept its licence on Hugging Face and log in.
 - Shield Small runs from its ONNX weights with the windowing its card describes; its repo's `classify.py` is not executed.
 - Real benign files are added at run time and not committed: this repo's docs and source, and the README of every package in `.venv`.
+
+## Harm content (`harm.py`)
+
+Which local model could flag harmful requests in user prompts without blocking ordinary coding
+and security work. Results and the verdict: [`results/HARM.md`](results/HARM.md).
+
+```sh
+uv sync --group torch && uv pip install gliner2 pyarrow
+uv run python bench/harm_data.py                     # bench/data/harm-coding.jsonl: benign prompts that sound harmful
+uv run --group torch python bench/harm.py            # gliguard, qwen3guard-0.6b/4b, granite-guardian-3b, granite-hap-125m, koala-moderation
+```
+
+- Harmful prompts come only from published, labelled sets, downloaded at run time and not committed: XSTest v2 and Aegis 2.0 (CC-BY-4.0), ToxicChat (CC-BY-NC-4.0, evaluation only).
+- `harm_data.py` holds benign prompts only.
+- Generative guards are scored from their verdict token's probability in one forward pass, not by generating text.
