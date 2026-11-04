@@ -408,6 +408,31 @@ def model(action: str = typer.Argument("status", help="on, off, or status")) -> 
 
 
 @app.command()
+def pii(action: str = typer.Argument("status", help="on, off, or status")) -> None:
+    """Personal data (on): also mask names, emails, phones, addresses and the rest. Off, the default:
+    only secrets and your own rules are masked."""
+    from .config import ConfigError
+
+    cfg = _config()
+    if action in ("on", "off"):
+        try:
+            _update_config(cfg.path, "detect", "pii", action == "on", f"keepmum pii {action}")
+        except (ConfigError, OSError) as e:
+            typer.echo(f"keepmum pii: {e}", err=True)
+            raise typer.Exit(1)
+        on = action == "on"
+    elif action == "status":
+        on = cfg.pii
+    else:
+        typer.echo("keepmum pii: use on, off or status", err=True)
+        raise typer.Exit(2)
+    typer.echo("personal data: masked, along with secrets" if on
+               else "personal data: not masked; names, emails, phones and addresses go out as they are", err=True)
+    if action != "status":
+        typer.echo("Running proxies switch on their next request.", err=True)
+
+
+@app.command()
 def types(
     action: str = typer.Argument("list", help="list, mask or pass"),
     names: list[str] = typer.Argument(None, help="Types: SECRET, ACCOUNT, PERSON, EMAIL, PHONE, ADDRESS, URL, DATE."),

@@ -63,7 +63,7 @@ private struct TypeTable: View {
             }
             ForEach(Theme.typeOrder, id: \.self) { type in row(type) }
             if !piiOn {
-                Text("Personal data is off, so only secrets and your own rules are masked. Turn it on in config: [detect] pii = true.")
+                Text("Personal data is off, so only secrets and your own rules are masked. Turn it on in Settings › Masking.")
                     .font(.km(.caption)).foregroundStyle(Theme.textSecondary).padding(.top, Space.s + Space.xxs)
                     .fixedSize(horizontal: false, vertical: true)
             }

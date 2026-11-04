@@ -238,6 +238,25 @@ def test_cli_model_on_needs_the_model_downloaded(tmp_path, monkeypatch):
     assert run("model", "on").exit_code == 0 and config_mod.load(path).model is True
 
 
+def test_pii_command_switches_personal_data_and_is_audited(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from keepmum.audit import read
+    from keepmum.cli import app
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = tmp_path / ".config" / "keepmum" / "config.toml"
+    run = lambda *a: CliRunner().invoke(app, list(a))
+    assert run("pii", "maybe").exit_code == 2
+    assert run("pii", "on").exit_code == 0 and config_mod.load(path).pii is True
+    assert json.loads(run("types", "--json").stdout)["types"]["PERSON"] == "mask"
+    assert run("pii", "off").exit_code == 0 and config_mod.load(path).pii is False
+    assert "off" in json.loads(run("types", "--json").stdout)["types"]["PERSON"]
+    entries = [e for e in read(path.parent / "audit.jsonl") if e["event"] == "config"]
+    assert entries[-1]["weakens"] and entries[-1]["by"] == "keepmum pii off"
+
+
+
 # --- Built-in rules turned off ([rules] off) ----------------------------------------------
 
 

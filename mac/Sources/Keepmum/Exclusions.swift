@@ -68,10 +68,12 @@ struct MaskingSection: View {
     /// From the running proxy's feed: the model was asked for but did not load, and why.
     var modelError: String?
     @State private var confirmObserve = false
+    @State private var confirmPII = false
 
     var body: some View {
         let observe = engine.status?.observe ?? observing
         let model = engine.modelOn
+        let pii = engine.status?.pii ?? false
         FormSection(title: "Masking") {
             FormRow(title: "Mode",
                     detail: observe ? "Observe only: requests leave this Mac unmasked; keepmum only counts what it would mask"
@@ -91,6 +93,15 @@ struct MaskingSection: View {
                           selection: Binding(get: { model }, set: { new in Task { await engine.setModel(new) } }))
                     .disabled(!engine.isBundled || engine.busy || engine.download != nil)
             }
+            Hairline()
+            FormRow(title: "Personal data",
+                    detail: pii ? "Names, emails, phones, addresses and account numbers are masked along with secrets"
+                                : "Only secrets and your own rules are masked; names, emails, phones and addresses go out as they are") {
+                Switch(isOn: pii, enabled: engine.isBundled && !engine.busy) { on in
+                    if on { Task { await engine.setPII(true) } } else { confirmPII = true }
+                }
+                .accessibilityLabel("Mask personal data")
+            }
             if model, let modelError {
                 Hairline()
                 Text(modelError).font(.km(.callout)).foregroundStyle(Theme.blocked).fixedSize(horizontal: false, vertical: true)
@@ -102,6 +113,12 @@ struct MaskingSection: View {
             Button("Observe only", role: .destructive) { Task { await engine.setObserve(true) } }
         } message: {
             Text("Secrets and personal data would reach the model provider as they are. keepmum only counts what it would have masked, and the audit log records the change.")
+        }
+        .alert("Stop masking personal data?", isPresented: $confirmPII) {
+            Button("Keep masking", role: .cancel) {}
+            Button("Stop masking", role: .destructive) { Task { await engine.setPII(false) } }
+        } message: {
+            Text("Names, emails, phone numbers and addresses would reach the model provider as they are. Secrets and your own rules are still masked, and the audit log records the change.")
         }
     }
 }

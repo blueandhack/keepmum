@@ -289,6 +289,12 @@ final class Engine {
         }
     }
 
+    /// Mask personal data too, or only secrets and your own rules (`keepmum pii`). Running proxies
+    /// pick it up on their next request.
+    func setPII(_ on: Bool) async {
+        await act { try await self.check(["pii", on ? "on" : "off"]) }
+    }
+
     // MARK: What gets masked (`keepmum types`, `keepmum rules`)
 
     /// Let a type through unmasked, or mask it again. Secrets need `confirmed`.

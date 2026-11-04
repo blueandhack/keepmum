@@ -187,6 +187,7 @@ The user experience is one command, `keepmum claude` or `keepmum codex`, or the 
 | `keepmum protect on\|off\|status [--client]` | Points Claude Code, Codex, pi and opencode at `keepmum serve` in their own config files, or undoes it. |
 | `keepmum observe on\|off` | Observe only: scan and count, but forward requests unchanged. |
 | `keepmum model on\|off` | The rules and the local model, or the rules alone. |
+| `keepmum pii on\|off` | Mask personal data too, or only secrets and your own rules (the default). |
 | `keepmum types` / `keepmum rules` | What gets masked: types passed through, your own mask rules, exceptions, built-in rules turned off. |
 | `keepmum exclude` / `keepmum include` | Lets one project's Claude Code skip keepmum. |
 | `keepmum status` | Setup, protection and settings as JSON, for the Mac app. |
