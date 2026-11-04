@@ -32,6 +32,9 @@
     [audit]
     keep_days = 90         # how long the audit log keeps entries (`keepmum audit`)
 
+    [guard]                # the prompt-injection guard on tool results (guard.py; `keepmum guard setup` first)
+    injection = "off"      # "warn": log and send; "block": refuse the request
+
     [log]
     level = "info"
     previews = true        # the Logs page shows the first and last character of masked values (in memory only)
@@ -57,6 +60,7 @@ _SCHEMA = {
     "rules": {"mask": list, "off": list},
     "log": {"level": str, "previews": bool, "context": bool},
     "audit": {"keep_days": int},
+    "guard": {"injection": str},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
 _HOST = re.compile(r"(?i)(?:[a-z0-9_-]+\.)*[a-z0-9-]+\.[a-z]{2,63}|localhost|\d{1,3}(?:\.\d{1,3}){3}")
@@ -107,6 +111,7 @@ class Config:
     log_previews: bool = True
     log_context: bool = True
     audit_keep_days: int = 90
+    guard_injection: str = "off"
     path: Path | None = None
 
 
@@ -135,7 +140,8 @@ def load(path: Path | None = None) -> Config:
                 raise ConfigError(f"{path}: unknown key {section}.{key}")
             if not isinstance(value, want) or (want is int and isinstance(value, bool)):
                 raise ConfigError(f"{path}: {section}.{key} must be {want.__name__}")
-    server, detect, allow, log, rules, audit = (raw.get(k, {}) for k in ("server", "detect", "allowlist", "log", "rules", "audit"))
+    server, detect, allow, log, rules, audit, guard = (raw.get(k, {}) for k in ("server", "detect", "allowlist", "log",
+                                                                                "rules", "audit", "guard"))
     cfg.port = server.get("port", cfg.port)
     if not 1 <= cfg.port <= 65535:
         raise ConfigError(f"{path}: server.port must be 1-65535")
@@ -223,6 +229,9 @@ def load(path: Path | None = None) -> Config:
     cfg.audit_keep_days = audit.get("keep_days", cfg.audit_keep_days)
     if not 1 <= cfg.audit_keep_days <= 3650:
         raise ConfigError(f"{path}: audit.keep_days must be 1-3650")
+    cfg.guard_injection = guard.get("injection", cfg.guard_injection)
+    if cfg.guard_injection not in ("off", "warn", "block"):
+        raise ConfigError(f"{path}: guard.injection must be \"off\", \"warn\" or \"block\"")
     return cfg
 
 

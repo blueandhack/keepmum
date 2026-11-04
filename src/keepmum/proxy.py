@@ -167,8 +167,10 @@ class Proxy:
                  info: dict | None = None, observe=None, openai_upstream: str = OPENAI_UPSTREAM,
                  chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
                  gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM,
-                 tools=None):
+                 tools=None, guard=None):
         self.redactor = redactor
+        # The prompt-injection guard on tool results (guard.Guard), or None: not set up.
+        self.guard = guard
         self.upstream = upstream.rstrip("/")
         self.prefixed = {"/openai": openai_upstream.rstrip("/"), "/chatgpt": chatgpt_upstream.rstrip("/"),
                          "/gemini": gemini_upstream.rstrip("/"), "/codeassist": code_assist_upstream.rstrip("/")}
@@ -329,11 +331,14 @@ class Proxy:
             return api_error(400, "invalid_request_error", "request body is not a JSON object keepmum can read; nothing was sent")
         started = time.perf_counter()
         try:
-            masked, counts, new, found = await anyio.to_thread.run_sync(self._redact, body, t.api, origin)
+            masked, counts, new, found, results = await anyio.to_thread.run_sync(self._redact, body, t.api, origin)
         except Exception as e:  # any detector or redaction failure: block, never send raw
             log.error("blocked %s: scan failed (%s)", path, type(e).__name__)
             self._record(path, "blocked", 500, origin=origin)
             return api_error(500, "api_error", "could not scan this request, so it was not sent")
+        refused = await self._guarded(results, path, origin)
+        if refused is not None:
+            return refused
         scan_ms = (time.perf_counter() - started) * 1000
         payload = json.dumps(masked, ensure_ascii=False).encode("utf-8", "replace")
         url = self._url(request, t)
@@ -373,8 +378,9 @@ class Proxy:
             body = json.loads(decode_body(raw, request.headers.get("content-encoding", "")))
             if isinstance(body, dict):
                 started = time.perf_counter()
-                _, counts, new, found = await anyio.to_thread.run_sync(self._redact, body, t.api, origin, "observed")
+                _, counts, new, found, results = await anyio.to_thread.run_sync(self._redact, body, t.api, origin, "observed")
                 scan_ms = (time.perf_counter() - started) * 1000
+                await self._guarded(results, path, origin, observing=True)
         except Exception as e:  # observing never stops a request
             log.warning("observe %s: not scanned (%s)", path, type(e).__name__)
         url = self._url(request, t)
@@ -426,14 +432,16 @@ class Proxy:
             log.warning("%s: %d placeholder(s) in the reply could not be restored (made by another keepmum process, "
                         "or before a restart); they reach the client as placeholders", path, restored["unresolved"])
 
-    def _redact(self, body: dict, api: str = "messages", origin=None, outcome: str = "masked") -> tuple[dict, Counter, int, Counter]:
+    def _redact(self, body: dict, api: str = "messages", origin=None, outcome: str = "masked"):
         """The masked body, spans masked per type, how many of them were in text this request
-        brought (the rest are earlier turns, which clients resend every time), and which detectors
-        found those. What the new text held goes to the Logs page, in memory only."""
+        brought (the rest are earlier turns, which clients resend every time), which detectors
+        found those, and the request's tool results for the guard. What the new text held goes
+        to the Logs page, in memory only."""
         with self._scan_lock:
             self.redactor.counts.clear()
             self.redactor.fresh = 0
             self.redactor.findings = []
+            self.redactor.tool_results = []
             self.redactor.previews = self._previews()
             self.redactor.context = self._context()
             if api == "responses":
@@ -443,7 +451,9 @@ class Proxy:
             else:
                 masked = self.redactor.redact_request(body)
             self.stats.record_findings(self.redactor.findings, outcome, origin)
-            result = masked, Counter(self.redactor.counts), self.redactor.fresh, found_by(self.redactor.findings)
+            result = (masked, Counter(self.redactor.counts), self.redactor.fresh, found_by(self.redactor.findings),
+                      self.redactor.tool_results)
+            self.redactor.tool_results = []
         if self.tools is not None:
             try:
                 self.tools.observe(definitions(body, api), origin[0] if origin else None,
@@ -451,6 +461,48 @@ class Proxy:
             except Exception as e:  # the registry never stops a request
                 log.warning("tool list not recorded (%s)", type(e).__name__)
         return result
+
+    async def _guarded(self, results, path: str, origin, observing: bool = False) -> Response | None:
+        """The guard's verdict on a request's tool results: None to send it, or the refusal.
+        A hit is logged, counted and audited with the tool, score and length, never the text.
+        Observing, it only counts. If the guard fails, block mode refuses (it cannot vouch for
+        the request) and warn mode sends."""
+        guard = self.guard
+        mode = guard.mode if guard is not None else "off"
+        if mode == "off" or not results:
+            return None
+        blocking = mode == "block" and not observing
+        try:
+            hits = await anyio.to_thread.run_sync(guard.check, results)
+        except Exception as e:
+            if not blocking:
+                log.warning("%s: guard did not check the tool results (%s)", path, type(e).__name__)
+                return None
+            log.error("blocked %s: guard failed (%s)", path, type(e).__name__)
+            self._record(path, "blocked", 500, origin=origin)
+            return api_error(500, "api_error", "the prompt-injection guard could not check this request's tool "
+                             "results, so it was not sent (`keepmum guard warn` sends such requests with a warning)")
+        if not hits:
+            return None
+        action = "blocked" if blocking else "warned"
+        for h in hits:
+            log.warning("%s: possible prompt injection in a %s result (score %.2f, %d chars%s): %s", path,
+                        h["tool"] or "tool", h["score"], h["chars"], ", flagged before" if h["earlier"] else "",
+                        "request not sent" if blocking else "sent anyway (guard: warn)")
+        self.stats.record_guard(hits, action, origin)
+        if self.audit is not None:
+            client, provider = origin or (None, None)
+            self.audit.append("guard", client=client, provider=provider, path=path, action=action,
+                              hits=[{"tool": h["tool"], "score": round(h["score"], 3), "chars": h["chars"],
+                                     "earlier": h["earlier"]} for h in hits])
+        if not blocking:
+            return None
+        self._record(path, "blocked", 403, origin=origin)
+        tools = ", ".join(sorted({h["tool"] or "a tool" for h in hits}))
+        return api_error(403, "permission_error",
+                         f"the prompt-injection guard found a likely injection in what {tools} returned, so this request "
+                         "was not sent. Remove that result from the conversation (rewind, or /clear), or run "
+                         "`keepmum guard warn` to send such requests with a warning.")
 
     def _restore(self, data: dict, counts: Counter, api: str = "messages") -> dict:
         with self._scan_lock:

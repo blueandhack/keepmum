@@ -219,6 +219,9 @@ class Stats:
         # The Logs page: what new text held, one entry per masked value. In memory only, never in
         # the history file: a preview is the first and last character of a value.
         self.findings: deque[dict] = deque(maxlen=findings)
+        # The prompt-injection guard (guard.py): tool results it flagged. Tool, score, length; no text.
+        self.guard_hits: deque[dict] = deque(maxlen=recent)
+        self.guarded = Counter()  # requests with a hit, by action: warned, blocked
 
     def record(self, path: str, outcome: str, status: int, scan_ms: float | None = None,
                redacted: Counter | None = None, restored: Counter | None = None, new: int = 0,
@@ -266,6 +269,16 @@ class Stats:
             for i, f in enumerate(found):
                 self.findings.append({**f, "ts": ts, "seq": i, "outcome": outcome, "client": client, "provider": provider})
 
+    def record_guard(self, hits: list[dict], action: str, origin: tuple[str, str] | None = None) -> None:
+        ts = round(time.time(), 6)
+        client, provider = origin or (None, None)
+        with self._lock:
+            self.guarded[action] += 1
+            for h in hits:
+                self.guard_hits.append({"ts": ts, "tool": h.get("tool"), "score": round(h["score"], 3), "chars": h["chars"],
+                                        "earlier": h.get("earlier", False), "action": action,
+                                        "client": client, "provider": provider})
+
     def findings_page(self, limit: int = 2000) -> list[dict]:
         with self._lock:
             return sorted(self.findings, key=lambda f: (-f["ts"], f["seq"]))[:limit]  # newest request first, in text order
@@ -300,5 +313,6 @@ class Stats:
                            "restored": sum(self.restored.values()), "unresolved": self.unresolved},
                 "timeline": [{**b, "masked": dict(b["masked"])} for b in self.minutes],
                 "scan_ms": {"p50": pct(0.5), "p95": pct(0.95), "n": len(lat)},
+                "guard": {"requests": dict(self.guarded), "hits": list(self.guard_hits)},
                 "recent": list(self.events), **extra,
             }

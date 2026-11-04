@@ -119,6 +119,12 @@ class Redactor:
         # so that server may have its own values back (tools.py). Tool call ids -> tool names.
         self._origin: str | None = None
         self._calls: dict[str, str] = {}
+        # The text of every tool result in the request being masked, for the guard (guard.py):
+        # (tool, text, new), where new means this redactor had not seen the text before. Reset
+        # with `findings`. The text is the original, before masking, and never leaves the process.
+        self.tool_results: list[tuple[str | None, str, bool]] = []
+        self._tool: str | None = None
+        self._in_result = False
 
     def _detect(self, text: str) -> tuple[tuple[Span, ...], bool]:
         """Detector spans, cached per text: the conversation history is resent every turn.
@@ -158,6 +164,8 @@ class Redactor:
         if not text:
             return text
         spans, seen = self._spans(text)
+        if self._in_result:
+            self.tool_results.append((self._tool, text, not seen))
         if not seen:
             self.fresh += len(spans)
             for s in spans:
@@ -184,13 +192,15 @@ class Redactor:
         return "".join(out)
 
     @contextlib.contextmanager
-    def _result_of(self, tool: str | None):
-        """Mask a tool result, noting the tool's server on every value in it."""
-        before, self._origin = self._origin, server_of(tool) if tool else None
+    def _result_of(self, tool: str | None, read: bool = True):
+        """Mask a tool result, noting the tool's server on every value in it. `read`: the text is
+        what the tool returned, which the guard checks (not a call's own input)."""
+        before = self._origin, self._tool, self._in_result
+        self._origin, self._tool, self._in_result = server_of(tool) if tool else None, tool, read
         try:
             yield
         finally:
-            self._origin = before
+            self._origin, self._tool, self._in_result = before
 
     # --- Messages API payloads ----------------------------------------------------
 
@@ -337,7 +347,7 @@ class Redactor:
             tool = None
         for key in ("output", "input", "content", "text", "action", "error"):
             if key in out:
-                with self._result_of(tool if key == "output" else None):
+                with self._result_of(tool if key == "output" else None, read=key in ("output", "content", "text", "error")):
                     out[key] = self._values(out[key])
         return out
 

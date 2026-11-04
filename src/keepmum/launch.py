@@ -52,7 +52,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     pipeline = default_pipeline(pii=pii, rules_only=rules_only or not cfg.model, allow_strings=cfg.allow_strings,
                                 allow_patterns=cfg.allow_patterns, pass_types=cfg.pass_types, mask_rules=cfg.mask_rules,
                                 off_rules=cfg.off_rules)
-    info = {"mode": mode, "pii": pii, "detector": pipeline.name, "version": __version__, "apis": ["messages", "responses", "gemini"]}
+    info = {"mode": mode, "pii": pii, "detector": pipeline.name, "version": __version__, "apis": ["messages", "responses", "gemini"],
+            "guard": cfg.guard_injection}
     from .stats import History, Stats
 
     from .audit import AuditLog
@@ -72,6 +73,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
         if not fixed_pii:
             info["pii"] = new.pii
         info["detector"] = pipeline.name
+        info["guard"] = new.guard_injection
         proxy.policy = new.restore
         proxy.gateways = {**new.gateways, **(gateways or {})}
         proxy.destinations = new.destinations
@@ -79,11 +81,15 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
             switch.want(new.model)
 
     observe = LiveConfig(cfg.path, cfg, on_change=apply)
+    from .guard import Guard
+
+    # Its model loads on the first tool result it scores; the mode follows the config file.
+    guard = Guard(lambda: observe.config.guard_injection)
     history = History()
     proxy = Proxy(Redactor(pipeline, Vault()), upstream=upstream or cfg.upstream, policy=cfg.restore,
                   stats=Stats(history=history), stats_token=stats_token(), info=info, observe=observe,
                   previews=lambda: observe.config.log_previews,
-                  context=lambda: observe.config.log_context, audit=audit, tools=ToolRegistry())
+                  context=lambda: observe.config.log_context, audit=audit, tools=ToolRegistry(), guard=guard)
     proxy.gateways = {**cfg.gateways, **(gateways or {})}
     proxy.destinations = cfg.destinations
     switch = ModelSwitch(pipeline, proxy._scan_lock)
