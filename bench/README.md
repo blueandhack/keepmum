@@ -39,3 +39,22 @@ Each needs its dependency group and its weights:
 | LLM judges (`judge.py`) | `uv sync --group mlx --group afm`; the Qwen judge needs `mlx-community/Qwen3-4B-Instruct-2507-4bit` |
 
 Pipelines combine detectors with `+`, for example `rules+pf-8bit`, with flags `:pii` (personal data on), `:raw` (no secret-span refinement) and `:rawpii` (no personal-data refinement).
+
+## Prompt-injection guard (`guard.py`)
+
+A separate benchmark for a possible guard on tool results: which local classifier can tell an
+instruction planted in a web page, file, email or MCP reply from the ordinary instructions coding
+agents read all day (CLAUDE.md, skills, runbooks, security writing that quotes attacks). Results and
+the verdict: [`results/GUARD.md`](results/GUARD.md).
+
+```sh
+uv sync --group torch && uv pip install gliner2 onnxruntime
+uv run python bench/guard_data.py                    # bench/data/guard-dev.jsonl and guard-holdout.jsonl
+uv run --group torch python bench/guard.py           # gliguard, wolf-small, sentinel, vektor-v2, protectai-v2, shield-small
+uv run --group torch python bench/guard.py --detectors wolf-small --device cpu
+```
+
+- The models must be in the Hugging Face cache first (`snapshot_download` of each repo in `DETECTORS`).
+  Llama Prompt Guard 2 (`prompt-guard-22m`, `prompt-guard-86m`) is gated: accept its licence on Hugging Face and log in.
+- Shield Small runs from its ONNX weights with the windowing its card describes; its repo's `classify.py` is not executed.
+- Real benign files are added at run time and not committed: this repo's docs and source, and the README of every package in `.venv`.
