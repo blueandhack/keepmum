@@ -63,12 +63,12 @@ A release is a notarized `Keepmum-<version>.dmg` on the repository's GitHub Rele
 
 ```sh
 # 1. set the version in pyproject.toml and src/keepmum/__init__.py, run `uv lock`, commit
-RELEASE_NOTES=notes.md mac/release.sh          # tests, build, sign, notarize, staple -> dist/; adds it to mac/appcast.xml
+RELEASE_NOTES=notes.md mac/release.sh          # tests, build, sign, notarize, staple -> dist/; adds it to mac/appcast.xml and site/index.html
 git push origin main
 git tag -s v0.1.0a2 -m "keepmum 0.1.0 alpha 2" && git push origin v0.1.0a2
 gh release create v0.1.0a2 dist/Keepmum-0.1.0a2.dmg dist/Keepmum-0.1.0a2.dmg.sha256 \
   --verify-tag --prerelease --title "keepmum 0.1.0 alpha 2" --notes-file notes.md
-git commit -m "chore: keepmum 0.1.0a2 in the update feed" mac/appcast.xml && git push origin main   # installed apps see it now
+git commit -m "chore: keepmum 0.1.0a2 in the update feed" mac/appcast.xml site/index.html && git push origin main   # installed apps and keepmum.app see it now
 ```
 
 Versions follow PEP 440: alphas are `0.1.0a1`, `0.1.0a2`…, then `0.1.0`. The tag and the DMG carry the full version. Apple's version fields in the app take numbers and dots only, so `build-app.sh` writes `0.1.0` as `CFBundleShortVersionString`, the full version as `KeepmumVersion`, and as `CFBundleVersion` a build number that rises in PEP 440 order, which is what the updater compares: `0.1.0a1` is 10001, `0.1.0a2` 10002, `0.1.0b1` 10031, `0.1.0rc1` 10061, `0.1.0` 10099. The first release, 0.1.0a1, came out on Nov 3, 2026.

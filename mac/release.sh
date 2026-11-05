@@ -104,5 +104,11 @@ if [ -n "$UPDATES" ]; then
   "$SPARKLE/sign_update" appcast.xml
   "$SPARKLE/sign_update" --verify appcast.xml
 fi
+
+# The website's download buttons: straight to this DMG, once its release is on GitHub.
+if [ -z "${SKIP_NOTARIZE:-}" ]; then
+  sed -i '' -E "s|releases/download/v[^/\"]+/Keepmum-[^/\"]+\.dmg|releases/download/v$VERSION/Keepmum-$VERSION.dmg|g" "$ROOT/site/index.html"
+fi
 echo "next: git tag v$VERSION && git push origin v$VERSION, then gh release create (see mac/README.md),"
-echo "      then commit and push mac/appcast.xml: installed apps see the update once it is on main"
+echo "      then commit and push mac/appcast.xml and site/index.html: installed apps see the update,"
+echo "      and keepmum.app links to the new DMG, once they are on main"
