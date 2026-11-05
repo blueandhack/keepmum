@@ -5,7 +5,6 @@ import SwiftUI
 /// `keepmum guard setup`, loads on first use and unloads after 10 idle minutes.
 struct ChecksSection: View {
     var engine: Engine
-    @State private var confirmingLicence = false
     @State private var confirmingRemove: String?
     @Environment(\.isSnapshot) private var isSnapshot
 
@@ -24,12 +23,6 @@ struct ChecksSection: View {
             } else {
                 FormRow(title: "Not available", detail: engine.isBundled ? "This engine has no optional checks" : "Needs the bundled engine") { EmptyView() }
             }
-        }
-        .alert("Shield Small is for non-commercial use only", isPresented: $confirmingLicence) {
-            Button("Cancel", role: .cancel) {}
-            Button("My use is non-commercial") { Task { await engine.setUpCheck("injection", confirmedNoncommercial: true) } }
-        } message: {
-            Text("The injection check uses Shield Small by ZeroLeaks. keepmum does not ship it, and its weights are licensed CC BY-NC 4.0: you may use them only for non-commercial purposes. Using keepmum on work for an employer or a client is commercial use; for that, ZeroLeaks offers a licence (zeroleaks.ai/contact).\n\nThe download is 133 MB: an unofficial conversion that runs in llama.cpp, hosted by keepmum on Hugging Face (not endorsed by ZeroLeaks) and checked against pinned SHA-256s. Your confirmation is recorded in the audit log.")
         }
         .alert(confirmingRemove == "harm" ? "Remove the harm check's models?" : "Remove the injection check's model?",
                isPresented: Binding(get: { confirmingRemove != nil }, set: { if !$0 { confirmingRemove = nil } })) {
@@ -54,14 +47,14 @@ struct ChecksSection: View {
             } else if engine.checkDownload?.what == "injection" {
                 progress(engine.checkDownload?.progress ?? 0)
             } else {
-                PillButton(title: "Set up…", icon: "arrow.down.circle") { confirmingLicence = true }
-                    .disabled(!engine.isBundled || engine.busy)
+                PillButton(title: "Download (164 MB)", icon: "arrow.down.circle") {
+                    Task { await engine.setUpCheck("injection") }
+                }
+                .disabled(!engine.isBundled || engine.busy)
             }
         }
         if c.installed {
-            modelLine("Shield Small by ZeroLeaks · CC BY-NC 4.0, non-commercial use"
-                      + (c.accepted.map { " confirmed \(Date(timeIntervalSince1970: $0.ts).formatted(date: .abbreviated, time: .omitted))" } ?? "")
-                      + " · 0.4 GB while in use", remove: "injection")
+            modelLine("Prompt Injection Guard Small by Horizon Labs · Apache-2.0 · 0.4 GB while in use", remove: "injection")
         }
     }
 

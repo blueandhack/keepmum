@@ -186,7 +186,7 @@ def _guard_checks(r, cfg) -> None:
         why = ("model not set up (`keepmum guard setup injection`)" if not guard.installed()
                else "llama-server not found (brew install llama.cpp)" if find_server() is None else None)
         _check(r, FAIL if why else OK, f"injection check {cfg.guard_injection}: " + (why or
-               f"Shield Small, CC BY-NC 4.0 (non-commercial use confirmed); {GUARD_MEMORY['injection']} while in use"))
+               f"Prompt Injection Guard Small, Apache-2.0; {GUARD_MEMORY['injection']} while in use"))
     if cfg.guard_harm != "off":
         size = cfg.guard_harm_model
         why = (f"{size} model not downloaded (`keepmum guard setup harm --model {size}`)" if not harm.installed(size)

@@ -70,7 +70,53 @@ The Q8_0 file is published, unofficially and under the same licence, at [keepmum
 
 *Nov 4, 2026, later:* keepmum's injection check now runs this GGUF in llama-server at 0.945, and no longer needs ONNX Runtime, tokenizers or NumPy.
 
+## Newer Apache-2.0 models: Horizon-Labs and Wolf Defender
+
+*Nov 4, 2026.* Three Apache-2.0 models released since the first run, chosen because a third-party evaluation of fifteen detectors on agent tool outputs ([arXiv 2610.03448](https://arxiv.org/abs/2610.03448)) ranks two of them first and second (AgentDojo and τ-bench, at 1% false alarms). Run alongside Shield and Wolf Small for comparison: [`guard-20261104-231405.md`](guard-20261104-231405.md). Each runs in 2,048-token windows in PyTorch on MPS; Shield as before.
+
+| Detector | Size | AUC | Holdout @0.5: recall / ordinary / security | Dev threshold | Holdout @dev: recall / ordinary / security | Dev @dev: recall / security | p50 per doc |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **[Horizon-Labs guard small](https://huggingface.co/Horizon-Labs/prompt-injection-guard-small)** v2.3 (`9760ad5a`) | 141M | **1.00** | 1.00 / 0.03 / 0.06 | 0.646 | **1.00 / 0.03 / 0.06** | 0.99 / 0.07 | 15 ms |
+| [Horizon-Labs guard base](https://huggingface.co/Horizon-Labs/prompt-injection-guard-base) v2.2 (`0fd61a8c`) | 308M | 1.00 | 1.00 / 0.00 / 0.09 | 0.203 | 1.00 / 0.09 / 0.42 | 0.96 / 0.26 | 23 ms |
+| Shield Small (CC BY-NC 4.0), int8 ONNX | 118M | 0.97 | 0.94 / 0.03 / 0.24 | 0.923 | 0.90 / 0.03 / 0.18 | 0.80 / 0.24 | 20 ms |
+| [Wolf Defender](https://huggingface.co/patronus-studio/wolf-defender-prompt-injection) v2 (`24e93077`) | 308M | 0.85 | 0.35 / 0.00 / 0.03 | 0.240 | 0.46 / 0.00 / 0.06 | 0.42 / 0.06 | 23 ms |
+| Wolf Defender Small v2 (`e311bc56`) | 141M | 0.90 | 0.35 / 0.00 / 0.06 | 0.141 | 0.40 / 0.00 / 0.06 | 0.30 / 0.09 | 15 ms |
+
+- **Horizon-Labs Small beats Shield on both splits, at a third of Shield's security false alarms.** On holdout it flags all 48 injected documents, including every tool-call, subtle and exfiltration attack; Shield misses five. On dev (96 injected) it misses one, a web-search result scored 0.134; Shield misses 19. Its false alarms on security writing and keepmum's own code are 6–7%, against Shield's 18–24%.
+- **Its threshold is stable.** 0.5 and the dev threshold (0.646) give the same holdout verdicts. Horizon-Labs Base's dev threshold falls to 0.203, which flags 42% of security documents on holdout; at 0.5 it does about as well as Small (0.00 / 0.09).
+- **Wolf Defender is the full-size model of Wolf Small and does no better here**: about four in ten injected documents caught, nearly none of the tool, subtle or delimiter attacks.
+- **Not contamination.** Horizon Small's weights date from Oct 7 (v2.3) and Base's from Oct 2 (v2.2); this benchmark's data was written and first committed on Nov 3. Its training data does include planted-task documents and tool responses (rgeada/tool-response-injections, Nemotron agentic indirect injection), which is the shape of this set.
+- **The licence suits keepmum.** Apache-2.0 with a LICENSE and NOTICE file; the base model, mmBERT-small, is MIT. The card states that the training data is permissively licensed and lists the datasets.
+- **It fits keepmum's runtime:** see the next section.
+- Llama Prompt Guard 2 is still not run: Meta has not granted this account access to the gated repos.
+
+Same limits as above: 48 injected and 66 benign holdout documents, all by one author. A perfect score here means this set is too easy for Horizon Small, not that it catches every injection.
+
+## Horizon-Labs Small as a GGUF in llama.cpp
+
+*Nov 4, 2026, later.* keepmum's injection check now runs Prompt Injection Guard Small, converted to a GGUF by [`../horizon_gguf.py`](../horizon_gguf.py). Unlike Shield's release, Horizon-Labs' has float weights, so the conversion is llama.cpp's converter with four adjustments:
+- read the tokenizer as mmBERT's. Horizon-Labs' tokenizer.json is mmBERT-small's plus a normalizer, which changes the converter's tokenizer fingerprint; the script checks that vocabulary, merges and pre-tokenizer are mmBERT's.
+- write the pre-tokenizer in mmBERT's older form, which llama.cpp loads
+- set rank pooling and an output as wide as the two labels
+- write the name, licence and source into the GGUF
+
+llama.cpp's tokenizer does not run the normalizer (decoding text smuggled in Unicode tag characters or variation selectors, NFKC, removing invisible characters), so keepmum runs it first (`keepmum.guard.normalize`). [`../horizon_parity.py`](../horizon_parity.py) scores the benchmark's 409 documents with keepmum's windows, three ways: [`horizon-gguf-20261104-234943.md`](horizon-gguf-20261104-234943.md).
+
+| | Holdout AUC | Recall | Ordinary / security FPR | Dev: recall / security FPR | p50 per document |
+| --- | --- | --- | --- | --- | --- |
+| Original, transformers on MPS, at its dev threshold (0.6465) | 1.000 | 1.00 | 0.03 / 0.09 | 0.99 / 0.06 | 20 ms |
+| **GGUF Q8_0 in llama-server (Metal), keepmum's runtime, at 0.65** | 1.000 | 1.00 | 0.03 / 0.09 | 0.99 / 0.06 | **12 ms** |
+
+- **Verdicts match the original on all 409 documents**, for the F32 and the Q8_0 GGUF, given the same token ids or through keepmum's runtime. The largest score difference is 0.005 (F32) and 0.054 (Q8_0); the median difference in logit margin is 0.003 and 0.05.
+- **keepmum's tokens match the model's tokenizer on all 409 documents**, and on hand-made obfuscated texts: tag-character and variation-selector smuggling, full-width letters, zero-width and bidi characters, CRLF, special-token strings.
+- **Windows of 2,048 tokens give the fewest false alarms.** On holdout, the original in 512-, 1,024- and 2,048-token windows flags 18%, 9% and 6% of security documents, at the same recall ([`guard-20261104-233010.md`](guard-20261104-233010.md)). keepmum uses 2,048 with 256 tokens of overlap, at most 16 windows: 12 from the start, 4 from the end.
+- **One window per request is the fastest and the smallest.** About 40 ms for a 6,000-character tool result, 100 ms for 16,000, 390 ms for 60,000; llama-server uses 0.4 GB (217 MB footprint). Four windows per request took 37% longer on the 60,000-character text, and 0.9 GB.
+- **The threshold is 0.65**, the original's dev threshold rounded up. The Q8_0's own is 0.635; both give the same verdicts here.
+- Security FPR is 9% here against 6% in the run above: keepmum's `doctor.py`, which now names the model, is one more holdout document flagged. The Q8_0 file is 164 MB, and the conversion is reproducible byte for byte.
+
 ## Verdict
+
+*Nov 4, 2026:* superseded in part. Horizon-Labs Prompt Injection Guard Small (Apache-2.0) now beats Shield Small on this benchmark (above), so point 1's "the best Apache model misses six of ten" no longer holds. keepmum's injection check now uses it, as a GGUF in llama-server, and no longer offers Shield Small or asks users to confirm non-commercial use. Points 2 and 3 stand: the check is optional, off by default, and on top of the restore guards.
 
 *Nov 3, 2026, later:* keepmum now offers Shield Small as an opt-in download (`keepmum guard setup injection`): the licence is shown and non-commercial use confirmed first, the weights are pinned and checked, and the guard defaults to off. See the README's "Optional checks".
 

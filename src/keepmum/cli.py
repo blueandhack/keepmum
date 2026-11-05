@@ -450,7 +450,7 @@ def _guard_status() -> dict:
     cfg = _config()
     server = str(find_server() or "") or None  # both checks run in llama-server
     return {
-        "injection": {"mode": cfg.guard_injection, "installed": guard.installed(), "accepted": guard.accepted(),
+        "injection": {"mode": cfg.guard_injection, "installed": guard.installed(),
                       "server": server, "model": f"{guard.REPO}@{guard.REVISION}", "source": f"{guard.SOURCE}@{guard.RELEASE}",
                       "licence": guard.LICENCE, "threshold": guard.THRESHOLD},
         "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
@@ -490,8 +490,7 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
     inj, hm = st["injection"], st["harm"]
     typer.echo(f"injection: {_MODE_TEXT[inj['mode']]}")
     if inj["installed"]:
-        typer.echo(f"  model: {guard.ATTRIBUTION}; non-commercial use confirmed on "
-                   f"{time.strftime('%b %-d, %Y', time.localtime(inj['accepted']['ts']))}")
+        typer.echo(f"  model: {guard.ATTRIBUTION}")
     else:
         typer.echo("  model: not set up (`keepmum guard setup injection`)")
     typer.echo(f"harm: {_MODE_TEXT[hm['mode']]}")
@@ -504,10 +503,8 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
 
 @guard_app.command("setup")
 def guard_setup(check: str = typer.Argument(..., help="injection or harm"),
-                model: str = typer.Option("0.6b", "--model", help="harm: 0.6b (805 MB) or 4b (4.7 GB)."),
-                accept_noncommercial: bool = typer.Option(
-                    False, "--accept-noncommercial", help="injection: confirm non-commercial use without the prompt.")) -> None:
-    """Download a check's model (pinned SHA-256); injection asks you to confirm non-commercial use first."""
+                model: str = typer.Option("0.6b", "--model", help="harm: 0.6b (805 MB) or 4b (4.7 GB).")) -> None:
+    """Download a check's model, checked against its pinned SHA-256."""
     from . import guard, harm
     from .audit import AuditLog, caller
 
@@ -523,20 +520,12 @@ def guard_setup(check: str = typer.Argument(..., help="injection or harm"),
             typer.echo(f"\r  {pct}% of {total / 1e6:,.0f} MB", nl=False, err=True)
 
     if check == "injection":
-        typer.echo(guard.TERMS + "\n", err=True)
-        if not accept_noncommercial:
-            if not sys.stdin.isatty():
-                typer.echo("keepmum guard setup: confirm with --accept-noncommercial when not run in a terminal", err=True)
-                raise typer.Exit(2)
-            if not typer.confirm("Is your use of the injection check non-commercial?", default=False, err=True):
-                typer.echo("Not set up. keepmum works as before without it.", err=True)
-                raise typer.Exit(1)
+        typer.echo(guard.INFO, err=True)
         try:
             path = guard.download(progress)
         except (guard.GuardError, OSError) as e:
             typer.echo(f"\nkeepmum guard setup: {e}", err=True)
             raise typer.Exit(1)
-        guard.accept(caller("keepmum guard setup injection"))
         AuditLog().append("guard-model", action="installed", model=f"{guard.REPO}@{guard.REVISION}", licence=guard.LICENCE,
                           by=caller("keepmum guard setup injection"))
     else:
@@ -602,7 +591,7 @@ def guard_harm(mode: str = typer.Argument(..., help="warn, block or off"),
 
 @guard_app.command("remove")
 def guard_remove(check: str = typer.Argument(..., help="injection or harm")) -> None:
-    """Turn a check off and delete its model (for injection, also the licence confirmation)."""
+    """Turn a check off and delete its model."""
     from . import guard, harm
     from .audit import AuditLog, caller
 
@@ -612,7 +601,7 @@ def guard_remove(check: str = typer.Argument(..., help="injection or harm")) -> 
     cfg = _config()
     if (cfg.guard_injection if check == "injection" else cfg.guard_harm) != "off":
         _set_mode(check, "off")
-    gone = ([guard.model_dir()] if guard.remove() else []) if check == "injection" else harm.remove()
+    gone = guard.remove() if check == "injection" else harm.remove()
     for path in gone:
         AuditLog().append("guard-model", action="removed", model=path.name, by=caller(f"keepmum guard remove {check}"),
                           licence=guard.LICENCE if check == "injection" else harm.LICENCE)

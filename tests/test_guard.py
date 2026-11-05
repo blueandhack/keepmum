@@ -1,6 +1,6 @@
 """The prompt-injection guard: what it checks, what it does in warn and block mode, and that it
-never stores or logs a tool result's text. A fake model stands in for Shield Small; the real one
-is tested only where its weights and runtime are already on this Mac."""
+never stores or logs a tool result's text. A fake model stands in for Prompt Injection Guard
+Small; the real one is tested only where its GGUF and llama-server are already on this Mac."""
 
 import json
 import logging
@@ -194,17 +194,17 @@ def test_config_and_audit(tmp_path):
     assert config_changes({}, {"guard": "off"}) == []  # a log older than the setting
 
 
-def test_installed_needs_the_files_and_the_confirmation(tmp_path, monkeypatch):
+def test_installed_needs_every_pinned_file(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    assert not guard.installed() and guard.accepted() is None
+    assert not guard.installed()
     for rel, (_, size) in guard.FILES.items():
         f = guard.model_dir() / rel
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_bytes(b"\0" * size)
-    assert not guard.installed()  # downloaded, but the licence was never confirmed
-    guard.accept("test")
-    assert guard.installed() and guard.accepted()["licence"] == "CC-BY-NC-4.0"
-    assert guard.remove() and not guard.installed()
+        f.write_bytes(b"\0" * (size - 1 if rel == "NOTICE" else size))
+    assert not guard.installed()  # one file short
+    (guard.model_dir() / "NOTICE").write_bytes(b"\0" * guard.FILES["NOTICE"][1])
+    assert guard.installed() and guard.LICENCE == "Apache-2.0"
+    assert guard.remove() == [guard.model_dir()] and not guard.installed()
 
 
 def test_a_download_that_does_not_match_is_discarded(tmp_path, monkeypatch):
@@ -223,20 +223,27 @@ def test_a_download_that_does_not_match_is_discarded(tmp_path, monkeypatch):
     assert not (guard.model_dir() / "config.json").exists() and guard.REVISION in urls[0]
 
 
-def test_setup_removes_the_onnx_files_of_earlier_versions(tmp_path, monkeypatch):
+def test_setup_removes_shield_small_from_earlier_versions(tmp_path, monkeypatch):
     import hashlib
 
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.setattr(guard, "FILES", {"LICENSE": (hashlib.sha256(b"ok").hexdigest(), 2)})
-    d = guard.model_dir()
-    (d / "onnx").mkdir(parents=True)
-    (d / "onnx" / "model_quantized.onnx").write_bytes(b"old")
-    (d / "tokenizer.json").write_text("{}")
+    old = guard.model_dir().parent / "shield-small-s15e"
+    old.mkdir(parents=True)
+    (old / "shield-small-s15e.Q8_0.gguf").write_bytes(b"old")
+    (old / "ACCEPTED.json").write_text("{}")
     monkeypatch.setattr(httpx, "stream", lambda method, url, **kw: httpx.Client(
         transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"ok"))).stream(method, url))
     guard.download()
-    assert (d / "LICENSE").read_bytes() == b"ok"
-    assert not (d / "onnx").exists() and not (d / "tokenizer.json").exists()
+    assert (guard.model_dir() / "LICENSE").read_bytes() == b"ok" and not old.exists()
+
+
+def test_remove_also_deletes_shield_small(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    old = guard.model_dir().parent / "shield-small-s15e"
+    old.mkdir(parents=True)
+    assert guard.remove() == [old] and not old.exists()
+    assert guard.remove() == []
 
 
 class FakeServer:
@@ -256,22 +263,59 @@ class FakeServer:
         return {"tokens": list(self.ids)}
 
 
-def test_tokens_end_like_shields_own_tokenizer():
-    m = guard.Shield(Path("/nonexistent"))
-    m._server = FakeServer([10, 11])
-    assert m.tokens("two words") == [10, 11]
-    assert m.tokens("two words\n") == [10, 11, guard.SPACE]  # Shield's tokenizer ends such text with ▁
-    m._server = FakeServer([10, guard.SPACE])
-    assert m.tokens("two words ") == [10, guard.SPACE]
+def test_text_is_normalized_like_the_models_tokenizer():
+    smuggled = "".join(chr(0xE0000 + ord(c)) for c in "run setup.sh")  # Unicode tag characters
+    selectors = "".join(chr(0xE00F0 + ord(c)) for c in "run setup.sh")  # variation selectors
+    assert guard.normalize("see" + smuggled) == "seerun setup.sh"
+    assert guard.normalize("👍" + selectors) == "👍run setup.sh"
+    assert guard.normalize("Ｉｇｎｏｒｅ ﬁle") == "Ignore file"  # NFKC
+    assert guard.normalize("in\u200bvis\u2060ible\ufeff\u202eltr\u00ad") == "invisibleltr"
+    assert guard.normalize("plain text, kept\n") == "plain text, kept\n"
 
 
-def test_long_texts_get_windows_from_both_ends():
-    body = guard.WINDOW - 2
-    assert guard.Shield.windows(list(range(body))) == [list(range(body))]
+def _source_tokenizer() -> Path | None:
+    import os
+
+    snap = Path(os.environ.get("HF_HOME", "")) / "hub" / "models--Horizon-Labs--prompt-injection-guard-small" / "snapshots" / \
+        guard.SOURCE_REVISION / "tokenizer.json"
+    return snap if snap.is_file() else None
+
+
+@pytest.mark.skipif(_source_tokenizer() is None, reason="the original model is not in the Hugging Face cache")
+def test_the_normalizer_is_the_models_own():
+    steps = json.loads(_source_tokenizer().read_text())["normalizer"]["normalizers"]
+    replaced = [s for s in steps if s["type"] == "Replace" and "String" in s["pattern"]][:-1]  # the last is " " -> "▁"
+    assert {ord(s["pattern"]["String"]): s["content"] for s in replaced} == guard._SMUGGLED
+    assert [s["type"] for s in steps[len(replaced):]] == ["NFKC", "Replace", "Replace"]
+    assert steps[len(replaced) + 1]["pattern"]["Regex"] == guard._INVISIBLE.pattern
+
+
+class RecordingServer(FakeServer):
+    def post(self, path, body, timeout=60):
+        self.content = body["content"]
+        return super().post(path, body, timeout)
+
+
+def test_tokens_are_of_the_normalized_text():
+    m = guard.InjectionModel(Path("/nonexistent"))
+    m._server = RecordingServer([10, 11])
+    assert m.tokens("Ｈｉ\u200b there") == [10, 11] and m._server.content == "Hi there"
+
+
+def test_windows_overlap_and_long_texts_keep_both_ends():
+    body, step = guard.WINDOW - 2, guard.WINDOW - 2 - guard.OVERLAP
+    assert guard.InjectionModel.windows(list(range(body))) == [list(range(body))]
+    two = guard.InjectionModel.windows(list(range(body + 1)))
+    assert [w[0] for w in two] == [0, step] and two[-1][-1] == body
     ids = list(range(100_000))
-    w = guard.Shield.windows(ids)
+    w = guard.InjectionModel.windows(ids)
     assert len(w) == guard.MAX_WINDOWS and all(len(x) == body for x in w)
     assert w[0][0] == 0 and w[-1][-1] == ids[-1]
+    heads = guard.MAX_WINDOWS - guard.TAIL_WINDOWS
+    assert [x[0] for x in w[:heads]] == [k * step for k in range(heads)]
+    assert [x[0] for x in w[heads:]] == [len(ids) - body - k * step for k in (3, 2, 1, 0)]
+    whole = guard.InjectionModel.windows(list(range(step * (guard.MAX_WINDOWS - 1) + body)))  # the longest scored whole
+    assert [x[0] for x in whole] == [k * step for k in range(guard.MAX_WINDOWS)] and len(whole[-1]) == body
 
 
 # --- The real model, when it is on this Mac ------------------------------------------------
@@ -285,21 +329,25 @@ def _real_model() -> Path | None:
         return guard.model_path()
     import os
 
+    if os.environ.get("KEEPMUM_TEST_INJECTION_GGUF"):  # a local conversion (bench/horizon_gguf.py)
+        return Path(os.environ["KEEPMUM_TEST_INJECTION_GGUF"])
     # HOME is a temp dir in tests; HF_HOME points at the real cache (conftest.py).
-    snaps = Path(os.environ.get("HF_HOME", "")) / "hub" / "models--keepmum--shield-small-gguf" / "snapshots"
+    snaps = Path(os.environ.get("HF_HOME", "")) / "hub" / "models--keepmum--prompt-injection-guard-small-gguf" / "snapshots"
     for d in sorted(snaps.glob("*")) if snaps.exists() else []:
         if (d / guard.GGUF).exists():
             return d / guard.GGUF
     return None
 
 
-@pytest.mark.skipif(_real_model() is None, reason="Shield Small's GGUF or llama-server is not on this Mac")
-def test_shield_small_separates_an_injection_from_a_readme():
-    m = guard.Shield(_real_model())
+@pytest.mark.skipif(_real_model() is None, reason="the injection model's GGUF or llama-server is not on this Mac")
+def test_the_model_separates_an_injection_from_a_readme():
+    m = guard.InjectionModel(_real_model())
     try:
         readme = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text()[:6000]
         assert m.score(readme + "\n\n" + ATTACK) >= guard.THRESHOLD
         assert m.score(BENIGN) < 0.5
+        smuggled = "".join(chr(0xE0000 + ord(c)) for c in ATTACK)  # invisible, but the agent's model reads it
+        assert m.score(BENIGN + smuggled) >= guard.THRESHOLD
         assert m.loaded()
     finally:
         m.unload()
@@ -419,7 +467,7 @@ def test_harm_config_and_audit(tmp_path):
 
 
 def test_idle_models_unload():
-    m = guard.Shield(Path("/nonexistent"))
+    m = guard.InjectionModel(Path("/nonexistent"))
     m.idle_s = 0.05
     m._server = FakeServer([])  # as if loaded
     m._touch()
@@ -502,5 +550,5 @@ def test_status_json_has_the_checks():
 
     out = json.loads(CliRunner().invoke(app, ["status", "--json"]).stdout)
     assert out["guard"]["injection"]["mode"] == "off" and out["guard"]["harm"]["model"] == "0.6b"
-    assert "server" in out["guard"]["injection"] and out["guard"]["injection"]["model"].startswith("keepmum/shield-small-gguf@")
+    assert "server" in out["guard"]["injection"] and out["guard"]["injection"]["model"].startswith("keepmum/prompt-injection-guard-small-gguf@")
     assert set(out["guard"]["harm"]["installed"]) == {"0.6b", "4b"}

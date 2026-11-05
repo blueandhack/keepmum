@@ -45,11 +45,8 @@ final class Engine {
     /// `keepmum guard --json`: each optional check's mode and whether its model is set up.
     struct Checks: Decodable, Equatable {
         struct Injection: Decodable, Equatable {
-            struct Accepted: Decodable, Equatable { var ts: Double }
             var mode: String
             var installed: Bool
-            /// When non-commercial use of the model was confirmed; nil until then.
-            var accepted: Accepted?
             /// llama-server's path (both checks run in it); nil when it is not found.
             var server: String?
             var licence: String
@@ -360,19 +357,14 @@ final class Engine {
 
     // MARK: The optional checks (`keepmum guard`)
 
-    /// Download a check's model with progress from its "NN% of N MB" lines. The injection model's
-    /// licence must have been shown and non-commercial use confirmed: `confirmedNoncommercial`.
-    func setUpCheck(_ check: String, model: String = "0.6b", confirmedNoncommercial: Bool = false) async {
+    /// Download a check's model with progress from its "NN% of N MB" lines.
+    func setUpCheck(_ check: String, model: String = "0.6b") async {
         await act {
             let what = check == "harm" ? "harm \(model)" : "injection"
             self.checkDownload = (what, 0)
             defer { self.checkDownload = nil }
             var args = ["guard", "setup", check]
             if check == "harm" { args += ["--model", model] }
-            if check == "injection" {
-                guard confirmedNoncommercial else { throw EngineError("Confirm non-commercial use first.") }
-                args.append("--accept-noncommercial")
-            }
             let out = try await self.run(args) { line in
                 if let pct = line.split(separator: "%").first.flatMap({ Double($0.trimmingCharacters(in: .whitespaces)) }) {
                     Task { @MainActor in self.checkDownload = (what, pct / 100) }
@@ -642,8 +634,8 @@ final class Engine {
                           clients: ["codex": .init(installed: true, on: true, via: "http://127.0.0.1:3425/v1"),
                                     "pi": .init(installed: true, on: false, other: .many(["openai"]), otherUrl: "https://llm.corp.example/v1")],
                           destinations: ["gitlab-token": ["gitlab.corp.example"]], previews: true, context: true, keepDays: 90,
-                          guard: .init(injection: .init(mode: "warn", installed: true, accepted: .init(ts: Date().timeIntervalSince1970 - 86_400 * 3),
-                                                        server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "CC-BY-NC-4.0"),
+                          guard: .init(injection: .init(mode: "warn", installed: true,
+                                                        server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0"),
                                        harm: .init(mode: "block", model: "0.6b", installed: ["0.6b": true, "4b": false],
                                                    server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0")))
         e.serviceStatus = .enabled

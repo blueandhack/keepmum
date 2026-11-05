@@ -14,6 +14,9 @@ Scores every document of the injection benchmark (bench/guard.py's data) four wa
 
 SRC is Shield's pinned files; OUT is bench/shield_gguf.py's output folder (hf/ in it is used for torch).
 Writes bench/results/shield-gguf-<stamp>.{md,json}: scores only, never text.
+
+keepmum's injection check has since moved to Prompt Injection Guard Small (bench/horizon_parity.py),
+and keepmum.guard.Shield is gone: run this at commit f04428d, the last with it.
 """
 
 from __future__ import annotations

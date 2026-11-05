@@ -153,7 +153,7 @@ Personal data is off by default: only secrets and your own rules are masked unti
 ### Optional checks: prompt injection and harmful requests
 
 ```sh
-keepmum guard setup injection        # shows the model's licence, asks you to confirm non-commercial use, downloads it (133 MB)
+keepmum guard setup injection        # downloads Prompt Injection Guard Small (164 MB)
 keepmum guard setup harm             # downloads Qwen3Guard-Gen 0.6B (805 MB); --model 4b for the larger one (4.7 GB)
 keepmum guard injection warn         # check what tools return; log a possible injection and send the request
 keepmum guard harm block             # check what you type; refuse a request the model flags
@@ -171,15 +171,15 @@ Both checks are off by default, and keepmum downloads their models only when you
 
 | Check | Model | Licence | Benchmark | Memory while in use | Time |
 | --- | --- | --- | --- | --- | --- |
-| injection | [Shield Small](https://huggingface.co/ZeroLeaks/shield-small) (ZeroLeaks), as an [unofficial GGUF](https://huggingface.co/keepmum/shield-small-gguf) in llama.cpp on Metal | **CC BY-NC 4.0: non-commercial use only** | 88% of injected documents caught, 3% of ordinary ones flagged ([GUARD.md](bench/results/GUARD.md)) | 0.4 GB | about 110 ms for a 6,000-character tool result |
+| injection | [Prompt Injection Guard Small](https://huggingface.co/Horizon-Labs/prompt-injection-guard-small) v2.3 (Horizon Labs), as a [GGUF](https://huggingface.co/keepmum/prompt-injection-guard-small-gguf) in llama.cpp on Metal | Apache-2.0 | every injected document caught, 3% of ordinary ones flagged ([GUARD.md](bench/results/GUARD.md)) | 0.4 GB | about 40 ms for a 6,000-character tool result |
 | harm | [Qwen3Guard-Gen](https://huggingface.co/Qwen/Qwen3Guard-Gen-0.6B) 0.6B or 4B, Q8 GGUF in llama.cpp on Metal | Apache-2.0 | 0.6B: 76% of harmful prompts caught, 4% of safe ones flagged; 4B: 82% and 4%; no ordinary coding prompt flagged by the 4B ([HARM.md](bench/results/HARM.md)) | 1.1 GB (0.6B), 4.9 GB (4B) | 30 ms (0.6B), 150 ms (4B) |
 
 The models load on the first check and unload after 10 minutes unused, so they take memory only while agents are working; the privacy filter's 1.7 GB comes first. With both checks on and the 0.6B, keepmum needs about 3.2 GB while busy; `keepmum doctor` warns if the 4B is too much for the Mac.
 
-- **Injection's licence:** Shield Small's weights are non-commercial. Using keepmum on work for an employer or a client is commercial use; for that, ask ZeroLeaks for a licence. keepmum's own code stays Apache-2.0. keepmum downloads its own conversion of ZeroLeaks' release, which runs in llama.cpp and scores like the original ([GUARD.md](bench/results/GUARD.md)); ZeroLeaks does not endorse it.
+- **The injection model** is keepmum's conversion of Horizon Labs' release, which runs in llama.cpp and gives the same verdicts as the original on every benchmark document ([GUARD.md](bench/results/GUARD.md)); Horizon Labs does not endorse it. Before scoring, keepmum applies the model's own text normalizer, so instructions hidden in invisible Unicode characters are read as the agent's model would read them. keepmum versions before it used Shield Small, which is for non-commercial use only; setting the check up again removes Shield.
 - **Both checks run in** `llama-server` from llama.cpp: `native/llama-server/build.sh` builds it from pinned sources into `~/.local/share/keepmum/bin`, or `brew install llama.cpp` (or set `KEEPMUM_LLAMA_SERVER`). The harm check uses a threshold set on benchmark data, not the model's own verdict, which flagged a quarter of ordinary coding prompts ("kill the process on port 8080").
 - **The Mac app** bundles `llama-server`, and sets the checks up in Settings › Checks; what they flag shows on the Logs and Activity pages.
-- **False alarms:** the injection check flags about 12% of security writing and security code that quotes attacks, keepmum's own included, so warn suits such work better than block. Neither check replaces the restore guards above: a page that tells the agent to send a key somewhere still gets only a placeholder.
+- **False alarms:** the injection check flags about 9% of security writing and security code that quotes attacks, keepmum's own included, so warn suits such work better than block. Neither check replaces the restore guards above: a page that tells the agent to send a key somewhere still gets only a placeholder.
 
 ### Leave a project out
 
@@ -290,7 +290,7 @@ harm_model = "0.6b"    # or "4b"
 | Request history for the Activity page: time, endpoint, outcome, counts by type, tool calls' decisions; never values | `~/.config/keepmum/history.jsonl` (0600), last 20,000 requests |
 | Audit log: requests (counts, rules, restore decisions per tool), protection changes, starts and stops; never values | `~/.config/keepmum/audit.jsonl` (0600), with its head in `audit.head.json`; `[audit] keep_days`, 90 by default |
 | Network tools seen: server and tool names, a hash of each tool's definition, kept-call counts per day and type; never values | `~/.config/keepmum/tools.json` (0600), counts for the last 30 days |
-| The optional checks' models, only after `keepmum guard setup`, and your confirmation of non-commercial use for the injection model | `~/.local/share/keepmum/guard/` (`shield-small-s15e/` with `ACCEPTED.json`, `qwen3guard/`); `keepmum guard remove injection|harm` deletes them |
+| The optional checks' models, only after `keepmum guard setup` | `~/.local/share/keepmum/guard/` (`prompt-injection-guard-small-v2.3/`, `qwen3guard/`); `keepmum guard remove injection|harm` deletes them |
 | Check hits: check, tool, score, length and categories; never the text | Process memory (the stats feed, the last 200) and the audit log |
 | Masked values, and which tool servers returned each | Process memory only, cleared on exit |
 | The Logs page: per masked value its type, rule and length, and the first and last character of values of 8 or more characters | Process memory only (the last 2,000), cleared on exit; `[log] previews = false` keeps types and rules only |
