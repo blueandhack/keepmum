@@ -34,12 +34,17 @@ ACTIONS = ("restore", "keep", "own")
 
 class ToolPolicy(dict):
     """The restore policy, with the registry of servers seen (tools.ToolRegistry) when there is one,
-    and the hosts config [destinations] adds for issuer rules (destinations.py)."""
+    the hosts config [destinations] adds for issuer rules (destinations.py), and, per request, the
+    commands check (commands.py): `review(name, value)` gives None, or the input to send instead."""
 
-    def __init__(self, policy: dict, registry=None, destinations: dict[str, list[str]] | None = None):
+    def __init__(self, policy: dict, registry=None, destinations: dict[str, list[str]] | None = None, review=None):
         super().__init__(policy)
         self.registry = registry
         self.destinations = destinations or {}
+        self.review = review
+
+    def with_review(self, review) -> ToolPolicy:
+        return ToolPolicy(self, self.registry, self.destinations, review)
 
 
 def rule_for(name: str, policy: dict) -> tuple[str, object]:
@@ -269,6 +274,9 @@ def restore_tool(name: str, value, vault: Vault, policy: dict, counts: Counter |
             tree = json.loads(value)
         except ValueError:
             parse = False
+    review = getattr(policy, "review", None)
+    if review is not None and (replaced := review(name, tree)) is not None:
+        return json.dumps(replaced, ensure_ascii=False) if parse else replaced  # a refused command: no values go in
     only, decisions = tool_values(name, tree, vault, policy)
     if counts is not None:
         for action, reason, kind, n in decisions:

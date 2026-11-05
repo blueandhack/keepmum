@@ -435,16 +435,20 @@ def pii(action: str = typer.Argument("status", help="on, off, or status")) -> No
 
 
 guard_app = typer.Typer(help="Optional checks: `injection` looks at what tools return for planted instructions; "
-                        "`harm` looks at what you type for requests a policy may not allow. Set one up with "
-                        "`keepmum guard setup injection|harm`.", invoke_without_command=True)
+                        "`harm` looks at what you type for requests a policy may not allow; `commands` looks at the "
+                        "shell commands in the model's replies. Set up injection or harm first with "
+                        "`keepmum guard setup injection|harm`; commands needs no setup.", invoke_without_command=True)
 app.add_typer(guard_app, name="guard")
 CHECKS = ("injection", "harm")
+_COMMANDS_TEXT = {"off": "off", "warn": "warn (a flagged command is logged, then run as the agent decides)",
+                  "block": "block (a flagged command is replaced by one that says why and fails)"}
 _MODE_TEXT = {"off": "off", "warn": "warn (flagged requests are logged, then sent)",
               "block": "block (flagged requests are refused)"}
 
 
 def _guard_status() -> dict:
     from . import guard, harm
+    from .commands import RULES, SENDS
     from .llamacpp import find_server
 
     cfg = _config()
@@ -453,6 +457,7 @@ def _guard_status() -> dict:
         "injection": {"mode": cfg.guard_injection, "installed": guard.installed(),
                       "server": server, "model": f"{guard.REPO}@{guard.REVISION}", "source": f"{guard.SOURCE}@{guard.RELEASE}",
                       "licence": guard.LICENCE, "threshold": guard.THRESHOLD},
+        "commands": {"mode": cfg.guard_commands, "rules": [label for _, label, _ in RULES + SENDS]},
         "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
                  "installed": {size: harm.installed(size) for size in harm.SIZES},
                  "server": server, "licence": harm.LICENCE,
@@ -465,6 +470,8 @@ def _missing(check: str, size: str | None = None) -> str | None:
     from . import guard, harm
     from .llamacpp import find_server
 
+    if check == "commands":  # rules, no model
+        return None
     if check == "injection" and not guard.installed():
         return "its model is not set up: run `keepmum guard setup injection` first"
     if check == "harm" and not harm.installed(size):
@@ -499,6 +506,9 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
                + ("" if hm["installed"][hm["model"]] else f", not downloaded (`keepmum guard setup harm --model {hm['model']}`)")
                + (f"; downloaded: {', '.join(have)}" if have else ""))
     typer.echo(f"runtime (both): {hm['server'] or 'llama-server not found (brew install llama.cpp)'}")
+    cm = st["commands"]
+    typer.echo(f"commands: {_COMMANDS_TEXT[cm['mode']]}")
+    typer.echo(f"  rules ({len(cm['rules'])}, no model): {', '.join(cm['rules'])}")
 
 
 @guard_app.command("setup")
@@ -582,7 +592,8 @@ def _set_mode(check: str, mode: str, model: str | None = None) -> None:
     except (ConfigError, OSError) as e:
         typer.echo(f"keepmum guard {check}: {e}", err=True)
         raise typer.Exit(1)
-    typer.echo(f"{check}: {_MODE_TEXT[mode]}" + (f", {harm.NAMES[size]}" if check == "harm" and mode != "off" else ""),
+    typer.echo(f"{check}: {(_COMMANDS_TEXT if check == 'commands' else _MODE_TEXT)[mode]}"
+               + (f", {harm.NAMES[size]}" if check == "harm" and mode != "off" else ""),
                err=True)
     typer.echo("Running proxies switch on their next request.", err=True)
 
@@ -591,6 +602,12 @@ def _set_mode(check: str, mode: str, model: str | None = None) -> None:
 def guard_injection(mode: str = typer.Argument(..., help="warn, block or off")) -> None:
     """Check what tools return (web pages, files, MCP replies) for planted instructions."""
     _set_mode("injection", mode)
+
+
+@guard_app.command("commands")
+def guard_commands(mode: str = typer.Argument(..., help="warn, block or off")) -> None:
+    """Check the shell commands in the model's replies (curl | sh, rm -rf ~, keys sent out, ...)."""
+    _set_mode("commands", mode)
 
 
 @guard_app.command("harm")

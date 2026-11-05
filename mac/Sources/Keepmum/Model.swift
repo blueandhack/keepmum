@@ -170,7 +170,7 @@ struct Snapshot: Decodable, Sendable {
         var date: Date { Date(timeIntervalSince1970: ts) }
     }
     /// The checks' modes, as the running proxy has them (`[guard]`).
-    struct Checks: Decodable, Sendable { var injection: String?; var harm: String?; var harmModel: String? }
+    struct Checks: Decodable, Sendable { var injection: String?; var harm: String?; var harmModel: String?; var commands: String? }
 
     var started: Double = Date().timeIntervalSince1970
     var uptimeS: Double = 0
@@ -194,7 +194,7 @@ struct Snapshot: Decodable, Sendable {
     var checks: Checks?
     var guardHits: [GuardHit] { `guard`?.hits ?? [] }
     /// A check is on in the running proxy.
-    var checking: Bool { [checks?.injection, checks?.harm].contains { $0 != nil && $0 != "off" } }
+    var checking: Bool { [checks?.injection, checks?.harm, checks?.commands].contains { $0 != nil && $0 != "off" } }
 
     /// How keepmum was started: `keepmum claude`, `keepmum serve`, or an editor's wrapper.
     var modeLabel: String {
@@ -246,6 +246,8 @@ struct Flows: Decodable, Sendable {
     var out: [Out] = []
     var back: [Back] = []
     var unresolved: Int = 0
+    /// The optional checks' results ("flagged", "refused"), each by check (injection, harm); nil from older engines.
+    var checks: [String: [String: Int]]?
 }
 
 @MainActor
@@ -469,9 +471,10 @@ final class StatsStore {
             if event.scanMs == nil && (event.outcome == "forwarded" || event.outcome == "observed") { continue }  // bodyless check
             if event.kind == .flagged { continue }  // a check's note on a request already drawn
             let client = event.client ?? "claude-code", provider = event.provider ?? "anthropic"
-            let result = event.outcome == "upstream_error" ? "failed" : event.kind.rawValue
+            let result = event.outcome == "upstream_error" ? "failed"
+                : event.kind == .blocked && !event.checks.isEmpty ? "refused" : event.kind.rawValue
             pulses.append(Pulse(kind: .out(result), client: client, provider: provider, born: now))
-            if result != "blocked" && result != "failed" {
+            if !["blocked", "refused", "failed"].contains(result) {
                 pulses.append(Pulse(kind: .back(restored: event.restored.values.reduce(0, +) > 0), client: client,
                                     provider: provider, born: now.addingTimeInterval(FlowGeometry.replyDelay)))
             }
@@ -539,7 +542,7 @@ struct SampleFeed {
         snap.recent[10].tools = [.init(tool: "mcp__claude_ai_Gmail__search_threads", action: "keep", values: 1,
                                        reason: "not_allowed", types: ["EMAIL": 1])]
         // The optional checks: a web page flagged after it was sent, and a typed request refused.
-        snap.checks = .init(injection: "warn", harm: "block", harmModel: "small")
+        snap.checks = .init(injection: "warn", harm: "block", harmModel: "small", commands: "warn")
         var flagged = event(at: snap.recent[6].ts + 1)
         flagged.outcome = "flagged"; flagged.status = 0; flagged.scanMs = nil; flagged.redacted = [:]; flagged.restored = [:]
         flagged.new = 0; flagged.client = "claude-code"; flagged.provider = "anthropic"
@@ -565,8 +568,10 @@ struct SampleFeed {
                      .init(id: "pi", name: "pi", sent: 31 * k)]
         f.providers = [.init(id: "anthropic", name: "Anthropic", replies: 435 * k), .init(id: "openai", name: "OpenAI", replies: 94 * k)]
         f.out = [.init(client: "claude-code", provider: "anthropic", kind: "clean", n: 258 * k),
-                 .init(client: "claude-code", provider: "anthropic", kind: "masked", n: 148 * k),
-                 .init(client: "claude-code", provider: nil, kind: "blocked", n: 6 * k),
+                 .init(client: "claude-code", provider: "anthropic", kind: "masked", n: 144 * k),
+                 .init(client: "claude-code", provider: "anthropic", kind: "flagged", n: 4 * k),
+                 .init(client: "claude-code", provider: nil, kind: "blocked", n: 4 * k),
+                 .init(client: "claude-code", provider: nil, kind: "refused", n: 2 * k),
                  .init(client: "codex", provider: "openai", kind: "clean", n: 70 * k),
                  .init(client: "codex", provider: "openai", kind: "masked", n: 24 * k),
                  .init(client: "codex", provider: nil, kind: "blocked", n: 2 * k),
@@ -580,6 +585,7 @@ struct SampleFeed {
                   .init(provider: "anthropic", client: "pi", restored: true, n: 9 * k, values: 7 * k),
                   .init(provider: "anthropic", client: "pi", restored: false, n: 20 * k, values: 0)]
         f.unresolved = 2  // placeholders made by another keepmum, or before a restart
+        f.checks = ["flagged": ["injection": 2 * k, "harm": 1 * k, "commands": 1 * k], "refused": ["injection": 1 * k, "harm": 1 * k]]
         return f
     }
 

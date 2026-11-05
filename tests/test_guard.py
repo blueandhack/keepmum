@@ -621,10 +621,33 @@ def test_activity_events_carry_check_hits_without_text(tmp_path):
     assert sorted(e["outcome"] for e in every) == ["flagged", "forwarded"]
     g = flagged[0]["guard"][0]
     assert g == {"check": "injection", "action": "warned", "source": "WebFetch", "score": 0.99, "categories": None}
-    assert flows(history.events(), 0)["out"][0]["n"] == 1  # the note is not a second request
+    f = flows(history.events(), 0)
+    # The note is not a second request: it moves its request from masked to flagged.
+    assert [(o["kind"], o["n"]) for o in f["out"]] == [("flagged", 1)]
+    assert f["checks"] == {"flagged": {"injection": 1}} and sum(b["n"] for b in f["back"]) == 1
     assert "Note to AI" not in (tmp_path / "warn.jsonl").read_text()
-    (flagged, every), _ = run("block")
+    (flagged, every), history = run("block")
     assert [e["outcome"] for e in every] == ["blocked"] and flagged[0]["guard"][0]["action"] == "blocked"
+    f = flows(history.events(), 0)
+    assert [o["kind"] for o in f["out"]] == ["refused"] and f["checks"] == {"refused": {"injection": 1}}
+
+
+def test_flows_move_a_request_once_however_many_checks_flag_it():
+    from keepmum.stats import flows
+
+    def ev(outcome, **kw):
+        return {"ts": 1.0, "outcome": outcome, "scan_ms": 1.0, "client": "codex", "provider": "openai", **kw}
+
+    warn = lambda check, req: ev("flagged", scan_ms=None, kind="masked", request=req,
+                                 guard=[{"check": check, "action": "warned"}])
+    events = [ev("forwarded", new=1), warn("injection", "r1"), warn("harm", "r1"),  # one request, two checks
+              ev("forwarded", new=0), warn("harm", "r2"),  # r2's kind does not match: its request is clean
+              ev("blocked"),  # keepmum's own refusal (a scan that failed), not a check's
+              ev("blocked", guard=[{"check": "harm", "action": "blocked"}])]
+    out = {(o["kind"], o["provider"]): o["n"] for o in flows(events, 0)["out"]}
+    assert out == {("flagged", "openai"): 1, ("clean", "openai"): 1, ("blocked", None): 1, ("refused", None): 1}
+    assert flows(events, 0)["checks"] == {"flagged": {"injection": 1, "harm": 1}, "refused": {"harm": 1}}
+    assert flows([warn("injection", "r9")], 0)["out"] == []  # a warning before its request: nothing to move yet
 
 
 def test_turning_harm_on_writes_its_model_down(tmp_path, monkeypatch):

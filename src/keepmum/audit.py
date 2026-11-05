@@ -257,6 +257,7 @@ def config_state(cfg) -> dict:
         "destinations": sorted(f"{rule} = {h}" for rule, hosts in cfg.destinations.items() for h in hosts),
         "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
         "guard": cfg.guard_injection, "harm": cfg.guard_harm, "harm_model": cfg.guard_harm_model,
+        "commands": cfg.guard_commands,
     }
 
 
@@ -270,7 +271,7 @@ _SETTINGS = {
     "upstream": ("server.upstream", "any"), "gateways": ("gateways", "added"), "destinations": ("destinations", "added"), "previews": ("log.previews", None), "context": ("log.context", None),
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
-_ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model"}
+_ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model", "commands"}
 _GUARD_RANK = {"off": 0, "warn": 1, "block": 2}
 
 
@@ -290,7 +291,7 @@ def config_changes(old: dict, new: dict) -> list[dict]:
             # observe on weakens; model or pii off weakens; any new upstream is flagged for a look.
             weakens = weak == "any" or (isinstance(weak, bool) and b == weak)
             out.append({"setting": name, "from": a, "to": b, "weakens": weakens})
-    for key, name in (("guard", "guard.injection"), ("harm", "guard.harm")):
+    for key, name in (("guard", "guard.injection"), ("harm", "guard.harm"), ("commands", "guard.commands")):
         if key in old and old[key] != new.get(key):
             # A check that does less than before: block to warn, or either to off.
             out.append({"setting": name, "from": old[key], "to": new.get(key),
@@ -465,6 +466,12 @@ def summary(entry: dict) -> str:
         return f"{entry.get('dropped')} entries older than {entry.get('keep_days')} days removed"
     if e == "guard":
         hits = entry.get("hits") or []
+        if entry.get("check") == "commands":
+            cats = sorted({c for h in hits for c in h.get("categories") or []})
+            what = f"commands check flagged a {', '.join(sorted({h.get('source') or 'shell' for h in hits}))} command " \
+                   f"in the reply ({', '.join(cats)})"
+            return (f"{entry.get('client', '?')} -> {entry.get('provider', '?')}; {what}; "
+                    + ("the agent got a refusal in its place" if entry.get("action") == "blocked" else "sent with a warning"))
         if entry.get("check") == "harm":
             cats = sorted({c for h in hits for c in h.get("categories") or []})
             what = f"harm check flagged what the user typed ({', '.join(cats) or 'no category'}, " \

@@ -216,13 +216,14 @@ struct ChecksCard: View {
             }
             .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 92, alignment: .leading)
             HStack(spacing: Space.s - Space.xxs) {
-                Image(systemName: h.check == "harm" ? "exclamationmark.bubble" : "syringe").font(.km(.caption))
-                    .foregroundStyle(Theme.textSecondary).frame(width: 14)
-                Text(h.check == "harm" ? "Harm" : "Injection")
+                Image(systemName: h.check == "harm" ? "exclamationmark.bubble" : h.check == "commands" ? "terminal" : "syringe")
+                    .font(.km(.caption)).foregroundStyle(Theme.textSecondary).frame(width: 14)
+                Text(h.check == "harm" ? "Harm" : h.check == "commands" ? "Command" : "Injection")
             }
             .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 100, alignment: .leading)
             Text(h.check == "harm" ? "What was typed" + ((h.categories ?? []).isEmpty ? "" : ": \((h.categories ?? []).joined(separator: ", "))")
-                                   : "\(toolLabel(h.source ?? "a tool")) result" + (h.earlier == true ? " (flagged before)" : ""))
+                 : h.check == "commands" ? "\(h.source ?? "Shell") command: \((h.categories ?? []).joined(separator: ", "))"
+                 : "\(toolLabel(h.source ?? "a tool")) result" + (h.earlier == true ? " (flagged before)" : ""))
                 .font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text(String(format: "%.2f", h.score)).font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)

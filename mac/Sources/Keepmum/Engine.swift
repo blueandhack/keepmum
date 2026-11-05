@@ -60,8 +60,15 @@ final class Engine {
             var server: String?
             var licence: String
         }
+        /// The commands check: rules on the shell commands in replies, no model.
+        struct Commands: Decodable, Equatable {
+            var mode: String
+            var rules: [String]
+        }
         var injection: Injection
         var harm: Harm
+        /// nil from older engines.
+        var commands: Commands?
     }
 
     /// `keepmum rules builtin --json`: one built-in rule, its type, and whether it is on.
@@ -637,7 +644,11 @@ final class Engine {
                           guard: .init(injection: .init(mode: "warn", installed: true,
                                                         server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0"),
                                        harm: .init(mode: "block", model: "small", installed: ["small": true, "0.6b": false, "4b": false],
-                                                   server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0")))
+                                                   server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0"),
+                                       commands: .init(mode: "warn", rules: ["a download run as a script", "decoded text run as a script",
+                                                                             "deleting your home folder or the system", "erasing a disk",
+                                                                             "a fork bomb", "credential files sent over the network",
+                                                                             "environment variables sent over the network"])))
         e.serviceStatus = .enabled
         if around {
             e.status?.protect = .init(settings: "~/.claude/settings.json", on: false, baseUrl: "http://127.0.0.1:3425")

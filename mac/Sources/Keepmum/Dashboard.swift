@@ -356,12 +356,22 @@ func toolLabel(_ tool: String) -> String {
     return name.replacingOccurrences(of: "_", with: " ")
 }
 
-/// A check's hit in an Activity row: "Injection · WebFetch", "Harm · Jailbreak".
+/// A check's hit in an Activity row: "Injection · WebFetch", "Harm · Jailbreak", "Command · a download run as a script".
 func checkLabel(_ c: Snapshot.Event.Check) -> String {
-    c.check == "harm" ? "Harm · \((c.categories ?? []).first ?? "flagged")" : "Injection · \(toolLabel(c.source ?? "a tool"))"
+    switch c.check {
+    case "harm": "Harm · \((c.categories ?? []).first ?? "flagged")"
+    case "commands": "Command · \((c.categories ?? []).first ?? "flagged")"
+    default: "Injection · \(toolLabel(c.source ?? "a tool"))"
+    }
 }
 
 func checkHelp(_ c: Snapshot.Event.Check) -> String {
+    if c.check == "commands" {
+        let what = "The commands check flagged a \(c.source ?? "shell") command in the reply: \((c.categories ?? []).joined(separator: ", "))."
+        let outcome = c.action == "blocked" ? "The agent got a command that says why and fails, in its place."
+                                            : "The agent got it as the model wrote it (warn)."
+        return "\(what) \(outcome) keepmum keeps the rule, never the command."
+    }
     let what = c.check == "harm"
         ? "The harm check flagged what was typed" + ((c.categories ?? []).isEmpty ? "" : " (\((c.categories ?? []).joined(separator: ", ")))")
         : "The injection check flagged what \(c.source.map(toolLabel) ?? "a tool") returned as a likely prompt injection"

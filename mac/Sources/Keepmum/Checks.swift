@@ -15,11 +15,15 @@ struct ChecksSection: View {
 
     var body: some View {
         FormSection(title: "Checks",
-                    footer: "Optional, and off until you turn one on. Warn sends a request at once and checks it afterwards, so it adds no delay; Block checks first and refuses what it flags, and every retry of it. A hit keeps the check, the score and the length, never the text: see Logs and Activity. Neither replaces masking.") {
+                    footer: "Optional, and off until you turn one on. Warn sends a request at once and checks it afterwards, so it adds no delay; Block checks first and refuses what it flags, and every retry of it. Risky commands reads the model's replies instead: Block hands the agent a refusal in place of the command. A hit keeps the check, the score and the length, never the text: see Logs and Activity. None of them replaces masking.") {
             if let checks {
                 injection(checks.injection)
                 Hairline()
                 harm(checks.harm)
+                if let commands = checks.commands {
+                    Hairline()
+                    self.commands(commands)
+                }
             } else {
                 FormRow(title: "Not available", detail: engine.isBundled ? "This engine has no optional checks" : "Needs the bundled engine") { EmptyView() }
             }
@@ -109,6 +113,23 @@ struct ChecksSection: View {
         }
         if c.server == nil {
             modelLine("llama-server, which both checks run in, is not found: the app bundles it; on the command line, brew install llama.cpp", tone: Theme.warning)
+        }
+    }
+
+    // MARK: Commands
+
+    @ViewBuilder private func commands(_ c: Engine.Checks.Commands) -> some View {
+        FormRow(title: "Risky commands", detail: commandsDetail(c.mode), detailTone: c.mode == "off" ? Theme.textSecondary : Theme.text) {
+            modePicker(c.mode) { await engine.setCheck("commands", mode: $0) }
+        }
+        modelLine("Rules, no download: " + c.rules.joined(separator: " · "))
+    }
+
+    private func commandsDetail(_ mode: String) -> String {
+        switch mode {
+        case "warn": "Shell commands in the model's replies are checked as they arrive; a risky one is logged, then handed to the agent"
+        case "block": "A risky shell command in a reply is replaced by one that tells the agent why and fails"
+        default: "Checks the shell commands a model asks your agent to run: curl | sh, rm -rf ~, keys sent out"
         }
     }
 

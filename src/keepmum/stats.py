@@ -156,31 +156,53 @@ def provider_of(upstream: str) -> str:
 
 def flows(events, since: float) -> dict:
     """Totals for the app's flow diagram over events newer than `since`: requests from each
-    client through keepmum's result to each provider, and replies back through restore."""
+    client through keepmum's result to each provider, and replies back through restore.
+
+    The optional checks have two results of their own: "refused" (block mode: never sent) and
+    "flagged" (warn mode: sent, then a check flagged it). A warning is an event of its own, after
+    the request's: it moves its request out of masked, clean or observed into flagged, once per
+    request, and only when that request is counted (a check may finish before a streamed reply).
+    `checks` counts each result's requests by check (injection, harm)."""
     out, back = Counter(), Counter()
     values, unresolved = Counter(), 0
-    for e in events:
+    checks = {"flagged": Counter(), "refused": Counter()}
+    warned: dict[str, dict] = {}  # request id (or the event's own place) -> its warnings
+    for i, e in enumerate(events):
         if e.get("ts", 0) < since:
             continue
         outcome = e.get("outcome")
         if outcome in ("forwarded", "observed") and e.get("scan_ms") is None:
             continue  # bodyless checks such as /api/hello: no content went anywhere
-        if outcome == "flagged":
-            continue  # a check's note on a request already counted
         client = e.get("client") or DEFAULT_CLIENT
         provider = e.get("provider") or "anthropic"
+        if outcome == "flagged":  # a check's note on a request counted on its own
+            w = warned.setdefault(e.get("request") or f"#{i}", {"client": client, "provider": provider,
+                                                              "kind": e.get("kind"), "checks": set()})
+            w["checks"].update(g.get("check", "injection") for g in e.get("guard") or [])
+            continue
         if outcome == "upstream_error":
             out[(client, None, "failed")] += 1
             continue
         kind = event_kind(e)
         if kind == "blocked":
-            out[(client, None, "blocked")] += 1
+            if e.get("guard"):
+                out[(client, None, "refused")] += 1
+                checks["refused"].update({g.get("check", "injection") for g in e["guard"]})
+            else:
+                out[(client, None, "blocked")] += 1
             continue
         out[(client, provider, kind)] += 1
         n = sum((e.get("restored") or {}).values())
         back[(provider, client, n > 0)] += 1
         values[(provider, client)] += n
         unresolved += e.get("unresolved") or 0
+    for w in warned.values():
+        key = (w["client"], w["provider"], w["kind"])
+        if out[key] > 0:
+            out[key] -= 1
+            out[(w["client"], w["provider"], "flagged")] += 1
+            checks["flagged"].update(w["checks"])
+    out = +out  # without the counts a warning moved to zero
     clients = Counter()
     for (c, _, _), n in out.items():
         clients[c] += n
@@ -194,6 +216,7 @@ def flows(events, since: float) -> dict:
         "back": [{"provider": p, "client": c, "restored": r, "n": n, "values": values[(p, c)] if r else 0}
                  for (p, c, r), n in sorted(back.items(), key=str)],
         "unresolved": unresolved,
+        "checks": {k: dict(v) for k, v in checks.items() if v},
     }
 
 
@@ -286,10 +309,17 @@ class Stats:
             for i, f in enumerate(found):
                 self.findings.append({**f, "ts": ts, "seq": i, "outcome": outcome, "client": client, "provider": provider})
 
-    def record_flagged(self, path: str, hits: list[dict], origin: tuple[str, str] | None = None) -> None:
-        """A warn-mode check's hits, found after its request was sent: an event of their own."""
+    def record_flagged(self, path: str, hits: list[dict], origin: tuple[str, str] | None = None,
+                       kind: str = "clean", request: str | None = None, action: str = "warned") -> None:
+        """A warn-mode check's hits, found after its request was sent: an event of their own. `kind`
+        is how that request went out (masked, clean, observed), and `request` an id shared by the
+        hits of every check on it, so the flow diagram moves the request to Flagged once. `action`
+        is "blocked" for a command in the reply the commands check refused (commands.py)."""
         event = {"ts": round(time.time(), 6), "path": path, "outcome": "flagged", "status": 0, "scan_ms": None,
-                 "redacted": {}, "restored": {}, "new": 0, "unresolved": 0, "guard": guard_summary(hits, "warned")}
+                 "redacted": {}, "restored": {}, "new": 0, "unresolved": 0, "guard": guard_summary(hits, action),
+                 "kind": kind}
+        if request:
+            event["request"] = request
         if origin:
             event["client"], event["provider"] = origin
         with self._lock:

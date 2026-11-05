@@ -159,7 +159,9 @@ private struct FlowBands {
     let xs: [CGFloat]
     let outTop: CGFloat, backTop: CGFloat, dashX: CGFloat
 
-    static let results = ["clean", "masked", "observed", "failed", "blocked"]
+    /// What keepmum did with each request: sent (clean, masked, observed, flagged by a check) or not
+    /// (failed upstream, blocked by keepmum, refused by a check).
+    static let results = ["clean", "masked", "observed", "flagged", "failed", "blocked", "refused"]
 
     init(flows: Flows, size: CGSize) {
         self.flows = flows
@@ -233,8 +235,8 @@ private struct FlowBands {
     static func resultColor(_ kind: String) -> Color {
         switch kind {
         case "masked": Theme.masked
-        case "observed": Theme.warning
-        case "blocked": Theme.blocked
+        case "observed", "flagged": Theme.warning
+        case "blocked", "refused": Theme.blocked
         case "failed": Theme.textSecondary
         default: Theme.neutral
         }
@@ -328,7 +330,7 @@ private struct FlowBands {
         let key = String(id.dropFirst(2))
         if id.hasPrefix("c:") { return flows.clients.first { $0.id == key }?.name ?? key }
         if id.hasPrefix("p:") { return flows.providers.first { $0.id == key }?.name ?? key }
-        if id.hasPrefix("r:") { return key.prefix(1).uppercased() + key.dropFirst() }
+        if id.hasPrefix("r:") { return key == "refused" ? "Refused by a check" : key.prefix(1).uppercased() + key.dropFirst() }
         return ["keepmum": "keepmum", "restored": "Real values put back", "plain": "Nothing to put back"][id] ?? id
     }
 
@@ -395,48 +397,68 @@ private struct FlowBands {
         func sum(_ xs: [Int]) -> Int { xs.reduce(0, +) }
 
         // (node rect, title, detail, title color) per column, then placed without overlaps.
-        typealias L = (CGRect, String, String, Color)
+        typealias L = (CGRect, String, String, Color, Bool)  // the last: title and detail on one line
         var leftOut: [L] = [], leftBack: [L] = [], mid: [L] = [], rightOut: [L] = [], rightBack: [L] = [], restore: [L] = []
         for c in flows.clients {
-            if let n = out.nodes["c:" + c.id] { leftOut.append((n.rect, c.name, c.sent.compact, Theme.text)) }
+            if let n = out.nodes["c:" + c.id] { leftOut.append((n.rect, c.name, c.sent.compact, Theme.text, false)) }
             if let n = back.nodes["c:" + c.id] {
                 let got = sum(flows.back.filter { $0.client == c.id }.map(\.n))
                 let values = sum(flows.back.filter { $0.client == c.id }.map(\.values))
-                leftBack.append((n.rect, c.name, values > 0 ? "\(got.compact) · \(values.compact) restored" : got.compact, Theme.text))
+                leftBack.append((n.rect, c.name, values > 0 ? "\(got.compact) · \(values.compact) restored" : got.compact, Theme.text, false))
             }
         }
+        // The checks' results say which check: "3 injection, 1 harm".
+        func byCheck(_ r: String, _ otherwise: String) -> String {
+            let n = flows.checks?[r] ?? [:]
+            let parts = ["injection", "harm", "commands"].compactMap { c in
+                n[c].map { "\($0.compact) \(c == "commands" ? ($0 == 1 ? "command" : "commands") : c)" }
+            }
+            return parts.isEmpty ? otherwise : parts.joined(separator: ", ")
+        }
         let detail = ["clean": "sent as is", "masked": "as placeholders", "observed": "sent unmasked", "failed": "upstream failed",
-                      "blocked": "never sent"]
-        let title = ["clean": "Clean", "masked": "Masked", "observed": "Observed", "failed": "Failed", "blocked": "Blocked"]
-        let tint: [String: Color] = ["masked": Theme.masked, "blocked": Theme.blocked, "observed": Self.resultColor("observed")]
+                      "blocked": "never sent", "flagged": byCheck("flagged", "sent with a warning"),
+                      "refused": byCheck("refused", "never sent")]
+        // Results that are usually thin take one line each, so four of them fit below the others.
+        let oneLine: Set = ["flagged", "failed", "blocked", "refused"]
+        let title = ["clean": "Clean", "masked": "Masked", "observed": "Observed", "failed": "Failed", "blocked": "Blocked",
+                     "flagged": "Flagged", "refused": "Refused by a check"]
+        let tint: [String: Color] = ["masked": Theme.masked, "blocked": Theme.blocked, "refused": Theme.blocked,
+                                     "observed": Self.resultColor("observed"), "flagged": Self.resultColor("flagged")]
         for r in Self.results {
             guard let n = out.nodes["r:" + r] else { continue }
             let v = sum(flows.out.filter { $0.kind == r }.map(\.n))
-            mid.append((n.rect, "\(title[r]!) \(v.compact)", detail[r]!, tint[r] ?? Theme.text))
+            mid.append((n.rect, "\(title[r]!) \(v.compact)", detail[r]!, tint[r] ?? Theme.text, oneLine.contains(r)))
         }
         for (id, n) in out.nodes where id.hasPrefix("p:") {
             let p = String(id.dropFirst(2))
-            rightOut.append((n.rect, pname[p] ?? p, "\(sum(flows.out.filter { $0.provider == p }.map(\.n)).compact) sent", Theme.text))
+            rightOut.append((n.rect, pname[p] ?? p, "\(sum(flows.out.filter { $0.provider == p }.map(\.n)).compact) sent", Theme.text, false))
         }
         for (id, n) in back.nodes where id.hasPrefix("p:") {
             let p = String(id.dropFirst(2))
-            rightBack.append((n.rect, pname[p] ?? p, "\(sum(flows.back.filter { $0.provider == p }.map(\.n)).compact) replies", Theme.text))
+            rightBack.append((n.rect, pname[p] ?? p, "\(sum(flows.back.filter { $0.provider == p }.map(\.n)).compact) replies", Theme.text, false))
         }
         if let n = back.nodes["restored"] {
             let replies = sum(flows.back.filter(\.restored).map(\.n)), values = sum(flows.back.map(\.values))
-            restore.append((n.rect, "Real values put back", "\(replies.compact) replies · \(values.compact) values", Theme.restored))
+            restore.append((n.rect, "Real values put back", "\(replies.compact) replies · \(values.compact) values", Theme.restored, false))
         }
         if let n = back.nodes["plain"] {
-            restore.append((n.rect, "Nothing to put back", "\(sum(flows.back.filter { !$0.restored }.map(\.n)).compact) replies", Theme.text))
+            restore.append((n.rect, "Nothing to put back", "\(sum(flows.back.filter { !$0.restored }.map(\.n)).compact) replies", Theme.text, false))
         }
 
         func place(_ items: [L], x: CGFloat, anchor: UnitPoint) {
-            var lastY = -CGFloat.infinity
-            for (rect, t, d, color) in items.sorted(by: { $0.0.midY < $1.0.midY }) {
-                let y = max(rect.midY - 8, lastY + 30)
-                lastY = y
-                ctx.draw(Text(t).font(.km(.callout).weight(.semibold)).foregroundStyle(color), at: CGPoint(x: x, y: y), anchor: anchor)
-                ctx.draw(Text(d).font(.km(.caption)).foregroundStyle(Theme.textSecondary), at: CGPoint(x: x, y: y + 14), anchor: anchor)
+            var next = -CGFloat.infinity  // the first y below the label before
+            for (rect, t, d, color, inline) in items.sorted(by: { $0.0.midY < $1.0.midY }) {
+                let y = max(rect.midY - (inline ? 0 : 8), next)
+                let title = Text(t).font(.km(.callout).weight(.semibold)).foregroundStyle(color)
+                if inline {
+                    let line = Text("\(title)\(Text("  " + d).font(.km(.caption)).foregroundStyle(Theme.textSecondary))")
+                    ctx.draw(line, at: CGPoint(x: x, y: y), anchor: anchor)
+                    next = y + 18
+                } else {
+                    ctx.draw(title, at: CGPoint(x: x, y: y), anchor: anchor)
+                    ctx.draw(Text(d).font(.km(.caption)).foregroundStyle(Theme.textSecondary), at: CGPoint(x: x, y: y + 14), anchor: anchor)
+                    next = y + 30
+                }
             }
         }
         place(leftOut, x: xs[0] - 10, anchor: .trailing)
@@ -465,7 +487,7 @@ private struct FlowBands {
             guard age >= 0, age < FlowGeometry.lifetime else { continue }
             let (layout, route): (BandLayout, [(String, String)]) = switch pulse.kind {
             case .out(let r):
-                (out, [("c:" + pulse.client, "keepmum"), ("keepmum", "r:" + r)] + (r == "blocked" || r == "failed" ? [] : [("r:" + r, "p:" + pulse.provider)]))
+                (out, [("c:" + pulse.client, "keepmum"), ("keepmum", "r:" + r)] + (["blocked", "refused", "failed"].contains(r) ? [] : [("r:" + r, "p:" + pulse.provider)]))
             case .back(let restored):
                 (back, [("p:" + pulse.provider, restored ? "restored" : "plain"), (restored ? "restored" : "plain", "c:" + pulse.client)])
             }
