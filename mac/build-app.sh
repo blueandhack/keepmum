@@ -67,4 +67,9 @@ if [ -d "$APP/Contents/Resources/python" ]; then
 fi
 codesign "${SIGN[@]}" "$APP"
 codesign --verify --strict --deep "$APP"
+# Signed, the engine's native libraries must still load (library validation checks their Team ID).
+if [ -x "$APP/Contents/Resources/python/bin/python3" ]; then
+  "$APP/Contents/Resources/python/bin/python3" -I -B -c 'import numpy, onnxruntime, tokenizers, zstandard' \
+    || { echo "the signed engine cannot load its native libraries" >&2; exit 1; }
+fi
 echo "built $APP, signed by: $(codesign -dv --verbose=2 "$APP" 2>&1 | awk -F= '/^Authority/ {print $2; exit}')"

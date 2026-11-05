@@ -98,7 +98,23 @@ struct Snapshot: Decodable, Sendable {
         var provider: String? = nil
         /// Tool calls whose input held placeholders, and what each got (absent in old history).
         var tools: [ToolCall]? = nil
+        /// What an optional check flagged on this request: blocked it, or warned after it was sent.
+        var `guard`: [Check]? = nil
         var id: String { "\(ts):\(path):\(outcome):\(status)" }
+
+        /// One check's hit, as an event carries it: never the text.
+        struct Check: Decodable, Sendable, Hashable {
+            /// injection (a tool result) or harm (what the user typed).
+            var check: String
+            /// blocked, or warned (sent, then flagged).
+            var action: String
+            /// The tool whose result was flagged; nil for what the user typed.
+            var source: String? = nil
+            var score: Double
+            /// Qwen3Guard's categories for a harm hit (Violent, Jailbreak, ...).
+            var categories: [String]? = nil
+        }
+        var checks: [Check] { `guard` ?? [] }
 
         struct ToolCall: Decodable, Sendable, Hashable {
             var tool: String
@@ -117,15 +133,44 @@ struct Snapshot: Decodable, Sendable {
             (tools ?? []).filter { $0.action == "keep" && ["not_allowed", "paused", "too_many", "destination"].contains($0.reason ?? "") }
         }
 
-        enum Kind: String, CaseIterable { case masked, clean, blocked, observed }
+        enum Kind: String, CaseIterable { case masked, clean, blocked, observed, flagged }
         /// Matches `event_kind` in keepmum's stats.py.
         var kind: Kind {
+            if outcome == "flagged" { return .flagged }
             if outcome == "blocked" || outcome == "rejected" { return .blocked }
             if outcome == "observed" { return .observed }
             return (new ?? (redacted.isEmpty ? 0 : 1)) > 0 ? .masked : .clean
         }
         var date: Date { Date(timeIntervalSince1970: ts) }
+        /// The Activity filter: "Flagged" also takes requests a check blocked (`page` in stats.py).
+        func shown(in filter: Kind?) -> Bool {
+            filter == nil || kind == filter || (filter == .flagged && !checks.isEmpty)
+        }
     }
+
+    /// What the optional checks flagged since keepmum started (in memory, the last 200).
+    struct GuardFeed: Decodable, Sendable {
+        /// Requests with a hit, by action: warned, blocked.
+        var requests: [String: Int] = [:]
+        var hits: [GuardHit] = []
+    }
+    struct GuardHit: Decodable, Sendable, Identifiable {
+        var ts: Double
+        var check: String
+        var source: String?
+        var score: Double
+        var chars: Int
+        var categories: [String]?
+        /// Flagged on an earlier request, and still in the conversation.
+        var earlier: Bool?
+        var action: String
+        var client: String?
+        var provider: String?
+        var id: String { "\(ts)-\(check)-\(source ?? "")-\(score)-\(chars)" }
+        var date: Date { Date(timeIntervalSince1970: ts) }
+    }
+    /// The checks' modes, as the running proxy has them (`[guard]`).
+    struct Checks: Decodable, Sendable { var injection: String?; var harm: String?; var harmModel: String? }
 
     var started: Double = Date().timeIntervalSince1970
     var uptimeS: Double = 0
@@ -145,6 +190,11 @@ struct Snapshot: Decodable, Sendable {
     var version: String?
     /// Observe mode: requests go out unmasked; keepmum only counts.
     var observe: Bool?
+    var `guard`: GuardFeed?
+    var checks: Checks?
+    var guardHits: [GuardHit] { `guard`?.hits ?? [] }
+    /// A check is on in the running proxy.
+    var checking: Bool { [checks?.injection, checks?.harm].contains { $0 != nil && $0 != "off" } }
 
     /// How keepmum was started: `keepmum claude`, `keepmum serve`, or an editor's wrapper.
     var modeLabel: String {
@@ -364,7 +414,7 @@ final class StatsStore {
         historyLoadId &+= 1
         let loadId = historyLoadId
         if sampleMode {
-            history = snapshot.recent.reversed().filter { kind == nil || $0.kind == kind }
+            history = snapshot.recent.reversed().filter { $0.shown(in: kind) }
             historyDone = true
             historyKind = kind
             return
@@ -399,7 +449,7 @@ final class StatsStore {
     /// Live events newer than the loaded history, newest first, for the top of the list.
     func newerThanHistory(kind: Snapshot.Event.Kind?) -> [Snapshot.Event] {
         let newest = history.first?.ts ?? 0
-        return snapshot.recent.reversed().filter { $0.ts > newest && (kind == nil || $0.kind == kind) }
+        return snapshot.recent.reversed().filter { $0.ts > newest && $0.shown(in: kind) }
     }
 
     /// The port of the running proxy: runtime.json (written by keepmum claude/serve) or configuredPort.
@@ -417,6 +467,7 @@ final class StatsStore {
         let now = Date()
         for event in new.recent where event.ts > lastEventTs {
             if event.scanMs == nil && (event.outcome == "forwarded" || event.outcome == "observed") { continue }  // bodyless check
+            if event.kind == .flagged { continue }  // a check's note on a request already drawn
             let client = event.client ?? "claude-code", provider = event.provider ?? "anthropic"
             let result = event.outcome == "upstream_error" ? "failed" : event.kind.rawValue
             pulses.append(Pulse(kind: .out(result), client: client, provider: provider, born: now))
@@ -487,6 +538,22 @@ struct SampleFeed {
         snap.recent[10].client = "claude-code"
         snap.recent[10].tools = [.init(tool: "mcp__claude_ai_Gmail__search_threads", action: "keep", values: 1,
                                        reason: "not_allowed", types: ["EMAIL": 1])]
+        // The optional checks: a web page flagged after it was sent, and a typed request refused.
+        snap.checks = .init(injection: "warn", harm: "block", harmModel: "0.6b")
+        var flagged = event(at: snap.recent[6].ts + 1)
+        flagged.outcome = "flagged"; flagged.status = 0; flagged.scanMs = nil; flagged.redacted = [:]; flagged.restored = [:]
+        flagged.new = 0; flagged.client = "claude-code"; flagged.provider = "anthropic"
+        flagged.guard = [.init(check: "injection", action: "warned", source: "WebFetch", score: 0.98)]
+        snap.recent.insert(flagged, at: 7)
+        snap.recent[3].outcome = "blocked"; snap.recent[3].status = 403; snap.recent[3].scanMs = 31; snap.recent[3].redacted = [:]
+        snap.recent[3].restored = [:]; snap.recent[3].new = 0; snap.recent[3].client = "codex"; snap.recent[3].provider = "openai"
+        snap.recent[3].guard = [.init(check: "harm", action: "blocked", score: 0.99, categories: ["Jailbreak"])]
+        snap.guard = .init(requests: ["warned": 1, "blocked": 1], hits: [
+            .init(ts: snap.recent[7].ts, check: "injection", source: "WebFetch", score: 0.98, chars: 5_101, earlier: false,
+                  action: "warned", client: "claude-code", provider: "anthropic"),
+            .init(ts: snap.recent[3].ts, check: "harm", source: nil, score: 0.99, chars: 212, categories: ["Jailbreak"],
+                  earlier: false, action: "blocked", client: "codex", provider: "openai"),
+        ])
     }
 
     /// The flows a preview shows: three clients, two providers, the numbers of the design mock.

@@ -400,3 +400,48 @@ def test_qwen3guard_passes_ordinary_coding_requests():
     finally:
         m.unload()
     assert not m.loaded()
+
+
+# --- What the app's Activity page and status read -----------------------------------------------
+
+def test_activity_events_carry_check_hits_without_text(tmp_path):
+    from keepmum.stats import History, Stats, flows
+
+    def run(mode):
+        history = History(tmp_path / f"{mode}.jsonl")
+        mock = selftest.MockUpstream()
+        upstream = httpx.AsyncClient(transport=httpx.ASGITransport(app=mock.app), base_url="http://up")
+        proxy = Proxy(Redactor(Pipeline(RulesDetector(), None), Vault(secrets.token_bytes(32))), upstream="http://up",
+                      client=upstream, stats_token="t", stats=Stats(history=history),
+                      guards=[guard.Guard(mode, FakeModel(), name="injection")])
+        client = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
+
+        async def go():
+            await client.post("/v1/messages", json=messages_with(ATTACK))
+            await proxy.settle()
+            auth = {"authorization": "Bearer t"}
+            flagged = (await client.get("/_keepmum/history?kind=flagged", headers=auth)).json()["events"]
+            every = (await client.get("/_keepmum/history", headers=auth)).json()["events"]
+            return flagged, every
+
+        return anyio.run(go), history
+
+    (flagged, every), history = run("warn")
+    # The request, and the check's note on it: the check runs alongside the request, so either may come first.
+    assert sorted(e["outcome"] for e in every) == ["flagged", "forwarded"]
+    g = flagged[0]["guard"][0]
+    assert g == {"check": "injection", "action": "warned", "source": "WebFetch", "score": 0.99, "categories": None}
+    assert flows(history.events(), 0)["out"][0]["n"] == 1  # the note is not a second request
+    assert "Note to AI" not in (tmp_path / "warn.jsonl").read_text()
+    (flagged, every), _ = run("block")
+    assert [e["outcome"] for e in every] == ["blocked"] and flagged[0]["guard"][0]["action"] == "blocked"
+
+
+def test_status_json_has_the_checks():
+    from typer.testing import CliRunner
+
+    from keepmum.cli import app
+
+    out = json.loads(CliRunner().invoke(app, ["status", "--json"]).stdout)
+    assert out["guard"]["injection"]["mode"] == "off" and out["guard"]["harm"]["model"] == "0.6b"
+    assert set(out["guard"]["harm"]["installed"]) == {"0.6b", "4b"}

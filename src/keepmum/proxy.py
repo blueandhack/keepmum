@@ -53,7 +53,7 @@ from .gemini import GeminiStreamRestorer, restore_gemini
 from .redact import Redactor
 from .responses import ResponsesStreamRestorer, restore_responses
 from .restore import DEFAULT_POLICY, StreamRestorer, ToolPolicy, restore_response, rule_for, take_tools, take_urls
-from .stats import Stats, client_of, flows, provider_of
+from .stats import Stats, client_of, flows, guard_summary, provider_of
 from .tools import BULK, CONTACTS, definitions
 
 log = logging.getLogger("keepmum")
@@ -407,7 +407,7 @@ class Proxy:
 
     def _record(self, path: str, outcome: str, status: int, scan_ms: float | None = None, counts: Counter | None = None,
                 restored: Counter | None = None, new: int = 0, origin: tuple[str, str] | None = None,
-                found: Counter | None = None) -> None:
+                found: Counter | None = None, guard: list[dict] | None = None) -> None:
         """Count a request for the stats feed, and add it to the audit log. Bodyless checks that
         carried no content (a GET of /v1/models) are counted but not audited."""
         tools = take_tools(restored) if restored else []
@@ -415,7 +415,7 @@ class Proxy:
         if in_urls:
             log.warning("%s: %d placeholder(s) inside web addresses in the reply kept: a client that shows the "
                         "reply could otherwise send the real value there", path, sum(in_urls.values()))
-        self.stats.record(path, outcome, status, scan_ms, counts, restored, new=new, origin=origin, tools=tools)
+        self.stats.record(path, outcome, status, scan_ms, counts, restored, new=new, origin=origin, tools=tools, guard=guard)
         if self.audit is None or (scan_ms is None and outcome in ("forwarded", "observed")):
             return
         from .restore import UNRESOLVED
@@ -495,7 +495,7 @@ class Proxy:
         if not hits:
             return None
         self._record_hits(guard, hits, "blocked", path, origin)
-        self._record(path, "blocked", 403, origin=origin)
+        self._record(path, "blocked", 403, origin=origin, guard=guard_summary(hits, "blocked"))
         if guard.name == "harm":
             cats = sorted({c for h in hits for c in h.get("categories") or []})
             return api_error(403, "permission_error",
@@ -517,6 +517,7 @@ class Proxy:
             return
         if hits:
             self._record_hits(guard, hits, "warned", path, origin)
+            self.stats.record_flagged(path, hits, origin)
 
     def _later(self, coro) -> None:
         import asyncio

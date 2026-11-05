@@ -80,8 +80,9 @@ def installed(size: str) -> bool:
 
 
 def find_server() -> Path | None:
-    """$KEEPMUM_LLAMA_SERVER, else keepmum's own copy, else llama-server on PATH (Homebrew's llama.cpp)."""
-    for p in (os.environ.get("KEEPMUM_LLAMA_SERVER"), data_dir() / "bin" / "llama-server", shutil.which("llama-server")):
+    """$KEEPMUM_LLAMA_SERVER (the Mac app's own build), else keepmum's copy, else Homebrew's llama.cpp."""
+    for p in (os.environ.get("KEEPMUM_LLAMA_SERVER"), data_dir() / "bin" / "llama-server", shutil.which("llama-server"),
+              "/opt/homebrew/bin/llama-server", "/usr/local/bin/llama-server"):
         if p and os.access(p, os.X_OK):
             return Path(p)
     return None

@@ -86,7 +86,7 @@ class History:
         return out
 
     def page(self, before: float | None = None, limit: int = 100, outcome: str | None = None) -> list[dict]:
-        """Events older than `before`, newest first. `outcome`: masked, clean, blocked or observed."""
+        """Events older than `before`, newest first. `outcome`: masked, clean, blocked, observed or flagged."""
         try:
             lines = self.path.read_text().splitlines()
         except OSError:
@@ -99,7 +99,10 @@ class History:
                 continue
             if before is not None and e.get("ts", 0) >= before:
                 continue
-            if outcome and event_kind(e) != outcome:
+            # "flagged" pages every event a check flagged: warned after sending, or blocked.
+            if outcome == "flagged" and e.get("guard"):
+                pass
+            elif outcome and event_kind(e) != outcome:
                 continue
             out.append(e)
             if len(out) >= limit:
@@ -162,6 +165,8 @@ def flows(events, since: float) -> dict:
         outcome = e.get("outcome")
         if outcome in ("forwarded", "observed") and e.get("scan_ms") is None:
             continue  # bodyless checks such as /api/hello: no content went anywhere
+        if outcome == "flagged":
+            continue  # a check's note on a request already counted
         client = e.get("client") or DEFAULT_CLIENT
         provider = e.get("provider") or "anthropic"
         if outcome == "upstream_error":
@@ -192,8 +197,17 @@ def flows(events, since: float) -> dict:
     }
 
 
+def guard_summary(hits: list[dict], action: str) -> list[dict]:
+    """A check's hits as an event carries them: never the text."""
+    return [{"check": h.get("check", "injection"), "action": action, "source": h.get("source"),
+             "score": round(h["score"], 3), "categories": h.get("categories") or None} for h in hits]
+
+
 def event_kind(e: dict) -> str:
-    """How the app labels an event: blocked, observed, masked (new sensitive text) or clean."""
+    """How the app labels an event: blocked, observed, flagged (a check's hit after the request was
+    sent), masked (new sensitive text) or clean."""
+    if e.get("outcome") == "flagged":
+        return "flagged"
     if e.get("outcome") in ("blocked", "rejected"):
         return "blocked"
     if e.get("outcome") == "observed":
@@ -225,7 +239,8 @@ class Stats:
 
     def record(self, path: str, outcome: str, status: int, scan_ms: float | None = None,
                redacted: Counter | None = None, restored: Counter | None = None, new: int = 0,
-               origin: tuple[str, str] | None = None, tools: list[dict] | None = None) -> None:
+               origin: tuple[str, str] | None = None, tools: list[dict] | None = None,
+               guard: list[dict] | None = None) -> None:
         from .restore import UNRESOLVED
 
         restored = Counter(restored or {})
@@ -258,6 +273,8 @@ class Stats:
                 event["client"], event["provider"] = origin
             if tools:  # tool calls whose input held placeholders: names, types and counts, never values
                 event["tools"] = tools
+            if guard:  # a check's hits: check, action, source, score, categories, never the text
+                event["guard"] = guard
             self.events.append(event)
         if self.history:
             self.history.append(event)
@@ -268,6 +285,17 @@ class Stats:
         with self._lock:
             for i, f in enumerate(found):
                 self.findings.append({**f, "ts": ts, "seq": i, "outcome": outcome, "client": client, "provider": provider})
+
+    def record_flagged(self, path: str, hits: list[dict], origin: tuple[str, str] | None = None) -> None:
+        """A warn-mode check's hits, found after its request was sent: an event of their own."""
+        event = {"ts": round(time.time(), 6), "path": path, "outcome": "flagged", "status": 0, "scan_ms": None,
+                 "redacted": {}, "restored": {}, "new": 0, "unresolved": 0, "guard": guard_summary(hits, "warned")}
+        if origin:
+            event["client"], event["provider"] = origin
+        with self._lock:
+            self.events.append(event)
+        if self.history:
+            self.history.append(event)
 
     def record_guard(self, hits: list[dict], action: str, origin: tuple[str, str] | None = None) -> None:
         ts = round(time.time(), 6)

@@ -222,7 +222,7 @@ struct ActivityPage: View {
             .fixedSize(horizontal: false, vertical: true)
             Card(title: "Requests", subtitle: subtitle) {
                 Segmented(options: [(Optional<Snapshot.Event.Kind>.none, "All"), (.masked, "Masked"), (.clean, "Clean"),
-                                    (.blocked, "Blocked"), (.observed, "Observed")], selection: $filter)
+                                    (.blocked, "Blocked"), (.flagged, "Flagged"), (.observed, "Observed")], selection: $filter)
             } content: {
                 let events = store.newerThanHistory(kind: filter) + store.history
                 ActivityTable(events: events, rows: isSnapshot ? 11 : events.count, newestFirst: true,
@@ -236,7 +236,8 @@ struct ActivityPage: View {
         switch filter {
         case .masked: "Requests whose new text had something to mask"
         case .clean: "Nothing new to mask (earlier turns may still hold masked values)"
-        case .blocked: "Never sent: scanning failed or the endpoint is not scanned"
+        case .blocked: "Never sent: scanning failed, the endpoint is not scanned, or a check refused it"
+        case .flagged: "What the optional checks flagged: sent with a warning, or refused (Settings › Checks)"
         case .observed: "Observe mode: sent unmasked, only counted"
         case nil: "Kept across restarts in ~/.config/keepmum/history.jsonl"
         }
@@ -277,7 +278,7 @@ struct SettingsPage: View {
 
     var body: some View {
         VStack(spacing: Space.l) {
-            PageHeader(title: "Settings", subtitle: "Setup, masking, tools, exclusions and display")
+            PageHeader(title: "Settings", subtitle: "Setup, masking, tools, checks, exclusions and display")
             if isSnapshot {
                 form
                 Spacer(minLength: 0)
@@ -293,6 +294,7 @@ struct SettingsPage: View {
             SetupSection(engine: engine)
             MaskingSection(engine: engine, observing: s.observe == true, modelError: s.detection.modelError)
             ToolsSection(store: store, engine: engine)
+            ChecksSection(engine: engine)
             if engine.isBundled { ShellDestinationsSection(engine: engine) }
             ExclusionsSection(engine: engine)
             if engine.isBundled { LogsPageSection(engine: engine) }
@@ -351,6 +353,19 @@ func toolLabel(_ tool: String) -> String {
     let server = tool.dropFirst(5).components(separatedBy: "__").first ?? ""
     let name = server.hasPrefix("claude_ai_") ? String(server.dropFirst(10)) : server
     return name.replacingOccurrences(of: "_", with: " ")
+}
+
+/// A check's hit in an Activity row: "Injection · WebFetch", "Harm · Jailbreak".
+func checkLabel(_ c: Snapshot.Event.Check) -> String {
+    c.check == "harm" ? "Harm · \((c.categories ?? []).first ?? "flagged")" : "Injection · \(toolLabel(c.source ?? "a tool"))"
+}
+
+func checkHelp(_ c: Snapshot.Event.Check) -> String {
+    let what = c.check == "harm"
+        ? "The harm check flagged what was typed" + ((c.categories ?? []).isEmpty ? "" : " (\((c.categories ?? []).joined(separator: ", ")))")
+        : "The injection check flagged what \(c.source.map(toolLabel) ?? "a tool") returned as a likely prompt injection"
+    let outcome = c.action == "blocked" ? "The request was not sent." : "The request was sent; the check ran after it (warn)."
+    return "\(what), score \(String(format: "%.2f", c.score)). \(outcome) keepmum keeps the score, never the text."
 }
 
 /// Why a tool call kept placeholders, for an Activity row's tooltip.
@@ -431,6 +446,9 @@ struct ActivityTable: View {
                     ForEach(e.keptTools, id: \.self) { t in
                         Chip(text: "\(toolLabel(t.tool)) kept \(t.values)", tone: Theme.warning).help(keptHelp(t))
                     }
+                }
+                ForEach(e.checks, id: \.self) { c in
+                    Chip(text: checkLabel(c), tone: c.action == "blocked" ? Theme.blocked : Theme.warning).help(checkHelp(c))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -53,7 +53,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
                                 allow_patterns=cfg.allow_patterns, pass_types=cfg.pass_types, mask_rules=cfg.mask_rules,
                                 off_rules=cfg.off_rules)
     info = {"mode": mode, "pii": pii, "detector": pipeline.name, "version": __version__, "apis": ["messages", "responses", "gemini"],
-            "guard": {"injection": cfg.guard_injection, "harm": cfg.guard_harm, "harm_model": cfg.guard_harm_model}}
+            "checks": {"injection": cfg.guard_injection, "harm": cfg.guard_harm, "harm_model": cfg.guard_harm_model}}
     from .stats import History, Stats
 
     from .audit import AuditLog
@@ -73,7 +73,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
         if not fixed_pii:
             info["pii"] = new.pii
         info["detector"] = pipeline.name
-        info["guard"] = {"injection": new.guard_injection, "harm": new.guard_harm, "harm_model": new.guard_harm_model}
+        info["checks"] = {"injection": new.guard_injection, "harm": new.guard_harm, "harm_model": new.guard_harm_model}
         harm_model.want(new.guard_harm_model)
         proxy.policy = new.restore
         proxy.gateways = {**new.gateways, **(gateways or {})}

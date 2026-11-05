@@ -110,14 +110,7 @@ struct Finding: Decodable, Sendable, Identifiable {
         return seenEarlier ? "Seen earlier in the conversation; first found by \(who)" : who.prefix(1).uppercased() + who.dropFirst()
     }
 
-    var clientName: String {
-        switch client ?? "claude-code" {
-        case "claude-code": "Claude Code"
-        case "codex": "Codex"
-        case "gemini": "Gemini CLI"
-        case let other: other
-        }
-    }
+    var clientName: String { agentName(client) }
 
     func matches(_ query: String) -> Bool {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -170,6 +163,83 @@ struct Finding: Decodable, Sendable, Identifiable {
 
 /// Logs: every value keepmum masked in new text, newest first, searchable. Kept in keepmum's memory
 /// only, so the list starts empty after keepmum restarts.
+func agentName(_ client: String?) -> String {
+    switch client ?? "claude-code" {
+    case "claude-code": "Claude Code"
+    case "codex": "Codex"
+    case "gemini": "Gemini CLI"
+    case let other: other
+    }
+}
+
+/// What the optional checks flagged, newest first: the check, where (a tool, or what was typed),
+/// the categories, the score and the length. Never the text.
+struct ChecksCard: View {
+    var store: StatsStore
+    @Environment(\.isSnapshot) private var isSnapshot
+
+    var body: some View {
+        let s = store.snapshot
+        let hits = s.guardHits.sorted { $0.ts > $1.ts }
+        Card(title: "Checks", subtitle: hits.isEmpty ? "Nothing flagged since keepmum started"
+                 : "\(hits.count) flagged: \(s.guard?.requests["blocked"] ?? 0) refused, \(s.guard?.requests["warned"] ?? 0) sent with a warning") {
+            VStack(spacing: 0) {
+                ColumnHeader {
+                    Text("Time").frame(width: 70, alignment: .leading)
+                    Text("Agent").frame(width: 92, alignment: .leading)
+                    Text("Check").frame(width: 100, alignment: .leading)
+                    Text("Flagged").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Score").frame(width: 50, alignment: .trailing)
+                    Text("Length").frame(width: 60, alignment: .trailing)
+                    Text("Outcome").frame(width: 80, alignment: .leading).padding(.leading, Space.s)
+                }
+                .padding(.horizontal, Space.xs)
+                if hits.isEmpty {
+                    EmptyNote(text: "Turned-on checks flag here. A hit keeps the check, the score and the length, never the text.")
+                } else if isSnapshot {
+                    ForEach(hits.prefix(4)) { row($0) }
+                } else {
+                    ScrollView { LazyVStack(spacing: 0) { ForEach(hits) { row($0) } } }.frame(maxHeight: 200)
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func row(_ h: Snapshot.GuardHit) -> some View {
+        TableRow {
+            Text(h.date, format: .dateTime.hour().minute().second())
+                .font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary).frame(width: 70, alignment: .leading)
+            HStack(spacing: Space.s - Space.xxs) {
+                Circle().fill(clientColor(h.client ?? "claude-code")).frame(width: 7, height: 7)
+                Text(agentName(h.client)).lineLimit(1)
+            }
+            .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 92, alignment: .leading)
+            HStack(spacing: Space.s - Space.xxs) {
+                Image(systemName: h.check == "harm" ? "exclamationmark.bubble" : "syringe").font(.km(.caption))
+                    .foregroundStyle(Theme.textSecondary).frame(width: 14)
+                Text(h.check == "harm" ? "Harm" : "Injection")
+            }
+            .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 100, alignment: .leading)
+            Text(h.check == "harm" ? "What was typed" + ((h.categories ?? []).isEmpty ? "" : ": \((h.categories ?? []).joined(separator: ", "))")
+                                   : "\(toolLabel(h.source ?? "a tool")) result" + (h.earlier == true ? " (flagged before)" : ""))
+                .font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(String(format: "%.2f", h.score)).font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                .frame(width: 50, alignment: .trailing)
+            Text("\(h.chars)").font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                .frame(width: 60, alignment: .trailing)
+            HStack(spacing: Space.xs + 1) {
+                Image(systemName: h.action == "blocked" ? "hand.raised.fill" : "flag.fill").font(.km(.caption))
+                Text(h.action == "blocked" ? "Refused" : "Warned")
+            }
+            .font(.km(.callout)).foregroundStyle(h.action == "blocked" ? Theme.blocked : Theme.warning)
+            .frame(width: 80, alignment: .leading).padding(.leading, Space.s)
+            .help(h.action == "blocked" ? "Not sent" : "Sent; the check ran after it")
+        }
+    }
+}
+
 struct LogsPage: View {
     var store: StatsStore
     @State private var query = ""
@@ -183,7 +253,10 @@ struct LogsPage: View {
         let all = store.sampleMode ? Finding.samples : store.findings
         let shown = all.filter { (type == "ALL" || $0.type == type) && $0.found(by: source) && $0.matches(query) }
         VStack(spacing: Space.l) {
-            PageHeader(title: "Logs", subtitle: "What keepmum masked in new text, newest first. Click a row for its details. Kept in memory until keepmum exits.")
+            PageHeader(title: "Logs", subtitle: store.snapshot.checking || !store.snapshot.guardHits.isEmpty
+                       ? "What the checks flagged and what keepmum masked in new text, newest first. Kept in memory until keepmum exits."
+                       : "What keepmum masked in new text, newest first. Click a row for its details. Kept in memory until keepmum exits.")
+            if store.snapshot.checking || !store.snapshot.guardHits.isEmpty { ChecksCard(store: store) }
             Card(title: "Masked values", subtitle: all.isEmpty ? "Nothing masked since keepmum started" : "\(shown.count) of \(all.count)") {
                 HStack(spacing: Space.s) {
                     search

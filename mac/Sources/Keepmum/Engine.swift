@@ -38,6 +38,33 @@ final class Engine {
         var context: Bool?
         /// `[audit] keep_days`.
         var keepDays: Int?
+        /// The optional checks (`keepmum guard --json`); nil from older engines.
+        var `guard`: Checks?
+    }
+
+    /// `keepmum guard --json`: each optional check's mode and whether its model is set up.
+    struct Checks: Decodable, Equatable {
+        struct Injection: Decodable, Equatable {
+            struct Accepted: Decodable, Equatable { var ts: Double }
+            var mode: String
+            var installed: Bool
+            /// When non-commercial use of the model was confirmed; nil until then.
+            var accepted: Accepted?
+            /// A runtime package missing from this install (not in the app, which bundles them).
+            var runtimeMissing: String?
+            var licence: String
+        }
+        struct Harm: Decodable, Equatable {
+            var mode: String
+            /// 0.6b or 4b.
+            var model: String
+            var installed: [String: Bool]
+            /// llama-server's path; nil when it is not found.
+            var server: String?
+            var licence: String
+        }
+        var injection: Injection
+        var harm: Harm
     }
 
     /// `keepmum rules builtin --json`: one built-in rule, its type, and whether it is on.
@@ -154,6 +181,8 @@ final class Engine {
     private(set) var serviceStatus: SMAppService.Status = .notRegistered
     /// 0...1 while the model downloads.
     private(set) var download: Double?
+    /// A check's model downloading: which (injection, harm 0.6b, harm 4b), and 0...1.
+    private(set) var checkDownload: (what: String, progress: Double)?
     private(set) var busy = false
     /// The background service on its way up or down: from the click until it answers, or stops.
     enum ServiceChange { case starting, stopping }
@@ -327,6 +356,41 @@ final class Engine {
     /// pick it up on their next request.
     func setPII(_ on: Bool) async {
         await act { try await self.check(["pii", on ? "on" : "off"]) }
+    }
+
+    // MARK: The optional checks (`keepmum guard`)
+
+    /// Download a check's model with progress from its "NN% of N MB" lines. The injection model's
+    /// licence must have been shown and non-commercial use confirmed: `confirmedNoncommercial`.
+    func setUpCheck(_ check: String, model: String = "0.6b", confirmedNoncommercial: Bool = false) async {
+        await act {
+            let what = check == "harm" ? "harm \(model)" : "injection"
+            self.checkDownload = (what, 0)
+            defer { self.checkDownload = nil }
+            var args = ["guard", "setup", check]
+            if check == "harm" { args += ["--model", model] }
+            if check == "injection" {
+                guard confirmedNoncommercial else { throw EngineError("Confirm non-commercial use first.") }
+                args.append("--accept-noncommercial")
+            }
+            let out = try await self.run(args) { line in
+                if let pct = line.split(separator: "%").first.flatMap({ Double($0.trimmingCharacters(in: .whitespaces)) }) {
+                    Task { @MainActor in self.checkDownload = (what, pct / 100) }
+                }
+            }
+            if out.code != 0 { throw EngineError(out.lastLine) }
+        }
+    }
+
+    /// A check's mode: off, warn or block; for harm, also its model size. Running proxies switch on
+    /// their next request.
+    func setCheck(_ check: String, mode: String, model: String? = nil) async {
+        await act { try await self.check(["guard", check, mode] + (model.map { ["--model", $0] } ?? [])) }
+    }
+
+    /// Turn a check off and delete its model.
+    func removeCheck(_ check: String) async {
+        await act { try await self.check(["guard", "remove", check]) }
     }
 
     // MARK: What gets masked (`keepmum types`, `keepmum rules`)
@@ -577,7 +641,11 @@ final class Engine {
                                        allowStrings: ["sk_test_docs_example"], allowPatterns: ["^demo-[a-z]+$"], off: ["phone-labeled"]),
                           clients: ["codex": .init(installed: true, on: true, via: "http://127.0.0.1:3425/v1"),
                                     "pi": .init(installed: true, on: false, other: .many(["openai"]), otherUrl: "https://llm.corp.example/v1")],
-                          destinations: ["gitlab-token": ["gitlab.corp.example"]], previews: true, context: true, keepDays: 90)
+                          destinations: ["gitlab-token": ["gitlab.corp.example"]], previews: true, context: true, keepDays: 90,
+                          guard: .init(injection: .init(mode: "warn", installed: true, accepted: .init(ts: Date().timeIntervalSince1970 - 86_400 * 3),
+                                                        runtimeMissing: nil, licence: "CC-BY-NC-4.0"),
+                                       harm: .init(mode: "block", model: "0.6b", installed: ["0.6b": true, "4b": false],
+                                                   server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0")))
         e.serviceStatus = .enabled
         if around {
             e.status?.protect = .init(settings: "~/.claude/settings.json", on: false, baseUrl: "http://127.0.0.1:3425")

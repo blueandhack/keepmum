@@ -1139,7 +1139,8 @@ def status(as_json: bool = typer.Option(True, "--json/--text", help="Print JSON 
            "protect": prot, "port": cfg.port, "serve_running": shared_serve_port(cfg) is not None,
            "observe": cfg.observe, "model_on": cfg.model, "clients": clients, "pii": cfg.pii, "pass": cfg.pass_types, "rules": _rules_json(cfg),
            "excluded": excluded_projects(), "gateways": cfg.gateways, "destinations": cfg.destinations,
-           "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days}
+           "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
+           "guard": _guard_status()}
     typer.echo(json.dumps(out) if as_json else "\n".join(f"{k}: {v}" for k, v in out.items()))
 
 
