@@ -3,6 +3,7 @@
 #
 #   ./release.sh                  build, sign with Developer ID, notarize, staple -> dist/
 #   SKIP_NOTARIZE=1 ./release.sh  the same with any identity and no notarization, to test the steps
+#   APP_OUT=build/release/Keepmum.app ./release.sh   build there, leaving build/Keepmum.app (an app in use) alone
 #
 # Needs, once (see mac/README.md, "Releasing"):
 #   - a "Developer ID Application" certificate in the login Keychain
@@ -20,7 +21,7 @@ cd "$(dirname "$0")"
 ROOT=$(cd .. && pwd)
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/pyproject.toml" | head -1)
 NOTARY_PROFILE=${NOTARY_PROFILE:-keepmum-notary}
-APP=build/Keepmum.app
+APP=${APP_OUT:-build/Keepmum.app}
 DIST=$ROOT/dist
 DMG=$DIST/Keepmum-$VERSION.dmg
 
@@ -63,7 +64,8 @@ notarize() {
 
 echo "== keepmum $VERSION"
 (cd "$ROOT" && uv run --frozen pytest -q -p no:cacheprovider)
-rm -rf "$APP" && SIGN_IDENTITY=${SIGN_IDENTITY:-} VERSION=$VERSION SWIFT_CONFIG=release RUNTIME_CACHE=0 SKIP_RUNTIME= ./build-app.sh
+rm -rf "$APP" && SIGN_IDENTITY=${SIGN_IDENTITY:-} VERSION=$VERSION SWIFT_CONFIG=release RUNTIME_CACHE=0 SKIP_RUNTIME= \
+  APP_OUT=$APP ./build-app.sh
 
 # The app first, so its own ticket is stapled and it opens offline once copied out of the DMG.
 if [ -z "${SKIP_NOTARIZE:-}" ]; then
