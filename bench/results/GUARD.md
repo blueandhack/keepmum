@@ -47,6 +47,28 @@ Llama Prompt Guard 2 (22M, 86M) was not run: it is gated on Hugging Face, and th
 
 The test set is small (48 injected and 61 benign documents in holdout), hand-written by one author, with static attacks. Wolf's own card reports 74–84% recall on AgentDojo tool outputs, so its low recall here may partly reflect how these payloads are phrased. Shield's training data includes agent tool results, which may resemble this set. Treat a gap of ±0.10 as noise; the gaps that matter here are larger.
 
+## Shield Small as a GGUF in llama.cpp
+
+*Nov 4, 2026.* Could the injection check run in llama.cpp, like the harm check, so that keepmum needs neither ONNX Runtime nor NumPy? Shield's release has only int8 ONNX weights. [`../shield_gguf.py`](../shield_gguf.py) rebuilds float weights from them (the values ONNX Runtime multiplies by) and converts them with llama.cpp's converter. The converter needed three fixes for this model:
+- keep BERT's pooler, which Shield's classifier head needs
+- read the XLM-R sentencepiece vocabulary
+- give the output the width of the two labels
+
+[`../shield_parity.py`](../shield_parity.py) then scores this benchmark's 407 documents with the same windows, four ways: [`shield-gguf-20261104-211303.md`](shield-gguf-20261104-211303.md).
+
+| | Holdout AUC | Recall at 0.92 / at its dev threshold | Ordinary / security FPR | Dev threshold | p50 per document | Memory |
+| --- | --- | --- | --- | --- | --- | --- |
+| int8 ONNX, ONNX Runtime (CPU), as keepmum runs it | 0.967 | 0.90 / 0.90 | 0.03 / 0.12 | 0.923 | 37 ms | 0.7 GB |
+| Rebuilt weights, PyTorch fp32 | 0.968 | 0.90 / 0.88 | 0.03 / 0.12 | 0.946 | 34 ms | |
+| **GGUF Q8_0, llama-server (Metal)** | 0.969 | 0.92 / 0.88 | 0.03 / 0.12 | 0.944 | **11 ms** | **0.3 GB** |
+
+- **The conversion is right.** Given the same token ids, llama.cpp's logits match PyTorch on the rebuilt weights. The median difference in logit margin is 0.006 for F32 and 0.012 for Q8_0.
+- **The remaining difference from ONNX comes from ONNX Runtime, not from llama.cpp.** ONNX Runtime also quantizes activations to int8 at run time, which moves the margin by a median of 0.04 (up to 2.2 on one window). PyTorch and llama.cpp both use float activations, so they agree with each other and differ from ONNX by the same amount.
+- **Verdicts at keepmum's threshold (0.92) agree on 404 of 407 documents.** All three that differ are injections the GGUF flags and ONNX misses: one bare payload and two injected documents. No benign document changes.
+- **llama.cpp's tokenizer matches Shield's on all 407 documents, except for one token.** For text that ends in whitespace, Hugging Face's tokenizer emits a final `▁`, and llama.cpp doesn't. A runtime can append it.
+- **The threshold moves to about 0.944 on dev.** One more ordinary dev document scores between 0.92 and 0.944. At either threshold, holdout false alarms are unchanged. At 0.944, holdout recall is one document lower (42 of 48 instead of 43).
+- Q8_0 is 133 MB, against the ONNX file's 118 MB, and runs a full 256-token window in 5.7 ms on Metal.
+
 ## Verdict
 
 *Nov 3, 2026, later:* keepmum now offers Shield Small as an opt-in download (`keepmum guard setup injection`): the licence is shown and non-commercial use confirmed first, the weights are pinned and checked, and the guard defaults to off. See the README's "Optional checks".
