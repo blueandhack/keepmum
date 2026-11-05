@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>keepmum</title>
+    <link>https://github.com/blueandhack/keepmum</link>
+    <description>Releases of the keepmum Mac app</description>
+    <language>en</language>
+    <item>
+      <title>keepmum 0.1.0a2</title>
+      <pubDate>Thu, 05 Nov 2026 09:40:17 GMT</pubDate>
+      <sparkle:version>10002</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a2</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The second alpha of keepmum adds two optional checks that run on your Mac, a switch for personal data, and updates: from this version on, the app updates itself.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a2.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a1:** quit Keepmum, then drag the new version into Applications to replace it. That is needed once: 0.1.0a1 cannot update itself, and this version can.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a2.dmg.sha256`
+
+## What's new
+
+- **Updates.** On its first launch the app asks whether to check for updates once a day. A check downloads keepmum's update list from github.com, so GitHub sees your IP address and keepmum's version; nothing else is sent. Updates are signed by keepmum and notarized by Apple, and both are checked before one is installed. Settings › Updates has "Check now", and can download and install updates automatically.
+- **A prompt-injection check (optional, off by default).** It looks at what tools return (web pages, files, MCP replies) for instructions planted for your agent. **Warn** logs a hit and sends the request; **Block** refuses it. It uses Horizon Labs' Prompt Injection Guard Small (Apache-2.0), a 164 MB download that runs locally on the GPU.
+- **A harm check (optional, off by default).** It looks at what you type for requests a company policy may not allow, and names their categories. Three model sizes are available: Small (164 MB, the default), Qwen3Guard 0.6B, and Qwen3Guard 4B (the most accurate).
+- **Settings › Checks** sets both checks up. What they flag shows on the Logs and Activity pages, and `keepmum guard` does the same on the command line.
+- **Personal data** has its own switch in the app and `keepmum pii on|off`. Every setting that used to need config.toml now has a place in the app.
+
+## Known limitations
+
+- The checks are an early warning on top of masking, not a replacement for it. The injection check flags about 9% of security writing that quotes attacks, so warn suits security work better than block.
+- Shell commands still receive real values (so `git push` works). The host check stops the common case, but a command built to hide where it sends things gets past it. Use a sandbox with a network allowlist alongside keepmum.
+- Your agent's local transcripts hold real values: keepmum protects what leaves your Mac, not what is stored on it.
+
+Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/keepmum/issues).</description>
+      <enclosure url="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a2/Keepmum-0.1.0a2.dmg" length="47147884" type="application/octet-stream" sparkle:edSignature="xcB5YeU4KCTWe9z8NwxMB0/Dt29HKok32mpy5sx8L8VhUUFRa1A0urATBys3PxJAPsHCXl+/zkcSJNqwjddxDw=="></enclosure>
+    </item>
+  </channel>
+</rss><!-- sparkle-signatures:
+edSignature: d33QQ+LB1l0i1Z0nq8q2BE/LEIbH1L3mVrg8zMjy6wpYD5aXDvc8LeXOFc2FuIoggur8L5VlxWYYeCjb1ABXAQ==
+length: 4218
+-->
