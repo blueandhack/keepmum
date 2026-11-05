@@ -7,6 +7,51 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a3</title>
+      <pubDate>Thu, 05 Nov 2026 18:49:19 GMT</pubDate>
+      <sparkle:version>10003</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a3</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a3</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The third alpha of keepmum adds a check on what comes back: the shell commands a model asks your agent to run. The flow diagram also shows what the optional checks did.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a3.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2:** Keepmum updates itself if you allowed update checks (Settings › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a3.dmg.sha256`
+
+## What's new
+
+- **A risky-commands check (optional, off by default).** keepmum reads the shell commands in the model's replies before your agent sees them: Claude Code's Bash, Codex's shell tools, and Gemini CLI's `run_shell_command`. It checks them against seven rules:
+  - a download run as a script (`curl … | sh`)
+  - decoded text run as a script
+  - deleting your home folder or the system
+  - erasing a disk
+  - a fork bomb
+  - credential files sent over the network
+  - environment variables sent over the network
+
+  **Warn** logs a hit and lets the command through. **Block** hands the agent, in its place, a command that prints why keepmum refused it and fails, so the model can explain or ask you. No model and no download: Settings › Checks › Risky commands, or `keepmum guard commands warn`.
+- **The checks in the flow diagram.** Requests sent with a warning get a **Flagged** band, and requests a check stopped get a **Refused** band, each naming which check. Blocked now means only keepmum's own refusals.
+
+## Known limitations
+
+- The commands check covers the clear cases. A command built to hide what it does gets past it; the rules on where real values may be sent still apply.
+- Official one-line installers (`curl … | bash`) are flagged too. If you install tools through your agent often, use warn rather than block.
+- Shell commands still receive real values (so `git push` works), and your agent's local transcripts hold real values: keepmum protects what leaves your Mac, not what is stored on it.
+
+Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/keepmum/issues).</description>
+      <enclosure url="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a3/Keepmum-0.1.0a3.dmg" length="46024518" type="application/octet-stream" sparkle:edSignature="+Dj8L5Jg3p9y6wT9QwuIJ7BQ5F3TCtwPJr2uXmZJPiah4kpEY4soOSG6h376wn0DEL7FiRIxIYLL0T/w/bWLCw=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a2</title>
       <pubDate>Thu, 05 Nov 2026 09:40:17 GMT</pubDate>
       <sparkle:version>10002</sparkle:version>
@@ -47,6 +92,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: d33QQ+LB1l0i1Z0nq8q2BE/LEIbH1L3mVrg8zMjy6wpYD5aXDvc8LeXOFc2FuIoggur8L5VlxWYYeCjb1ABXAQ==
-length: 4218
+edSignature: OuCfjOqlGKNvzgEVCvpWevqAeWy9i7jhOuQuSoF3LNJHIOwMgrDw8+2z2/2FpaqLLxPhYF2jvMVccmj8aOHWDQ==
+length: 7512
 -->
