@@ -42,7 +42,7 @@ The goal is a one-command tool: `keepmum claude` starts Claude Code with every r
 | Hardware | Apple silicon; reference machine is an M4 with 48 GB |
 | Network | Detection fully offline; the only outbound connections are the forwarded request to the provider and `keepmum setup`'s one model download |
 | Language | Python 3.12+, managed with `uv`; the model runs in pf-serve, a native program (C++ on ggml) |
-| Distribution | Keepmum.app (self-contained, notarized DMG on GitHub Releases; first: 0.1.0a1, Nov 3, 2026) and `uv tool install`; a Homebrew cask later |
+| Distribution | Keepmum.app (self-contained, notarized DMG on GitHub Releases, updates itself with Sparkle from 0.1.0a2; first: 0.1.0a1, Nov 3, 2026) and `uv tool install`; a Homebrew cask later |
 | Name | `keepmum` — check GitHub, PyPI and Homebrew before first publish; fall back to `keepmum-redact` if taken |
 
 ## Architecture
@@ -291,7 +291,7 @@ keepmum/
 - [x] **Other gateways (Nov 2, 2026).** `keepmum protect on` goes in front of a gateway an agent already uses, through a route per gateway; see *Other gateways* above. Verified with Claude Code, Codex, pi and opencode against a stand-in gateway: placeholders only at the gateway, its own key, and `off` restoring every config file byte for byte.
 - [x] **Web addresses in replies (Nov 2, 2026).** A placeholder inside an http(s) address in reply text stays a placeholder, so a rendered image or link cannot carry a value out; see Restore. Verified with Claude Code: the text got the real value, the image address the placeholder.
 - [x] **Shell destinations (Nov 3, 2026).** A token whose issuer is known stays a placeholder in a shell command that names another host (`destinations.py`, Open questions). Verified with Claude Code running two curl commands: attacker.test received the placeholder, api.github.com the token. Cases: `docs/test-cases/shell-destinations.md`.
-- [ ] **M6 Ship.** README, Homebrew tap, name check on GitHub, PyPI and Homebrew. *Oct 26, 2026: Keepmum.app is self-contained (bundled Python runtime, pf-serve, a LaunchAgent via SMAppService) and sets itself up: model download, background service, `keepmum protect`. Nov 3, 2026: signed with Developer ID, notarized, and released as a DMG on GitHub Releases, [0.1.0a1](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a1) (pre-release). Left: a Homebrew cask, PyPI, updates, and Windows (pf-serve already builds there; the app would need its own UI).*
+- [ ] **M6 Ship.** README, Homebrew tap, name check on GitHub, PyPI and Homebrew. *Oct 26, 2026: Keepmum.app is self-contained (bundled Python runtime, pf-serve, a LaunchAgent via SMAppService) and sets itself up: model download, background service, `keepmum protect`. Nov 3, 2026: signed with Developer ID, notarized, and released as a DMG on GitHub Releases, [0.1.0a1](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a1) (pre-release). Nov 5, 2026: [0.1.0a2](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a2), the first that updates itself (Sparkle, a signed feed, asked on first launch). Left: a Homebrew cask, PyPI, and Windows (pf-serve already builds there; the app would need its own UI).*
 
 ## Audit log
 
