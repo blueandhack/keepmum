@@ -659,13 +659,6 @@ dependencies = [
     { name = "zstandard" },
 ]
 
-[package.optional-dependencies]
-guard = [
-    { name = "numpy" },
-    { name = "onnxruntime" },
-    { name = "tokenizers" },
-]
-
 [package.dev-dependencies]
 afm = [
     { name = "apple-fm-sdk" },
@@ -682,6 +675,11 @@ mlx = [
     { name = "numpy" },
     { name = "tokenizers" },
 ]
+onnx = [
+    { name = "numpy" },
+    { name = "onnxruntime" },
+    { name = "tokenizers" },
+]
 torch = [
     { name = "numpy" },
     { name = "torch" },
@@ -691,15 +689,11 @@ torch = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
-    { name = "numpy", marker = "extra == 'guard'", specifier = ">=2.0" },
-    { name = "onnxruntime", marker = "extra == 'guard'", specifier = ">=1.21" },
     { name = "starlette", specifier = ">=0.45" },
-    { name = "tokenizers", marker = "extra == 'guard'", specifier = ">=0.21" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.32" },
     { name = "zstandard", specifier = ">=0.23" },
 ]
-provides-extras = ["guard"]
 
 [package.metadata.requires-dev]
 afm = [{ name = "apple-fm-sdk", specifier = ">=0.2.1" }]
@@ -713,6 +707,11 @@ mlx = [
     { name = "mlx-embeddings", git = "https://github.com/Blaizzy/mlx-embeddings?rev=9b28270be81211f2b8daed0041aec65ea5dc4b28" },
     { name = "mlx-lm", specifier = ">=0.28" },
     { name = "numpy", specifier = ">=2.0" },
+    { name = "tokenizers", specifier = ">=0.21" },
+]
+onnx = [
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "onnxruntime", specifier = ">=1.21" },
     { name = "tokenizers", specifier = ">=0.21" },
 ]
 torch = [

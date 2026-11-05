@@ -13,14 +13,6 @@ dependencies = [
     "zstandard>=0.23",  # Codex and pi send zstd-compressed request bodies
 ]
 
-[project.optional-dependencies]
-# The prompt-injection guard (`keepmum guard setup`): Shield Small on ONNX Runtime, CPU only.
-guard = [
-    "onnxruntime>=1.21",
-    "tokenizers>=0.21",
-    "numpy>=2.0",
-]
-
 [project.scripts]
 keepmum = "keepmum.cli:app"
 # For editors that launch Claude Code through a wrapper (VS Code: claudeCode.claudeProcessWrapper).
@@ -44,6 +36,13 @@ mlx = [
 torch = [
     "torch>=2.9",
     "transformers>=5.6",
+    "numpy>=2.0",
+]
+# ZeroLeaks' int8 ONNX of Shield Small, for bench/shield_parity.py and bench/guard.py's shield-small
+# (keepmum itself runs the GGUF in llama-server).
+onnx = [
+    "onnxruntime>=1.21",
+    "tokenizers>=0.21",
     "numpy>=2.0",
 ]
 # The Apple on-device model through its Python SDK (dropped from v1).

@@ -29,7 +29,7 @@ struct ChecksSection: View {
             Button("Cancel", role: .cancel) {}
             Button("My use is non-commercial") { Task { await engine.setUpCheck("injection", confirmedNoncommercial: true) } }
         } message: {
-            Text("The injection check uses Shield Small by ZeroLeaks. keepmum does not ship it, and its weights are licensed CC BY-NC 4.0: you may use them only for non-commercial purposes. Using keepmum on work for an employer or a client is commercial use; for that, ZeroLeaks offers a licence (zeroleaks.ai/contact).\n\nThe download is 136 MB from Hugging Face, checked against pinned SHA-256s. Your confirmation is recorded in the audit log.")
+            Text("The injection check uses Shield Small by ZeroLeaks. keepmum does not ship it, and its weights are licensed CC BY-NC 4.0: you may use them only for non-commercial purposes. Using keepmum on work for an employer or a client is commercial use; for that, ZeroLeaks offers a licence (zeroleaks.ai/contact).\n\nThe download is 133 MB: an unofficial conversion that runs in llama.cpp, hosted by keepmum on Hugging Face (not endorsed by ZeroLeaks) and checked against pinned SHA-256s. Your confirmation is recorded in the audit log.")
         }
         .alert(confirmingRemove == "harm" ? "Remove the harm check's models?" : "Remove the injection check's model?",
                isPresented: Binding(get: { confirmingRemove != nil }, set: { if !$0 { confirmingRemove = nil } })) {
@@ -61,10 +61,7 @@ struct ChecksSection: View {
         if c.installed {
             modelLine("Shield Small by ZeroLeaks · CC BY-NC 4.0, non-commercial use"
                       + (c.accepted.map { " confirmed \(Date(timeIntervalSince1970: $0.ts).formatted(date: .abbreviated, time: .omitted))" } ?? "")
-                      + " · 0.7 GB while in use", remove: "injection")
-        }
-        if let missing = c.runtimeMissing {
-            modelLine("\(missing) is not installed in this engine", tone: Theme.warning)
+                      + " · 0.4 GB while in use", remove: "injection")
         }
     }
 
@@ -118,7 +115,7 @@ struct ChecksSection: View {
                       + c.installed.filter(\.value).keys.sorted().map { $0 == "4b" ? "4B" : "0.6B" }.joined(separator: ", "), remove: "harm")
         }
         if c.server == nil {
-            modelLine("llama-server is not found: the app bundles it; on the command line, brew install llama.cpp", tone: Theme.warning)
+            modelLine("llama-server, which both checks run in, is not found: the app bundles it; on the command line, brew install llama.cpp", tone: Theme.warning)
         }
     }
 

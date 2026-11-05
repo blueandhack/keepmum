@@ -1,16 +1,16 @@
-"""Does Shield Small as a GGUF in llama.cpp score like the int8 ONNX keepmum runs today?
+"""Does Shield Small as a GGUF in llama.cpp score like ZeroLeaks' int8 ONNX?
 
 Scores every document of the injection benchmark (bench/guard.py's data) four ways, with the same
 256-token windows (stride 192, at most 32) and the highest window's P(INJECTION) as the document's score:
 
-  onnx         keepmum.guard.Shield: the int8 ONNX on ONNX Runtime, as keepmum runs it now
+  onnx         ZeroLeaks' int8 ONNX on ONNX Runtime (CPU), as keepmum ran it before the GGUF
   torch        the weights bench/shield_gguf.py rebuilt, in PyTorch (fp32): what ONNX Runtime's
                int8 activations cost, apart from llama.cpp
   gguf-ids     each GGUF in llama-server, given the same token ids: llama.cpp's arithmetic
-  gguf-tok     the same, with llama.cpp's own tokenizer (/tokenize): what a runtime without the
-               tokenizers package would see
+  keepmum      keepmum.guard.Shield on each GGUF: llama.cpp's tokenizer, keepmum's windows and
+               server settings, as the injection check runs now
 
-    uv run --group torch --extra guard python bench/shield_parity.py SRC OUT/shield-small.F32.gguf OUT/shield-small.Q8_0.gguf
+    uv run --group torch --group onnx python bench/shield_parity.py SRC OUT/shield-small-s15e.F32.gguf OUT/shield-small-s15e.Q8_0.gguf
 
 SRC is Shield's pinned files; OUT is bench/shield_gguf.py's output folder (hf/ in it is used for torch).
 Writes bench/results/shield-gguf-<stamp>.{md,json}: scores only, never text.
@@ -36,7 +36,42 @@ sys.path.insert(0, str(ROOT / "src"))
 import guard as bench  # noqa: E402
 
 SERVER = ROOT / "native" / "llama-server" / ".work" / "build-darwin-arm64" / "bin" / "llama-server"
-KEEPMUM_THRESHOLD = 0.92  # keepmum.guard.THRESHOLD today
+ONNX_THRESHOLD = 0.92  # the int8 ONNX's own dev threshold, which keepmum used with it
+
+
+class OnnxShield:
+    """ZeroLeaks' int8 ONNX on ONNX Runtime, with the tokenizers package: keepmum's runtime before the GGUF."""
+
+    def __init__(self, path: Path):
+        import numpy as np
+        import onnxruntime as ort
+        from tokenizers import Tokenizer
+
+        self.np = np
+        self.tok = Tokenizer.from_file(str(path / "tokenizer.json"))
+        self.tok.no_padding()
+        self.tok.no_truncation()
+        plain = self.tok.encode("a", add_special_tokens=False).ids
+        wrapped = self.tok.encode("a").ids
+        at = next(i for i in range(len(wrapped)) if wrapped[i:i + len(plain)] == plain)
+        self.head, self.tail = wrapped[:at], wrapped[at + len(plain):]
+        pad = json.loads((path / "tokenizer_config.json").read_text())["pad_token"]
+        self.pad = self.tok.token_to_id(pad["content"] if isinstance(pad, dict) else pad)
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 2
+        opts.inter_op_num_threads = 1
+        self.session = ort.InferenceSession(str(path / "onnx" / "model_quantized.onnx"), opts, providers=["CPUExecutionProvider"])
+        self.inputs = {i.name for i in self.session.get_inputs()}
+
+    def ids(self, text: str) -> list[int]:
+        return self.tok.encode(text, add_special_tokens=False).ids
+
+    def logits(self, rows):
+        np = self.np
+        width = max(map(len, rows))
+        feed = {"input_ids": np.array([r + [self.pad] * (width - len(r)) for r in rows], dtype=np.int64),
+                "attention_mask": np.array([[1] * len(r) + [0] * (width - len(r)) for r in rows], dtype=np.int64)}
+        return self.session.run(None, {k: v for k, v in feed.items() if k in self.inputs})[0].astype(np.float64).tolist()
 
 
 def p_injection(logits) -> float:
@@ -74,9 +109,6 @@ class Server:
         out = sorted(out, key=lambda e: e["index"])
         return [e["embedding"][0] for e in out]
 
-    def tokenize(self, text: str) -> list[int]:
-        return self.post("/tokenize", {"content": text, "add_special": False})["tokens"]
-
     def close(self):
         self.proc.terminate()
         self.proc.wait(timeout=10)
@@ -90,20 +122,18 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=bench.RESULTS)
     a = ap.parse_args()
 
-    import numpy as np
     import torch
     from safetensors.numpy import load_file
     from transformers import BertConfig, BertForSequenceClassification
 
-    from keepmum.guard import Shield
+    from keepmum import guard
 
     data = {split: bench.load(split) for split in ("dev", "holdout")}
     records = [r for split in data.values() for r in split]
 
-    shield = Shield(a.src)
-    shield._load()
-    wrap = lambda body: shield._head + body + shield._tail
-    windows = {r["id"]: shield.windows(shield._tok.encode(r["text"] or ".", add_special_tokens=False).ids) for r in records}
+    onnx = OnnxShield(a.src)
+    wrap = lambda body: onnx.head + body + onnx.tail
+    windows = {r["id"]: guard.Shield.windows(onnx.ids(r["text"] or ".")) for r in records}
 
     # torch: the rebuilt weights under their original names
     hf = a.gguf[0].parent / "hf"
@@ -120,28 +150,23 @@ def main() -> None:
 
     def torch_logits(rows):
         width = max(map(len, rows))
-        ids = torch.tensor([r + [shield._pad] * (width - len(r)) for r in rows])
+        ids = torch.tensor([r + [onnx.pad] * (width - len(r)) for r in rows])
         mask = torch.tensor([[1] * len(r) + [0] * (width - len(r)) for r in rows])
         with torch.no_grad():
             return model(input_ids=ids, attention_mask=mask, token_type_ids=torch.zeros_like(ids)).logits.double().tolist()
 
-    def onnx_logits(rows):
-        width = max(map(len, rows))
-        feed = {"input_ids": np.array([r + [shield._pad] * (width - len(r)) for r in rows], dtype=np.int64),
-                "attention_mask": np.array([[1] * len(r) + [0] * (width - len(r)) for r in rows], dtype=np.int64)}
-        return shield._session.run(None, {k: v for k, v in feed.items() if k in shield._inputs})[0].astype(np.float64).tolist()
-
-    scorers = {"onnx": onnx_logits, "torch": torch_logits}
-    servers = {}
+    scorers = {"onnx": onnx.logits, "torch": torch_logits}
+    servers, runtimes = {}, {}
     for g in a.gguf:
         tag = g.stem.split(".")[-1]  # F32, Q8_0
         servers[tag] = Server(g, a.server)
         scorers[f"gguf-ids {tag}"] = servers[tag].logits
+        runtimes[f"keepmum {tag}"] = guard.Shield(g, server=a.server)
 
     # per window: the logit margin (INJECTION - BENIGN) of each scorer; per document: the top P(INJECTION)
     margins = {name: [] for name in scorers}
-    scores = {name: {} for name in list(scorers) + [f"gguf-tok {t}" for t in servers]}
-    tok_same = tok_total = tok_trail = 0
+    scores = {name: {} for name in list(scorers) + list(runtimes)}
+    tok_same = tok_total = 0
     for r in records:
         rows = [wrap(b) for b in windows[r["id"]]]
         for name, fn in scorers.items():
@@ -151,20 +176,20 @@ def main() -> None:
             margins[name].append([l[1] - l[0] for l in logits])
             scores[name][r["id"]] = {"score": max(p_injection(l) for l in logits), "ms": ms, "windows": len(rows),
                                      "chars": len(r["text"])}
-        for tag, srv in servers.items():
+        for i, (name, rt) in enumerate(runtimes.items()):
+            text = r["text"] or "."
             t0 = time.perf_counter()
-            ids = srv.tokenize(r["text"] or ".")
-            if tag == next(iter(servers)):  # one tokenizer, counted once
-                ref = shield._tok.encode(r["text"] or ".", add_special_tokens=False).ids
+            score = rt.score(text)
+            ms = (time.perf_counter() - t0) * 1000
+            ids = rt.tokens(text)
+            if i == 0:  # one tokenizer, counted once
                 tok_total += 1
-                tok_same += ids == ref
-                tok_trail += ids != ref and ids == ref[:-1] and ref[-1:] == [shield._tok.token_to_id("\u2581")]
-            own = [wrap(b) for b in shield.windows(ids)]
-            logits = [l for i in range(0, len(own), 8) for l in srv.logits(own[i:i + 8])]
-            scores[f"gguf-tok {tag}"][r["id"]] = {"score": max(p_injection(l) for l in logits),
-                                                 "ms": (time.perf_counter() - t0) * 1000, "windows": len(own), "chars": len(r["text"])}
+                tok_same += ids == onnx.ids(text)
+            scores[name][r["id"]] = {"score": score, "ms": ms, "windows": len(guard.Shield.windows(ids)), "chars": len(r["text"])}
     for s in servers.values():
         s.close()
+    for rt in runtimes.values():
+        rt.unload()
 
     # parity against onnx and against torch, per window
     def diff(x, y):
@@ -172,24 +197,29 @@ def main() -> None:
         return {"median": statistics.median(d), "p99": sorted(d)[int(0.99 * (len(d) - 1))], "max": max(d), "windows": len(d)}
 
     parity = {f"{x} vs {y}": diff(x, y) for x in margins for y in ("onnx", "torch") if x != y and not (x == "onnx" and y == "torch")}
+    # verdicts, each runtime at its own threshold: the ONNX at 0.92, the GGUF at keepmum's
+    at = lambda name: ONNX_THRESHOLD if name == "onnx" else guard.THRESHOLD
     agree = {}
     for name in scores:
         if name == "onnx":
             continue
-        same = sum((scores[name][r["id"]]["score"] >= KEEPMUM_THRESHOLD) == (scores["onnx"][r["id"]]["score"] >= KEEPMUM_THRESHOLD)
-                   for r in records)
-        agree[name] = {"same_verdict_at_0.92": same, "of": len(records),
+        differ = [r for r in records if (scores[name][r["id"]]["score"] >= at(name)) != (scores["onnx"][r["id"]]["score"] >= ONNX_THRESHOLD)]
+        agree[name] = {"same_verdict": len(records) - len(differ), "of": len(records),
+                       "differ": [(r["id"], r["label"], round(scores["onnx"][r["id"]]["score"], 3), round(scores[name][r["id"]]["score"], 3))
+                                  for r in differ],
                        "max_score_diff": max(abs(scores[name][r["id"]]["score"] - scores["onnx"][r["id"]]["score"]) for r in records)}
 
     summaries = []
     for name, sc in scores.items():
         s = bench.summarize({"detector": name, "device": "cpu" if name in ("onnx", "torch") else "metal",
                              "load_s": 0, "max_rss_mb": 0, "scores": sc}, data)
-        s["holdout"]["at_0.92"] = bench.evaluate(data["holdout"], sc, KEEPMUM_THRESHOLD)
+        s["runtime_threshold"] = at(name)
+        s["holdout"]["at_runtime"] = bench.evaluate(data["holdout"], sc, at(name))
         summaries.append(s)
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out = {"env": bench.environment(), "tokenizer": {"identical": tok_same, "only_trailing_space_token": tok_trail, "documents": tok_total}, "parity": parity, "agree": agree,
+    out = {"env": bench.environment(), "tokenizer": {"identical": tok_same, "documents": tok_total},
+           "thresholds": {"onnx": ONNX_THRESHOLD, "keepmum": guard.THRESHOLD}, "parity": parity, "agree": agree,
            "summaries": summaries, "runs": [{"detector": k, "scores": v} for k, v in scores.items()]}
     (a.out / f"shield-gguf-{stamp}.json").write_text(json.dumps(out, indent=1))
     md = render(out)
@@ -199,21 +229,23 @@ def main() -> None:
 
 def render(out: dict) -> str:
     f = lambda x: "–" if x is None else f"{x:.3f}"
-    lines = [f"# Shield Small: int8 ONNX vs GGUF in llama.cpp", "",
-             f"{out['env'].get('machine', '')} · llama.cpp's tokenizer: identical to Shield's on {out['tokenizer']['identical']} of "
-             f"{out['tokenizer']['documents']} documents, and on {out['tokenizer']['only_trailing_space_token']} more apart from the final "
-             "▁ that Shield's adds to text ending in whitespace", "",
+    t = out["thresholds"]
+    lines = ["# Shield Small: int8 ONNX vs GGUF in llama.cpp", "",
+             f"{out['env'].get('machine', '')} · keepmum's tokens (llama.cpp's tokenizer, plus the final ▁ Shield's adds to text "
+             f"ending in whitespace) identical to Shield's tokenizer on {out['tokenizer']['identical']} of {out['tokenizer']['documents']} documents", "",
              "## Logit margin (INJECTION − BENIGN), per window", "", "| | median | p99 | max | windows |", "| --- | --- | --- | --- | --- |"]
     lines += [f"| {k} | {v['median']:.3f} | {v['p99']:.3f} | {v['max']:.3f} | {v['windows']} |" for k, v in out["parity"].items()]
-    lines += ["", "## Verdicts against ONNX at keepmum's threshold (0.92)", "", "| | same verdict | max score difference |", "| --- | --- | --- |"]
-    lines += [f"| {k} | {v['same_verdict_at_0.92']} / {v['of']} | {v['max_score_diff']:.3f} |" for k, v in out["agree"].items()]
+    lines += ["", f"## Verdicts against ONNX (ONNX at {t['onnx']}, the others at keepmum's {t['keepmum']})", "",
+              "| | same verdict | documents that differ (label, ONNX score → this score) | max score difference |", "| --- | --- | --- | --- |"]
+    lines += [f"| {k} | {v['same_verdict']} / {v['of']} | {'; '.join(f'{i} ({l}, {a} → {b})' for i, l, a, b in v['differ']) or '–'} | "
+              f"{v['max_score_diff']:.3f} |" for k, v in out["agree"].items()]
     lines += ["", "## Holdout", "",
-              "| | dev threshold | AUC | recall at dev | ordinary FPR at dev | security FPR at dev | recall at 0.92 | ordinary FPR at 0.92 | security FPR at 0.92 | p50 ms |",
-              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+              "| | dev threshold | AUC | recall at dev | ordinary FPR at dev | security FPR at dev | runtime threshold | recall | ordinary FPR | security FPR | p50 ms |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for s in out["summaries"]:
-        h, k = s["holdout"]["at_dev"], s["holdout"]["at_0.92"]
+        h, k = s["holdout"]["at_dev"], s["holdout"]["at_runtime"]
         lines.append(f"| {s['detector']} | {s['dev_threshold']:.4f} | {f(h['auc'])} | {f(h['recall'])} | {f(h['fpr_ordinary'])} | "
-                     f"{f(h['fpr_security'])} | {f(k['recall'])} | {f(k['fpr_ordinary'])} | {f(k['fpr_security'])} | {s['ms_p50']:.1f} |")
+                     f"{f(h['fpr_security'])} | {s['runtime_threshold']} | {f(k['recall'])} | {f(k['fpr_ordinary'])} | {f(k['fpr_security'])} | {s['ms_p50']:.1f} |")
     return "\n".join(lines) + "\n"
 
 

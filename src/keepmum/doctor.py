@@ -173,23 +173,24 @@ def checks() -> list[tuple[str, str]]:
 
 
 # Memory each optional check's model takes while loaded (measured on an M5 Pro), next to pf-serve's 1.7 GB.
-GUARD_MEMORY = {"injection": "0.7 GB", "0.6b": "1.1 GB", "4b": "4.9 GB"}
+GUARD_MEMORY = {"injection": "0.4 GB", "0.6b": "1.1 GB", "4b": "4.9 GB"}
 
 
 def _guard_checks(r, cfg) -> None:
     """The optional checks: whether each that is on can run, and what it costs in memory."""
     from . import guard, harm
+    from .llamacpp import find_server
 
     gb = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True).stdout or 0) / 2**30
     if cfg.guard_injection != "off":
         why = ("model not set up (`keepmum guard setup injection`)" if not guard.installed()
-               else f"{guard.runtime_missing()} not installed (the guard extra)" if guard.runtime_missing() else None)
+               else "llama-server not found (brew install llama.cpp)" if find_server() is None else None)
         _check(r, FAIL if why else OK, f"injection check {cfg.guard_injection}: " + (why or
                f"Shield Small, CC BY-NC 4.0 (non-commercial use confirmed); {GUARD_MEMORY['injection']} while in use"))
     if cfg.guard_harm != "off":
         size = cfg.guard_harm_model
         why = (f"{size} model not downloaded (`keepmum guard setup harm --model {size}`)" if not harm.installed(size)
-               else "llama-server not found (brew install llama.cpp)" if harm.find_server() is None else None)
+               else "llama-server not found (brew install llama.cpp)" if find_server() is None else None)
         heavy = size == "4b" and 0 < gb < 32
         _check(r, FAIL if why else WARN if heavy else OK, f"harm check {cfg.guard_harm}: " + (why or
                f"Qwen3Guard-Gen {size}; {GUARD_MEMORY[size]} while in use" +

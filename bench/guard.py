@@ -3,7 +3,7 @@
 Not part of the request path. Each detector scores whole documents (a tool result as the agent reads
 it): long ones are split into the model's windows and the document gets its highest window score.
 
-    uv sync --group torch && uv pip install gliner2 onnxruntime
+    uv sync --group torch --group onnx && uv pip install gliner2
     uv run python bench/guard_data.py                 # bench/data/guard-{dev,holdout}.jsonl
     uv run --group torch python bench/guard.py        # every detector; --detectors a,b  --device cpu
 

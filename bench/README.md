@@ -48,14 +48,14 @@ agents read all day (CLAUDE.md, skills, runbooks, security writing that quotes a
 the verdict: [`results/GUARD.md`](results/GUARD.md).
 
 ```sh
-uv sync --group torch && uv pip install gliner2 onnxruntime
+uv sync --group torch --group onnx && uv pip install gliner2
 uv run python bench/guard_data.py                    # bench/data/guard-dev.jsonl and guard-holdout.jsonl
 uv run --group torch python bench/guard.py           # gliguard, wolf-small, sentinel, vektor-v2, protectai-v2, shield-small
 uv run --group torch python bench/guard.py --detectors wolf-small --device cpu
 # Shield Small as a GGUF: rebuild its weights from the int8 ONNX, convert, and compare (SRC: its pinned files)
 uv run --no-project --python 3.12 --with onnx --with "numpy~=2.2.6" --with safetensors --with "torch==2.11.0" \
     --with "transformers==4.57.6" --with "sentencepiece<0.3" --with "protobuf<5" python -I bench/shield_gguf.py SRC OUT --type q8_0
-uv run --group torch --extra guard python bench/shield_parity.py SRC OUT/shield-small.F32.gguf OUT/shield-small.Q8_0.gguf
+uv run --group torch --group onnx python bench/shield_parity.py SRC OUT/shield-small-s15e.F32.gguf OUT/shield-small-s15e.Q8_0.gguf
 ```
 
 - The models must be in the Hugging Face cache first (`snapshot_download` of each repo in `DETECTORS`).

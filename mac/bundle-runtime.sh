@@ -4,7 +4,7 @@
 #   Contents/Resources/python/         a relocatable CPython (python-build-standalone, via uv),
 #                                      with keepmum and its dependencies in site-packages
 #   Contents/Resources/bin/pf-serve    the model runtime (native/pf-serve/build.sh)
-#   Contents/Resources/bin/llama-server  the harm check's runtime (native/llama-server/build.sh)
+#   Contents/Resources/bin/llama-server  the optional checks' runtime (native/llama-server/build.sh)
 #   Contents/Resources/keepmum           `keepmum` for the app: setup, protect, status
 #   Contents/Resources/keepmum-agent     what the background service runs: `keepmum serve`
 #   Contents/Library/LaunchAgents/     the service's launchd plist, registered with SMAppService
@@ -12,8 +12,7 @@
 # The bundled Python runs with -I (no PYTHONPATH, no user site-packages) and -B (never writes
 # .pyc files into the signed bundle; everything is compiled here). No model is bundled: `keepmum
 # setup` downloads the privacy filter once into ~/.local/share/keepmum, and the optional checks'
-# models come only with `keepmum guard setup`. Their runtimes are bundled: ONNX Runtime (the guard
-# extra) and llama-server.
+# models come only with `keepmum guard setup`. Their runtime, llama-server, is bundled.
 set -euo pipefail
 APP=$(cd "$1" && pwd)
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -57,18 +56,13 @@ rm -f "$stdlib"/EXTERNALLY-MANAGED
 # keepmum and its locked dependencies (no dev or benchmark groups). Not rich and what it pulls in
 # (about 14 MB): typer's boxed help and tracebacks, off with TYPER_USE_RICH=0 below. Plain errors
 # also suit the app, which shows a failed command's last line.
-(cd "$ROOT" && uv export --frozen --no-dev --extra guard --no-emit-project --no-hashes --format requirements-txt -o "$work/all.txt" >/dev/null)
-# The guard extra's packages come without what only their own tooling uses: tokenizers' Hugging Face
-# hub client (keepmum loads a tokenizer from a file) and onnxruntime's protobuf and flatbuffers.
-grep -vE '^(rich|pygments|markdown-it-py|mdurl|huggingface-hub|hf-xet|fsspec|filelock|tqdm|pyyaml|httpx2|httpx2-jsfetch|httpcore2|truststore|protobuf|flatbuffers)==' \
-  "$work/all.txt" > "$work/requirements.txt"
+(cd "$ROOT" && uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt -o "$work/all.txt" >/dev/null)
+grep -vE '^(rich|pygments|markdown-it-py|mdurl)==' "$work/all.txt" > "$work/requirements.txt"
 (cd "$ROOT" && uv build --wheel -q -o "$work")
 uv pip install -q --python "$py" --target "$site" --no-deps -r "$work/requirements.txt"
 uv pip install -q --python "$py" --target "$site" --no-deps "$work"/keepmum-*.whl
 rm -rf "$site"/bin "$site"/pip "$site"/pip-*.dist-info
-# onnxruntime's model tooling (transformer optimizers, quantization, converters): the runtime never imports it.
-rm -rf "$site"/onnxruntime/{transformers,quantization,tools}
-# Packages' own test suites (numpy's alone is ~12 MB).
+# Packages' own test suites.
 find "$site" -type d -name tests -prune -exec rm -rf {} +
 # arm64 only: a universal binary's other slice is dead weight, and codesign fails on some of them.
 find "$RES/python" -type f \( -name '*.so' -o -name '*.dylib' \) -print0 | while IFS= read -r -d '' f; do
@@ -115,7 +109,7 @@ cat > "$APP/Contents/Library/LaunchAgents/app.keepmum.agent.plist" <<PLIST
 </plist>
 PLIST
 
-"$py" -I -B -c 'import keepmum, keepmum.cli, keepmum.proxy, keepmum.harm, uvicorn, httpx, onnxruntime, tokenizers, numpy; print("runtime ok:", keepmum.__version__)'
+"$py" -I -B -c 'import keepmum, keepmum.cli, keepmum.proxy, keepmum.guard, keepmum.harm, uvicorn, httpx, zstandard; print("runtime ok:", keepmum.__version__)'
 # Help and a usage error, which are what would need rich.
 HOME=$work "$RES/keepmum" --help >/dev/null
 HOME=$work "$RES/keepmum" tools set >/dev/null 2>&1 && exit 1 || [ $? -eq 2 ]

@@ -441,20 +441,21 @@ app.add_typer(guard_app, name="guard")
 CHECKS = ("injection", "harm")
 _MODE_TEXT = {"off": "off", "warn": "warn (flagged requests are logged, then sent)",
               "block": "block (flagged requests are refused)"}
-_EXTRA = "uv tool install --editable '.[guard]'"
 
 
 def _guard_status() -> dict:
     from . import guard, harm
+    from .llamacpp import find_server
 
     cfg = _config()
+    server = str(find_server() or "") or None  # both checks run in llama-server
     return {
         "injection": {"mode": cfg.guard_injection, "installed": guard.installed(), "accepted": guard.accepted(),
-                      "runtime_missing": guard.runtime_missing(), "model": f"{guard.REPO}@{guard.RELEASE}",
+                      "server": server, "model": f"{guard.REPO}@{guard.REVISION}", "source": f"{guard.SOURCE}@{guard.RELEASE}",
                       "licence": guard.LICENCE, "threshold": guard.THRESHOLD},
         "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
                  "installed": {size: harm.installed(size) for size in harm.SIZES},
-                 "server": str(harm.find_server() or "") or None, "licence": harm.LICENCE,
+                 "server": server, "licence": harm.LICENCE,
                  "threshold": harm.MODELS[cfg.guard_harm_model][5]},
     }
 
@@ -462,16 +463,13 @@ def _guard_status() -> dict:
 def _missing(check: str, size: str | None = None) -> str | None:
     """Why `check` cannot run yet, or None."""
     from . import guard, harm
+    from .llamacpp import find_server
 
-    if check == "injection":
-        if not guard.installed():
-            return "its model is not set up: run `keepmum guard setup injection` first"
-        if guard.runtime_missing():
-            return f"{guard.runtime_missing()} is not installed: install keepmum with the guard extra, `{_EXTRA}`"
-        return None
-    if not harm.installed(size):
+    if check == "injection" and not guard.installed():
+        return "its model is not set up: run `keepmum guard setup injection` first"
+    if check == "harm" and not harm.installed(size):
         return f"the {size} model is not downloaded: run `keepmum guard setup harm --model {size}` first"
-    if harm.find_server() is None:
+    if find_server() is None:
         return "llama-server is not installed: `brew install llama.cpp` (or set KEEPMUM_LLAMA_SERVER)"
     return None
 
@@ -496,14 +494,12 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
                    f"{time.strftime('%b %-d, %Y', time.localtime(inj['accepted']['ts']))}")
     else:
         typer.echo("  model: not set up (`keepmum guard setup injection`)")
-    if inj["runtime_missing"]:
-        typer.echo(f"  runtime: {inj['runtime_missing']} is not installed (`{_EXTRA}`)")
     typer.echo(f"harm: {_MODE_TEXT[hm['mode']]}")
     have = [size for size, ok in hm["installed"].items() if ok]
     typer.echo(f"  model: Qwen3Guard-Gen {hm['model']} (Apache-2.0)"
                + ("" if hm["installed"][hm["model"]] else f", not downloaded (`keepmum guard setup harm --model {hm['model']}`)")
                + (f"; downloaded: {', '.join(have)}" if have else ""))
-    typer.echo(f"  runtime: {hm['server'] or 'llama-server not found (brew install llama.cpp)'}")
+    typer.echo(f"runtime (both): {hm['server'] or 'llama-server not found (brew install llama.cpp)'}")
 
 
 @guard_app.command("setup")

@@ -2,9 +2,12 @@
 
 Off by default, and its model is never bundled. Shield Small (ZeroLeaks, release s15e) is the only
 local model that worked in the benchmark (bench/results/GUARD.md), and its weights are licensed
-CC BY-NC 4.0: non-commercial use only. `keepmum guard setup injection` shows those terms, asks the user to
-confirm their use is non-commercial, then downloads the weights at a pinned commit and checks every
-file's SHA-256. keepmum's own code stays Apache-2.0; the licence is between the user and ZeroLeaks.
+CC BY-NC 4.0: non-commercial use only. keepmum runs an unofficial GGUF conversion of it in llama.cpp
+(bench/shield_gguf.py; hosted at huggingface.co/keepmum/shield-small-gguf, same licence), which
+scores like ZeroLeaks' int8 ONNX (bench/results/GUARD.md, "as a GGUF"). `keepmum guard setup
+injection` shows the terms, asks the user to confirm their use is non-commercial, then downloads the
+files at a pinned commit and checks each one's SHA-256. keepmum's own code stays Apache-2.0; the
+licence is between the user and ZeroLeaks.
 
 What it scans: the text of tool results (Messages tool_result, Responses function_call_output,
 Gemini functionResponse) that a request brings for the first time. Clients resend the whole
@@ -15,53 +18,61 @@ conversation, so text seen before is not scored again; a result once flagged sta
     block  the check runs first; the request is refused, and so is every later one that still
            carries the flagged result
 
-The model loads on the first check and unloads after IDLE_S unused (`Idle`), so it takes memory
-only while agents are working. `Guard` is shared with the harm check (harm.py).
+The model runs in llama-server (llamacpp.py) on Metal, started on the first check and stopped after
+IDLE_S unused (`Idle`), so it takes memory only while agents are working. `Guard` is shared with
+the harm check (harm.py).
 
 Scores come from 256-token windows (stride 192, at most 32 windows: 28 from the start and 4 from
-the end, as the model card describes); a text gets its highest window. The default threshold, 0.92,
-is the one the benchmark set on dev data (at most 2% of ordinary documents flagged).
-
-The runtime needs onnxruntime, tokenizers and numpy: the `guard` extra (`keepmum[guard]`).
+the end, as the model card describes); a text gets its highest window. The threshold, 0.945, is
+the one the benchmark set on dev data for the GGUF (at most 2% of ordinary documents flagged).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import threading
 import time
 from pathlib import Path
 
 from .detect.pfserve import data_dir
+from .llamacpp import INSTALL_HINT, Server, find_server
 
-REPO = "ZeroLeaks/shield-small"
+# The GGUF keepmum runs, converted from ZeroLeaks' release by bench/shield_gguf.py.
+REPO = "keepmum/shield-small-gguf"
+REVISION = "6c0fbb6604a8f4071f4e3c07a5aa194714057a8a"
+SOURCE = "ZeroLeaks/shield-small"  # what it was converted from
+SOURCE_REVISION = "f6d60339a424e17b60272f2d17c4e68995e933cf"  # the s15e tag
 RELEASE = "s15e"
-REVISION = "f6d60339a424e17b60272f2d17c4e68995e933cf"  # the s15e tag
 LICENCE = "CC-BY-NC-4.0"
 ATTRIBUTION = "Shield Small s15e by ZeroLeaks (https://zeroleaks.ai/shield), licensed CC BY-NC 4.0"
-# Path in the repo: (SHA-256, bytes), from the release's manifest.json and checked on download.
+GGUF = "shield-small-s15e.Q8_0.gguf"
+# Path in the repo: (SHA-256, bytes), checked on download. LICENSE and NOTICE are ZeroLeaks' own.
 FILES = {
-    "onnx/model_quantized.onnx": ("40d6daf45ceb2d325e631270baf4de201be4a98313343d28c259bbef8de862e7", 118_445_560),
-    "tokenizer.json": ("b8ab08d043462fecde577bbb4e0e331953586530aada7874dc1acb79f562cb12", 17_082_898),
-    "tokenizer_config.json": ("de5d1da7b3b58ae019aa8913ae1ac190681623cbd70d902b37568b7a4ce0e905", 1_311),
-    "config.json": ("8c93b9d7eea656188bf7faa2c0c356834e0cdac205829492ef8db3b554099006", 760),
+    GGUF: ("8429b324eff78354df7486ad64c9ac72a4270732076b0dc1650b6eb8836728ea", 132_601_088),
     "LICENSE": ("41003d4a74749c0220e33dd415042164b5a1093ed401f36277234f772d22d3d0", 19_347),
     "NOTICE": ("6b2a254eb3d02d38aacf9c2ecbc822608be87bd430a7d24c685f1e5d0dc8d32e", 1_191),
 }
+# What earlier keepmum versions downloaded (ZeroLeaks' int8 ONNX, for ONNX Runtime): removed on setup.
+LEGACY = ("onnx", "tokenizer.json", "tokenizer_config.json", "config.json")
 MODES = ("off", "warn", "block")
-THRESHOLD = 0.92
+THRESHOLD = 0.945
 WINDOW, STRIDE, MAX_WINDOWS = 256, 192, 32
+BOS, EOS, SPACE = 0, 2, 6  # <s>, </s>, and the ▁ that Shield's tokenizer ends text ending in whitespace with
+BATCH = 8  # windows per request to llama-server
 MIN_CHARS = 40  # shorter tool results ("ok", an exit code) carry no instructions worth scoring
 TERMS = f"""The prompt-injection guard uses Shield Small, a model by ZeroLeaks. keepmum does not ship it.
+It downloads an unofficial conversion that runs in llama.cpp, which keepmum hosts; ZeroLeaks does
+not endorse it.
 
 Its weights are licensed {LICENCE} (Creative Commons Attribution-NonCommercial 4.0):
-  https://huggingface.co/{REPO}/blob/{REVISION}/LICENSE
+  https://huggingface.co/{SOURCE}/blob/{SOURCE_REVISION}/LICENSE
 You may use them only for non-commercial purposes: not "primarily intended for or directed towards
 commercial advantage or monetary compensation". Using keepmum on work for an employer or a client
 is commercial use; for that you need a licence from ZeroLeaks (https://zeroleaks.ai/contact).
 
-The download is {sum(size for _, size in FILES.values()) / 1e6:.0f} MB from Hugging Face, checked against pinned SHA-256s."""
+The download is {sum(size for _, size in FILES.values()) / 1e6:.0f} MB from huggingface.co/{REPO}, checked against pinned SHA-256s."""
 
 
 class GuardError(RuntimeError):
@@ -76,14 +87,8 @@ def acceptance_file() -> Path:
     return model_dir() / "ACCEPTED.json"
 
 
-def runtime_missing() -> str | None:
-    """The first runtime package that is not installed, or None."""
-    import importlib.util
-
-    for name in ("onnxruntime", "tokenizers", "numpy"):
-        if importlib.util.find_spec(name) is None:
-            return name
-    return None
+def model_path() -> Path:
+    return model_dir() / GGUF
 
 
 def accepted() -> dict | None:
@@ -114,7 +119,15 @@ def download(progress=None) -> Path:
     licence: `accept()` does that, after the user has confirmed."""
     import httpx
 
+    import shutil
+
     d = model_dir()
+    for old in LEGACY:
+        p = d / old
+        if p.is_dir():
+            shutil.rmtree(p)
+        elif p.exists():
+            p.unlink()
     total, done = sum(size for _, size in FILES.values()), 0
     for rel, (sha, size) in FILES.items():
         dest = d / rel
@@ -148,7 +161,7 @@ def download(progress=None) -> Path:
 
 def accept(by: str) -> None:
     model_dir().mkdir(parents=True, exist_ok=True)
-    acceptance_file().write_text(json.dumps({"licence": LICENCE, "model": f"{REPO}@{RELEASE}", "ts": round(time.time()),
+    acceptance_file().write_text(json.dumps({"licence": LICENCE, "model": f"{SOURCE}@{RELEASE}", "ts": round(time.time()),
                                              "by": by, "statement": "the user confirmed non-commercial use"}) + "\n")
 
 
@@ -186,46 +199,46 @@ class Idle:
 
 
 class Shield(Idle):
-    """Shield Small on ONNX Runtime (CPU). Loaded on first use, unloaded when idle; calls are serialized."""
+    """Shield Small in llama-server (Metal), started on first use and stopped when idle; calls are
+    serialized. `model` is the GGUF (default: the one `keepmum guard setup injection` downloaded)."""
 
-    def __init__(self, path: Path | None = None):
-        self.path = path or model_dir()
+    def __init__(self, model: Path | None = None, server: Path | None = None):
+        self.model, self.server = model, server
         self._lock = threading.Lock()
-        self._session = None
+        self._server: Server | None = None
 
     def loaded(self) -> bool:
-        return self._session is not None
+        return self._server is not None and self._server.running()
 
     def unload(self) -> None:
-        self._session = self._tok = None
+        if self._server is not None:
+            self._server.stop()
+        self._server = None
 
-    def _load(self) -> None:
-        import numpy as np
-        import onnxruntime as ort
-        from tokenizers import Tokenizer
+    def _start(self) -> None:
+        server = self.server or find_server()
+        if server is None:
+            raise GuardError(f"llama-server is not installed ({INSTALL_HINT})")
+        model = self.model or model_path()
+        if not model.is_file():
+            raise GuardError("the injection model is not set up: run `keepmum guard setup injection`")
+        # One slot per window of a batch, all in one micro-batch: a window must fit in one (non-causal
+        # attention), and one pass over the whole batch is the fastest on Metal.
+        self._server = Server(server, model, ["--embedding", "-c", str(WINDOW * BATCH), "--parallel", str(BATCH),
+                                              "-b", str(WINDOW * BATCH), "-ub", str(WINDOW * BATCH), "--cache-ram", "0"], GuardError)
+        self._server.start()
 
-        if json.loads((self.path / "config.json").read_text()).get("id2label") != {"0": "BENIGN", "1": "INJECTION"}:
-            raise GuardError("the guard model is not the Shield Small binary classifier")
-        tok = Tokenizer.from_file(str(self.path / "tokenizer.json"))
-        tok.no_padding()
-        tok.no_truncation()
-        plain = tok.encode("a", add_special_tokens=False).ids
-        wrapped = tok.encode("a").ids
-        at = next(i for i in range(len(wrapped)) if wrapped[i:i + len(plain)] == plain)
-        self._head, self._tail = wrapped[:at], wrapped[at + len(plain):]
-        self._body = WINDOW - len(self._head) - len(self._tail)
-        pad = json.loads((self.path / "tokenizer_config.json").read_text())["pad_token"]
-        self._pad = tok.token_to_id(pad["content"] if isinstance(pad, dict) else pad)
-        opts = ort.SessionOptions()
-        opts.intra_op_num_threads = 2
-        opts.inter_op_num_threads = 1
-        self._np, self._tok = np, tok
-        self._session = ort.InferenceSession(str(self.path / "onnx" / "model_quantized.onnx"), opts,
-                                             providers=["CPUExecutionProvider"])
-        self._inputs = {i.name for i in self._session.get_inputs()}
+    def tokens(self, text: str) -> list[int]:
+        """Shield's token ids for `text`, without <s> and </s>. llama.cpp's sentencepiece tokenizer
+        matches Shield's except at the end: for text that ends in whitespace, Shield's ends with ▁."""
+        ids = self._server.post("/tokenize", {"content": text, "add_special": False})["tokens"]
+        if text[-1:].isspace() and ids[-1:] != [SPACE]:
+            ids.append(SPACE)
+        return ids
 
-    def windows(self, ids: list[int]) -> list[list[int]]:
-        body = self._body
+    @staticmethod
+    def windows(ids: list[int]) -> list[list[int]]:
+        body = WINDOW - 2  # with <s> and </s>
         if len(ids) <= body:
             return [ids]
         if len(ids) <= STRIDE * (MAX_WINDOWS - 1) + body:
@@ -234,23 +247,20 @@ class Shield(Idle):
         return out + [ids[len(ids) - k * STRIDE - body:len(ids) - k * STRIDE] for k in (3, 2, 1, 0)]
 
     def score(self, text: str) -> float:
+        """P(INJECTION) of the text's most likely window."""
         with self._lock:
-            if self._session is None:
-                self._load()
+            if not self.loaded():
+                self._start()
             self._touch()
-            np = self._np
             best = 0.0
-            bodies = self.windows(self._tok.encode(text, add_special_tokens=False).ids)
-            for i in range(0, len(bodies), 8):
-                rows = [self._head + b + self._tail for b in bodies[i:i + 8]]
-                width = max(map(len, rows))
-                feed = {"input_ids": np.array([r + [self._pad] * (width - len(r)) for r in rows], dtype=np.int64),
-                        "attention_mask": np.array([[1] * len(r) + [0] * (width - len(r)) for r in rows], dtype=np.int64)}
-                if "token_type_ids" in self._inputs:
-                    feed["token_type_ids"] = np.zeros_like(feed["input_ids"])
-                logits = self._session.run(None, {k: v for k, v in feed.items() if k in self._inputs})[0].astype(np.float64)
-                e = np.exp(logits - logits.max(axis=1, keepdims=True))
-                best = max(best, float((e[:, 1] / e.sum(axis=1)).max()))
+            bodies = self.windows(self.tokens(text))
+            for i in range(0, len(bodies), BATCH):
+                rows = [[BOS, *b, EOS] for b in bodies[i:i + BATCH]]
+                out = self._server.post("/embeddings", {"content": rows, "embd_normalize": -1})
+                for e in out:
+                    benign, injection = e["embedding"][0]  # the classifier's logits: [BENIGN, INJECTION]
+                    d = injection - benign  # softmax over two labels: a sigmoid of the margin
+                    best = max(best, 1 / (1 + math.exp(-d)) if d >= 0 else math.exp(d) / (1 + math.exp(d)))
             return best
 
 

@@ -50,8 +50,8 @@ final class Engine {
             var installed: Bool
             /// When non-commercial use of the model was confirmed; nil until then.
             var accepted: Accepted?
-            /// A runtime package missing from this install (not in the app, which bundles them).
-            var runtimeMissing: String?
+            /// llama-server's path (both checks run in it); nil when it is not found.
+            var server: String?
             var licence: String
         }
         struct Harm: Decodable, Equatable {
@@ -643,7 +643,7 @@ final class Engine {
                                     "pi": .init(installed: true, on: false, other: .many(["openai"]), otherUrl: "https://llm.corp.example/v1")],
                           destinations: ["gitlab-token": ["gitlab.corp.example"]], previews: true, context: true, keepDays: 90,
                           guard: .init(injection: .init(mode: "warn", installed: true, accepted: .init(ts: Date().timeIntervalSince1970 - 86_400 * 3),
-                                                        runtimeMissing: nil, licence: "CC-BY-NC-4.0"),
+                                                        server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "CC-BY-NC-4.0"),
                                        harm: .init(mode: "block", model: "0.6b", installed: ["0.6b": true, "4b": false],
                                                    server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0")))
         e.serviceStatus = .enabled

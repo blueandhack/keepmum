@@ -223,29 +223,87 @@ def test_a_download_that_does_not_match_is_discarded(tmp_path, monkeypatch):
     assert not (guard.model_dir() / "config.json").exists() and guard.REVISION in urls[0]
 
 
+def test_setup_removes_the_onnx_files_of_earlier_versions(tmp_path, monkeypatch):
+    import hashlib
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(guard, "FILES", {"LICENSE": (hashlib.sha256(b"ok").hexdigest(), 2)})
+    d = guard.model_dir()
+    (d / "onnx").mkdir(parents=True)
+    (d / "onnx" / "model_quantized.onnx").write_bytes(b"old")
+    (d / "tokenizer.json").write_text("{}")
+    monkeypatch.setattr(httpx, "stream", lambda method, url, **kw: httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"ok"))).stream(method, url))
+    guard.download()
+    assert (d / "LICENSE").read_bytes() == b"ok"
+    assert not (d / "onnx").exists() and not (d / "tokenizer.json").exists()
+
+
+class FakeServer:
+    """Stands in for llamacpp.Server: /tokenize returns fixed ids."""
+
+    def __init__(self, ids):
+        self.ids, self.stopped = ids, False
+
+    def running(self):
+        return not self.stopped
+
+    def stop(self):
+        self.stopped = True
+
+    def post(self, path, body, timeout=60):
+        assert path == "/tokenize" and body["add_special"] is False
+        return {"tokens": list(self.ids)}
+
+
+def test_tokens_end_like_shields_own_tokenizer():
+    m = guard.Shield(Path("/nonexistent"))
+    m._server = FakeServer([10, 11])
+    assert m.tokens("two words") == [10, 11]
+    assert m.tokens("two words\n") == [10, 11, guard.SPACE]  # Shield's tokenizer ends such text with ▁
+    m._server = FakeServer([10, guard.SPACE])
+    assert m.tokens("two words ") == [10, guard.SPACE]
+
+
+def test_long_texts_get_windows_from_both_ends():
+    body = guard.WINDOW - 2
+    assert guard.Shield.windows(list(range(body))) == [list(range(body))]
+    ids = list(range(100_000))
+    w = guard.Shield.windows(ids)
+    assert len(w) == guard.MAX_WINDOWS and all(len(x) == body for x in w)
+    assert w[0][0] == 0 and w[-1][-1] == ids[-1]
+
+
 # --- The real model, when it is on this Mac ------------------------------------------------
 
 def _real_model() -> Path | None:
-    if guard.runtime_missing():
+    from keepmum.llamacpp import find_server
+
+    if find_server() is None:
         return None
     if guard.installed():
-        return guard.model_dir()
+        return guard.model_path()
     import os
 
     # HOME is a temp dir in tests; HF_HOME points at the real cache (conftest.py).
-    snaps = Path(os.environ.get("HF_HOME", "")) / "hub" / "models--ZeroLeaks--shield-small" / "snapshots"
+    snaps = Path(os.environ.get("HF_HOME", "")) / "hub" / "models--keepmum--shield-small-gguf" / "snapshots"
     for d in sorted(snaps.glob("*")) if snaps.exists() else []:
-        if (d / "onnx" / "model_quantized.onnx").exists():
-            return d
+        if (d / guard.GGUF).exists():
+            return d / guard.GGUF
     return None
 
 
-@pytest.mark.skipif(_real_model() is None, reason="Shield Small or its runtime is not on this Mac")
+@pytest.mark.skipif(_real_model() is None, reason="Shield Small's GGUF or llama-server is not on this Mac")
 def test_shield_small_separates_an_injection_from_a_readme():
     m = guard.Shield(_real_model())
-    readme = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text()[:6000]
-    assert m.score(readme + "\n\n" + ATTACK) >= guard.THRESHOLD
-    assert m.score(BENIGN) < 0.5
+    try:
+        readme = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text()[:6000]
+        assert m.score(readme + "\n\n" + ATTACK) >= guard.THRESHOLD
+        assert m.score(BENIGN) < 0.5
+        assert m.loaded()
+    finally:
+        m.unload()
+    assert not m.loaded()
 
 
 # --- Warn mode reports a hit once; block mode keeps refusing ---------------------------------
@@ -363,7 +421,7 @@ def test_harm_config_and_audit(tmp_path):
 def test_idle_models_unload():
     m = guard.Shield(Path("/nonexistent"))
     m.idle_s = 0.05
-    m._session = object()  # as if loaded
+    m._server = FakeServer([])  # as if loaded
     m._touch()
     import time
 
@@ -444,4 +502,5 @@ def test_status_json_has_the_checks():
 
     out = json.loads(CliRunner().invoke(app, ["status", "--json"]).stdout)
     assert out["guard"]["injection"]["mode"] == "off" and out["guard"]["harm"]["model"] == "0.6b"
+    assert "server" in out["guard"]["injection"] and out["guard"]["injection"]["model"].startswith("keepmum/shield-small-gguf@")
     assert set(out["guard"]["harm"]["installed"]) == {"0.6b", "4b"}

@@ -54,20 +54,21 @@ The test set is small (48 injected and 61 benign documents in holdout), hand-wri
 - read the XLM-R sentencepiece vocabulary
 - give the output the width of the two labels
 
-[`../shield_parity.py`](../shield_parity.py) then scores this benchmark's 407 documents with the same windows, four ways: [`shield-gguf-20261104-211303.md`](shield-gguf-20261104-211303.md).
+The Q8_0 file is published, unofficially and under the same licence, at [keepmum/shield-small-gguf](https://huggingface.co/keepmum/shield-small-gguf). [`../shield_parity.py`](../shield_parity.py) scores this benchmark's 409 documents with the same windows, five ways, the last one being keepmum's own runtime (`keepmum.guard.Shield`): [`shield-gguf-20261104-212908.md`](shield-gguf-20261104-212908.md).
 
-| | Holdout AUC | Recall at 0.92 / at its dev threshold | Ordinary / security FPR | Dev threshold | p50 per document | Memory |
+| | Holdout AUC | Threshold (dev) | Recall | Ordinary / security FPR | p50 per document | Memory |
 | --- | --- | --- | --- | --- | --- | --- |
-| int8 ONNX, ONNX Runtime (CPU), as keepmum runs it | 0.967 | 0.90 / 0.90 | 0.03 / 0.12 | 0.923 | 37 ms | 0.7 GB |
-| Rebuilt weights, PyTorch fp32 | 0.968 | 0.90 / 0.88 | 0.03 / 0.12 | 0.946 | 34 ms | |
-| **GGUF Q8_0, llama-server (Metal)** | 0.969 | 0.92 / 0.88 | 0.03 / 0.12 | 0.944 | **11 ms** | **0.3 GB** |
+| int8 ONNX, ONNX Runtime (CPU), keepmum's runtime before | 0.967 | 0.92 | 0.90 | 0.03 / 0.15 | 39 ms | 0.7 GB |
+| Rebuilt weights, PyTorch fp32 | 0.968 | 0.946 | 0.88 | 0.03 / 0.12 | 31 ms | |
+| **GGUF Q8_0 in llama-server (Metal), keepmum's runtime now** | 0.968 | 0.945 | 0.88 | 0.03 / 0.12 | **10 ms** | **0.4 GB** |
 
 - **The conversion is right.** Given the same token ids, llama.cpp's logits match PyTorch on the rebuilt weights. The median difference in logit margin is 0.006 for F32 and 0.012 for Q8_0.
 - **The remaining difference from ONNX comes from ONNX Runtime, not from llama.cpp.** ONNX Runtime also quantizes activations to int8 at run time, which moves the margin by a median of 0.04 (up to 2.2 on one window). PyTorch and llama.cpp both use float activations, so they agree with each other and differ from ONNX by the same amount.
-- **Verdicts at keepmum's threshold (0.92) agree on 404 of 407 documents.** All three that differ are injections the GGUF flags and ONNX misses: one bare payload and two injected documents. No benign document changes.
-- **llama.cpp's tokenizer matches Shield's on all 407 documents, except for one token.** For text that ends in whitespace, Hugging Face's tokenizer emits a final `▁`, and llama.cpp doesn't. A runtime can append it.
-- **The threshold moves to about 0.944 on dev.** One more ordinary dev document scores between 0.92 and 0.944. At either threshold, holdout false alarms are unchanged. At 0.944, holdout recall is one document lower (42 of 48 instead of 43).
-- Q8_0 is 133 MB, against the ONNX file's 118 MB, and runs a full 256-token window in 5.7 ms on Metal.
+- **The GGUF's scores sit slightly higher, so its dev threshold is 0.945** instead of 0.92. With each runtime at its own threshold, verdicts agree on 401 of 409 documents, and all eight that differ score between 0.92 and 0.945. Five are injections the GGUF now misses. Three are benign documents ONNX flagged and the GGUF doesn't: a ticket, a test file and keepmum's harm.py. On holdout, that comes to one injection fewer caught (42 of 48), the same 3% of ordinary documents flagged, and fewer security documents flagged (12% instead of 15%).
+- **keepmum's tokens match Shield's on all 409 documents.** llama.cpp's sentencepiece tokenizer matches Shield's except at the end: for text that ends in whitespace, Shield's tokenizer emits a final `▁` and llama.cpp's doesn't, so keepmum appends it.
+- The Q8_0 file is 133 MB, against the ONNX's 118 MB plus a 17 MB tokenizer. keepmum sends llama-server eight windows at a time, in one micro-batch.
+
+*Nov 4, 2026, later:* keepmum's injection check now runs this GGUF in llama-server at 0.945, and no longer needs ONNX Runtime, tokenizers or NumPy.
 
 ## Verdict
 

@@ -18,20 +18,14 @@ short completion names Qwen3Guard's categories (Violent, Jailbreak, ...).
 from __future__ import annotations
 
 import hashlib
-import json
 import math
-import os
 import re
-import shutil
-import socket
-import subprocess
 import threading
-import time
-import urllib.request
 from pathlib import Path
 
 from .detect.pfserve import data_dir
 from .guard import Idle
+from .llamacpp import INSTALL_HINT, Server, find_server  # noqa: F401 (find_server: harm.find_server)
 from .qwen3guard_prompt import PREFIX, SUFFIX
 
 # size: (repo, commit, file, SHA-256, bytes, threshold). The thresholds are the Q8 GGUFs' own,
@@ -77,15 +71,6 @@ def model_path(size: str) -> Path:
 def installed(size: str) -> bool:
     p = model_path(size)
     return p.is_file() and p.stat().st_size == MODELS[size][4]
-
-
-def find_server() -> Path | None:
-    """$KEEPMUM_LLAMA_SERVER (the Mac app's own build), else keepmum's copy, else Homebrew's llama.cpp."""
-    for p in (os.environ.get("KEEPMUM_LLAMA_SERVER"), data_dir() / "bin" / "llama-server", shutil.which("llama-server"),
-              "/opt/homebrew/bin/llama-server", "/usr/local/bin/llama-server"):
-        if p and os.access(p, os.X_OK):
-            return Path(p)
-    return None
 
 
 def download(size: str, progress=None) -> Path:
@@ -144,55 +129,31 @@ class Qwen3Guard(Idle):
         self.server, self.model = server, model
         self.threshold = MODELS[size][5]
         self._lock = threading.Lock()
-        self._proc: subprocess.Popen | None = None
-        self._url = ""
+        self._server: Server | None = None
 
     def loaded(self) -> bool:
-        return self._proc is not None and self._proc.poll() is None
+        return self._server is not None and self._server.running()
 
     def unload(self) -> None:
-        if self._proc is not None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-        self._proc = None
+        if self._server is not None:
+            self._server.stop()
+        self._server = None
 
     def _start(self) -> None:
         server = self.server or find_server()
         if server is None:
-            raise HarmError("llama-server is not installed (brew install llama.cpp, or set KEEPMUM_LLAMA_SERVER)")
+            raise HarmError(f"llama-server is not installed ({INSTALL_HINT})")
         model = self.model or model_path(self.size)
         if not model.is_file():
             raise HarmError(f"the harm model is not downloaded: run `keepmum guard setup harm --model {self.size}`")
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-        self._url = f"http://127.0.0.1:{port}"
-        self._proc = subprocess.Popen([str(server), "-m", str(model), "--host", "127.0.0.1", "--port", str(port),
-                                       "-ngl", "99", "-c", str(CTX), "--parallel", "1", "--no-webui",
-                                       "--cache-ram", "0"],  # its default keeps 8 GB of past prompts; each check is new
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            if self._proc.poll() is not None:
-                break
-            try:
-                with urllib.request.urlopen(self._url + "/health", timeout=1) as r:
-                    if r.status == 200:
-                        self._ids = {k: self._post("/tokenize", {"content": " " + k})["tokens"][0]
-                                     for k in ("Safe", "Unsafe", "Controversial")}
-                        return
-            except OSError:
-                time.sleep(0.1)
-        self.unload()
-        raise HarmError("llama-server did not start")
+        self._server = Server(server, model, ["-c", str(CTX), "--parallel", "1",
+                                              "--cache-ram", "0"],  # its default keeps 8 GB of past prompts; each check is new
+                              HarmError)
+        self._server.start()
+        self._ids = {k: self._post("/tokenize", {"content": " " + k})["tokens"][0] for k in ("Safe", "Unsafe", "Controversial")}
 
     def _post(self, path: str, body: dict) -> dict:
-        req = urllib.request.Request(self._url + path, data=json.dumps(body).encode(), headers={"content-type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.loads(r.read())
+        return self._server.post(path, body)
 
     def _prompt(self, text: str) -> str:
         tokens = self._post("/tokenize", {"content": text})["tokens"]
