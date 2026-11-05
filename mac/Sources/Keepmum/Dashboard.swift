@@ -311,9 +311,10 @@ struct SettingsPage: View {
                     Switch(isOn: store.sampleMode) { store.sampleMode = $0 }.accessibilityLabel("Preview data")
                 }
             }
+            UpdatesSection()
             if engine.isBundled { DoctorSection(engine: engine) }
             FormSection(title: "Connection",
-                        footer: "This app reads keepmum's stats feed: counts, types and timestamps, and for the Logs page the first and last character of long masked values (Settings › Logs page turns that off). It never receives a whole value or a placeholder, talks only to 127.0.0.1, and sends no telemetry.") {
+                        footer: "This app reads keepmum's stats feed: counts, types and timestamps, and for the Logs page the first and last character of long masked values (Settings › Logs page turns that off). It never receives a whole value or a placeholder and talks only to 127.0.0.1, apart from update checks (Settings › Updates). It sends no telemetry.") {
                 row("Status") { StatusDot(connection: store.connection, observing: s.observe == true) }
                 row("Endpoint", "127.0.0.1:\(store.port)")
                 row("Mode", s.modeLabel)

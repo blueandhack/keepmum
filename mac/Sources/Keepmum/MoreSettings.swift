@@ -249,3 +249,37 @@ struct AllRulesSheet: View {
         await engine.loadBuiltinRules()
     }
 }
+
+/// Settings › Updates: Sparkle's settings (Updater.swift). Development builds have no feed.
+struct UpdatesSection: View {
+    var updates = Updates.shared
+
+    var body: some View {
+        FormSection(title: "Updates",
+                    footer: "A check downloads keepmum's update list from github.com, so GitHub sees your IP address and keepmum's version; nothing else is sent. Updates are notarized by Apple and signed by keepmum, and both are verified before one is installed.") {
+            FormRow(title: "keepmum \(Updates.version)", detail: lastChecked) {
+                PillButton(title: "Check now", icon: "arrow.triangle.2.circlepath") { updates.checkNow() }
+                    .disabled(!updates.isConfigured || !updates.canCheck)
+            }
+            if updates.isConfigured {
+                Hairline()
+                FormRow(title: "Check automatically", detail: "Once a day; a new version shows in the menu bar panel") {
+                    Switch(isOn: updates.automaticallyChecks) { updates.setAutomaticallyChecks($0) }
+                        .accessibilityLabel("Check for updates automatically")
+                }
+                Hairline()
+                FormRow(title: "Download and install automatically",
+                        detail: "A new version downloads in the background and installs when keepmum quits") {
+                    Switch(isOn: updates.automaticallyDownloads, enabled: updates.automaticallyChecks) { updates.setAutomaticallyDownloads($0) }
+                        .accessibilityLabel("Download and install updates automatically")
+                }
+            }
+        }
+    }
+
+    private var lastChecked: String {
+        guard updates.isConfigured else { return "This build has no update feed: updates come with the release builds" }
+        guard let date = updates.lastCheck else { return "Not checked yet" }
+        return "Last checked \(date.formatted(.relative(presentation: .named)))"
+    }
+}

@@ -40,7 +40,7 @@ struct MenuLabel: View {
             Image(nsImage: !live ? Brand.menuBarIdle : attention ? Brand.menuBarAttention : Brand.menuBarActive)
             if unique > 0 { Text(unique.compact).monospacedDigit() }
         }
-        .task { store.start(); engine.start() }
+        .task { store.start(); engine.start(); Updates.shared.start() }
         .onChange(of: engine.status?.port, initial: true) { _, p in
             if let p { store.configuredPort = p }
         }
@@ -119,6 +119,16 @@ struct MenuPanel: View {
                         engine.settingsRequested = true
                         DashboardWindow.show(openWindow)
                     }
+                }
+                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
+                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
+            }
+            if let version = Updates.shared.available {
+                HStack(spacing: Space.s) {
+                    Image(systemName: "arrow.down.circle").foregroundStyle(Theme.accent)
+                    Text("keepmum \(version) is available").font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1)
+                    Spacer(minLength: Space.s)
+                    PillButton(title: "Install…") { Updates.shared.checkNow() }
                 }
                 .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
                 .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))

@@ -7,6 +7,11 @@
 # Needs, once (see mac/README.md, "Releasing"):
 #   - a "Developer ID Application" certificate in the login Keychain
 #   - notary credentials stored as a Keychain profile: xcrun notarytool store-credentials keepmum-notary ...
+#   - the update signing key in the Keychain, its public half in mac/sparkle-public-key
+#     ($(./sparkle-tools.sh)/generate_keys)
+#
+# Also adds the release to mac/appcast.xml, the signed update feed (RELEASE_NOTES=notes.md puts the
+# notes in it); commit and push that after the GitHub release is published.
 #
 # The version comes from pyproject.toml. The tree must be committed, so the DMG matches a tag.
 # Nothing is uploaded except to Apple's notary service; publishing on GitHub is a separate step.
@@ -31,6 +36,16 @@ if [ -z "${SKIP_NOTARIZE:-}" ]; then
   fi
   xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
     || { echo "no notary credentials in Keychain profile '$NOTARY_PROFILE'; see mac/README.md, Releasing" >&2; exit 1; }
+fi
+SPARKLE=$(./sparkle-tools.sh)
+UPDATES=
+if [ -s sparkle-public-key ] && [ "$("$SPARKLE/generate_keys" -p 2>/dev/null)" = "$(cat sparkle-public-key)" ]; then
+  UPDATES=1
+elif [ -z "${SKIP_NOTARIZE:-}" ]; then
+  echo "the update signing key is not in the Keychain, or does not match mac/sparkle-public-key; see mac/README.md, Releasing" >&2
+  exit 1
+else
+  echo "no update signing key: the DMG is not added to appcast.xml" >&2
 fi
 
 # notarize <file>: submit, wait, and on rejection print Apple's log.
@@ -79,4 +94,15 @@ fi
 (cd "$DIST" && shasum -a 256 "Keepmum-$VERSION.dmg" > "Keepmum-$VERSION.dmg.sha256")
 ls -l "$DMG"
 cat "$DIST/Keepmum-$VERSION.dmg.sha256"
-echo "next: git tag v$VERSION && git push origin v$VERSION, then gh release create (see mac/README.md)"
+
+# The update feed: the DMG's EdDSA signature, the release added, then the whole feed signed.
+if [ -n "$UPDATES" ]; then
+  BUILD=$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")
+  SIGNATURE=$("$SPARKLE/sign_update" -p "$DMG")
+  python3 appcast.py --version "$VERSION" --build "$BUILD" --dmg "$DMG" --signature "$SIGNATURE" \
+    ${RELEASE_NOTES:+--notes "$RELEASE_NOTES"}
+  "$SPARKLE/sign_update" appcast.xml
+  "$SPARKLE/sign_update" --verify appcast.xml
+fi
+echo "next: git tag v$VERSION && git push origin v$VERSION, then gh release create (see mac/README.md),"
+echo "      then commit and push mac/appcast.xml: installed apps see the update once it is on main"

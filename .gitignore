@@ -26,3 +26,5 @@ mac/build/
 .DS_Store
 .vscode/
 .idea/
+mac/.sparkle/
+sparkle-private-key*
