@@ -1,25 +1,27 @@
-"""Convert Horizon-Labs' Prompt Injection Guard Small (Apache-2.0) to a GGUF that llama.cpp runs.
+"""Convert Horizon-Labs' guards (Apache-2.0) to GGUFs that llama.cpp runs: Prompt Injection Guard
+Small (`--model injection`, keepmum's injection check) and Content Safety Guard Small
+(`--model safety`, the harm check's small model).
 
-The model is a ModernBertForSequenceClassification on mmBERT-small with mean pooling, which llama.cpp
-supports (mean -> head dense -> GELU -> head norm -> classifier). Its weights are float safetensors,
-so this only runs llama.cpp's converter, with four changes:
+Both are ModernBertForSequenceClassification on mmBERT-small with mean pooling, which llama.cpp
+supports (mean -> head dense -> GELU -> head norm -> classifier). Their weights are float
+safetensors, so this only runs llama.cpp's converter, with four changes:
 
-- the tokenizer is read as mmBERT's. Horizon-Labs' tokenizer.json is mmBERT-small's plus a
-  normalizer (decode smuggled Unicode tag and variation-selector text, NFKC, strip invisible
-  characters), which changes the converter's tokenizer fingerprint. Vocabulary, merges and
-  pre-tokenizer are mmBERT's; check() verifies that. llama.cpp does not run the normalizer:
-  keepmum.guard.normalize does, before tokenizing.
+- the tokenizer is read as mmBERT's. Vocabulary, merges and pre-tokenizer are mmBERT-small's
+  (check() verifies that), but the injection model's tokenizer.json adds a normalizer (decode
+  smuggled Unicode tag and variation-selector text, NFKC, strip invisible characters), and both are
+  written by a newer tokenizers, which change the converter's tokenizer fingerprint. llama.cpp
+  does not run that normalizer: keepmum.guard.normalize does, before tokenizing.
 - the pre-tokenizer is written in mmBERT's form (add_prefix_space), which llama.cpp loads; the
   newer form of the same thing (prepend_scheme "always") is refused for a BPE vocabulary.
 - pooling type rank, and an output as wide as the labels, so llama-server's /embeddings returns
-  the two logits [SAFE, INJECTION].
+  the logits: [SAFE, INJECTION], or the safety model's 16 (unsafe, then 15 categories).
 - the name, licence and source are written into the GGUF.
 
   uv run --no-project --python 3.12 --with "numpy~=2.2.6" --with safetensors --with "torch==2.11.0" \\
       --with "transformers==4.57.6" --with "sentencepiece<0.3" --with "protobuf<5" \\
-      python bench/horizon_gguf.py SRC MMBERT OUT [--type q8_0]
+      python bench/horizon_gguf.py SRC MMBERT OUT [--model injection|safety] [--type q8_0]
 
-SRC is the model's snapshot at the pinned revision; MMBERT holds jhu-clsp/mmBERT-small's
+SRC is the model's snapshot at its pinned revision (MODELS); MMBERT holds jhu-clsp/mmBERT-small's
 tokenizer.json, to compare with. The versions are llama.cpp's converter requirements at the pinned
 commit (native/llama-server/build.sh). Nothing in SRC is executed: its code/ folder is not used.
 """
@@ -34,30 +36,43 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LLAMA = ROOT / "native" / "llama-server" / ".work" / "llama.cpp"
-REPO = "Horizon-Labs/prompt-injection-guard-small"
-REVISION = "9760ad5a613aa87b38c2e621189b9d06bfb6d12b"  # v2.3
-SOURCE = f"https://huggingface.co/{REPO}/tree/{REVISION}"
+SAFETY_LABELS = ["unsafe", "hate", "harassment", "violence", "weapons", "sexual", "sexual_minors", "self_harm",
+                 "criminal_planning", "drugs", "privacy", "profanity", "fraud_manipulation", "misinformation",
+                 "unauthorized_advice", "other"]
+# name: (repo, revision, version, display name, labels, what to do before tokenizing)
+MODELS = {
+    "injection": ("Horizon-Labs/prompt-injection-guard-small", "9760ad5a613aa87b38c2e621189b9d06bfb6d12b", "v2.3",
+                  "Prompt Injection Guard Small", ["SAFE", "INJECTION"],
+                  "Apply its tokenizer normalizer before tokenizing (see the model card)."),
+    "safety": ("Horizon-Labs/content-safety-guard-small", "e2995329cff04dd2d3bcb5f97a02c6bf77d341ef", "v1.2",
+               "Content Safety Guard Small", SAFETY_LABELS, "Logits: unsafe, then 15 categories; a sigmoid each."),
+}
 FILES = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
          "README.md", "LICENSE", "NOTICE")
-METADATA = {
-    "general.name": "Prompt Injection Guard Small", "general.basename": "prompt-injection-guard-small",
-    "general.version": "v2.3", "general.organization": "Horizon-Labs", "general.quantized_by": "keepmum",
-    "general.description": "GGUF conversion of Horizon-Labs' Prompt Injection Guard Small (v2.3). Not made or endorsed "
-                           "by Horizon-Labs. Apply its tokenizer normalizer before tokenizing (see the model card).",
-    "general.license": "apache-2.0", "general.license.name": "Apache License 2.0",
-    "general.license.link": "https://www.apache.org/licenses/LICENSE-2.0",
-    "general.source.url": SOURCE, "general.source.repo_url": f"https://huggingface.co/{REPO}",
-    "general.base_models": [{"name": "Prompt Injection Guard Small", "organization": "Horizon-Labs", "version": "v2.3",
-                             "repo_url": f"https://huggingface.co/{REPO}"}],
-}
 
 
-def check(src: Path, mmbert: Path) -> None:
-    """Horizon-Labs' tokenizer is mmBERT-small's with a normalizer in front; nothing else may differ."""
+def metadata(model: str) -> dict:
+    repo, revision, version, name, _, note = MODELS[model]
+    basename = repo.split("/")[1]
+    return {
+        "general.name": name, "general.basename": basename, "general.version": version,
+        "general.organization": "Horizon-Labs", "general.quantized_by": "keepmum",
+        "general.description": f"GGUF conversion of Horizon-Labs' {name} ({version}). Not made or endorsed by Horizon-Labs. {note}",
+        "general.license": "apache-2.0", "general.license.name": "Apache License 2.0",
+        "general.license.link": "https://www.apache.org/licenses/LICENSE-2.0",
+        "general.source.url": f"https://huggingface.co/{repo}/tree/{revision}", "general.source.repo_url": f"https://huggingface.co/{repo}",
+        "general.base_models": [{"name": name, "organization": "Horizon-Labs", "version": version,
+                                 "repo_url": f"https://huggingface.co/{repo}"}],
+    }
+
+
+def check(src: Path, mmbert: Path, model: str) -> None:
+    """Horizon-Labs' tokenizer is mmBERT-small's, perhaps with a normalizer in front; nothing else may differ."""
     config = json.loads((src / "config.json").read_text())
+    labels = {str(i): label for i, label in enumerate(MODELS[model][4])}
     if config.get("architectures") != ["ModernBertForSequenceClassification"] or \
-            config.get("id2label") != {"0": "SAFE", "1": "INJECTION"} or config.get("classifier_pooling") != "mean":
-        raise SystemExit("not Prompt Injection Guard Small's config")
+            config.get("id2label") != labels or config.get("classifier_pooling") != "mean":
+        raise SystemExit(f"not {MODELS[model][3]}'s config")
     a, b = (json.loads((p / "tokenizer.json").read_text()) for p in (mmbert, src))
     merges = lambda m: [" ".join(x) if isinstance(x, list) else x for x in m["merges"]]
     if a["model"]["vocab"] != b["model"]["vocab"] or merges(a["model"]) != merges(b["model"]):
@@ -66,13 +81,13 @@ def check(src: Path, mmbert: Path) -> None:
     if pa.get("type") != "Metaspace" or pb.get("type") != "Metaspace" or pa["replacement"] != pb["replacement"] or \
             not pa.get("add_prefix_space") or pb.get("prepend_scheme") != "always" or pb.get("split") is False:
         raise SystemExit("pre-tokenizer differs from mmBERT-small's")
-    steps = b["normalizer"]["normalizers"]
+    steps = b["normalizer"]["normalizers"] if b["normalizer"]["type"] == "Sequence" else [b["normalizer"]]
     if steps[-1] != a["normalizer"]:
         raise SystemExit("the normalizer does not end in mmBERT's")
     print(f"tokenizer: mmBERT-small's, plus {len(steps) - 1} normalizer steps", flush=True)
 
 
-def convert(src: Path, out: Path, outtype: str, metadata: Path) -> None:
+def convert(src: Path, out: Path, outtype: str, metadata: Path, name: str) -> None:
     sys.path.insert(0, str(LLAMA))
     sys.path.insert(1, str(LLAMA / "gguf-py"))
     import convert_hf_to_gguf
@@ -89,18 +104,19 @@ def convert(src: Path, out: Path, outtype: str, metadata: Path) -> None:
 
     bert.ModernBertModel.set_gguf_parameters = set_gguf_parameters
     sys.argv = ["convert_hf_to_gguf.py", str(src), "--outfile", str(out), "--outtype", outtype,
-                "--model-name", METADATA["general.name"], "--metadata", str(metadata)]
+                "--model-name", name, "--metadata", str(metadata)]
     convert_hf_to_gguf.main()
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("src", type=Path, help=f"{REPO} at {REVISION[:8]}")
+    ap.add_argument("src", type=Path, help="the model's snapshot at its pinned revision")
     ap.add_argument("mmbert", type=Path, help="a folder with jhu-clsp/mmBERT-small's tokenizer.json")
     ap.add_argument("out", type=Path, help="the folder to write into")
+    ap.add_argument("--model", default="injection", choices=MODELS, help="which of Horizon-Labs' guards (default: injection)")
     ap.add_argument("--type", default="q8_0", help="f32, f16 or q8_0 (default)")
     a = ap.parse_args()
-    check(a.src, a.mmbert)
+    check(a.src, a.mmbert, a.model)
     hf = a.out / "hf"  # only the model's files: the converter reads the folder it is given
     hf.mkdir(parents=True, exist_ok=True)
     for f in FILES:
@@ -111,8 +127,9 @@ def main() -> None:
     tj["pre_tokenizer"] = json.loads((a.mmbert / "tokenizer.json").read_text())["pre_tokenizer"]
     (hf / "tokenizer.json").write_text(json.dumps(tj, ensure_ascii=False))
     meta = a.out / "metadata.json"
-    meta.write_text(json.dumps(METADATA, indent=1))
-    convert(hf, a.out / f"prompt-injection-guard-small-v2.3.{a.type.upper()}.gguf", a.type, meta)
+    meta.write_text(json.dumps(metadata(a.model), indent=1))
+    repo, _, version, name, *_ = MODELS[a.model]
+    convert(hf, a.out / f"{repo.split('/')[1]}-{version}.{a.type.upper()}.gguf", a.type, meta, name)
 
 
 if __name__ == "__main__":

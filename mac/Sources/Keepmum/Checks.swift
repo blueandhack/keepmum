@@ -79,7 +79,7 @@ struct ChecksSection: View {
             } else if downloading {
                 progress(engine.checkDownload?.progress ?? 0)
             } else {
-                PillButton(title: "Download (\(c.model == "4b" ? "4.7 GB" : "805 MB"))", icon: "arrow.down.circle") {
+                PillButton(title: "Download (\(Self.downloadSize[c.model] ?? ""))", icon: "arrow.down.circle") {
                     Task { await engine.setUpCheck("harm", model: c.model) }
                 }
                 .disabled(!engine.isBundled || engine.busy)
@@ -88,9 +88,9 @@ struct ChecksSection: View {
         Hairline()
         FormRow(title: "Harm model", detail: sizeDetail(c), detailTone: c.model == "4b" && memoryGB < 32 ? Theme.warning : Theme.textSecondary) {
             if isSnapshot {
-                Segmented(options: [("0.6b", "0.6B"), ("4b", "4B")], selection: .constant(c.model))
+                Segmented(options: Self.sizes, selection: .constant(c.model))
             } else {
-                Segmented(options: [("0.6b", "0.6B"), ("4b", "4B")], selection: Binding(get: { c.model }, set: { size in
+                Segmented(options: Self.sizes, selection: Binding(get: { c.model }, set: { size in
                     guard size != c.model else { return }
                     Task {
                         if !(c.installed[size] ?? false) {
@@ -104,8 +104,8 @@ struct ChecksSection: View {
             }
         }
         if c.installed.values.contains(true) {
-            modelLine("Qwen3Guard-Gen by the Qwen team · Apache-2.0 · downloaded: "
-                      + c.installed.filter(\.value).keys.sorted().map { $0 == "4b" ? "4B" : "0.6B" }.joined(separator: ", "), remove: "harm")
+            modelLine("Content Safety Guard by Horizon Labs (Small), Qwen3Guard-Gen by the Qwen team (0.6B, 4B) · Apache-2.0 · downloaded: "
+                      + Self.sizes.filter { c.installed[$0.0] == true }.map(\.1).joined(separator: ", "), remove: "harm")
         }
         if c.server == nil {
             modelLine("llama-server, which both checks run in, is not found: the app bundles it; on the command line, brew install llama.cpp", tone: Theme.warning)
@@ -120,8 +120,11 @@ struct ChecksSection: View {
         }
     }
 
+    private static let sizes = [("small", "Small"), ("0.6b", "0.6B"), ("4b", "4B")]
+    private static let downloadSize = ["small": "164 MB", "0.6b": "805 MB", "4b": "4.7 GB"]
+
     private func sizeDetail(_ c: Engine.Checks.Harm) -> String {
-        let note = "0.6B: 76% of harmful prompts caught, 1.1 GB while in use · 4B: 82%, 4.9 GB, a little slower"
+        let note = "Small: 66% of harmful prompts caught, 0.4 GB while in use, the fastest · 0.6B: 76%, 1.1 GB · 4B: 82%, 4.9 GB, a little slower"
         if c.model == "4b" && memoryGB < 32 {
             return "The 4B takes 4.9 GB while in use, a lot for this Mac's \(Int(memoryGB.rounded())) GB. " + note
         }

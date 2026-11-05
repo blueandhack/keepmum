@@ -481,7 +481,7 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
         return
     import json
 
-    from . import guard
+    from . import guard, harm
 
     st = _guard_status()
     if as_json:
@@ -495,7 +495,7 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
         typer.echo("  model: not set up (`keepmum guard setup injection`)")
     typer.echo(f"harm: {_MODE_TEXT[hm['mode']]}")
     have = [size for size, ok in hm["installed"].items() if ok]
-    typer.echo(f"  model: Qwen3Guard-Gen {hm['model']} (Apache-2.0)"
+    typer.echo(f"  model: {harm.NAMES[hm['model']]} (Apache-2.0)"
                + ("" if hm["installed"][hm["model"]] else f", not downloaded (`keepmum guard setup harm --model {hm['model']}`)")
                + (f"; downloaded: {', '.join(have)}" if have else ""))
     typer.echo(f"runtime (both): {hm['server'] or 'llama-server not found (brew install llama.cpp)'}")
@@ -503,13 +503,15 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
 
 @guard_app.command("setup")
 def guard_setup(check: str = typer.Argument(..., help="injection or harm"),
-                model: str = typer.Option("0.6b", "--model", help="harm: 0.6b (805 MB) or 4b (4.7 GB).")) -> None:
+                model: str = typer.Option(None, "--model", help="harm: small (164 MB), 0.6b (805 MB) or 4b (4.7 GB); "
+                                          "default: the one the check uses.")) -> None:
     """Download a check's model, checked against its pinned SHA-256."""
     from . import guard, harm
     from .audit import AuditLog, caller
 
+    model = model or _config().guard_harm_model
     if check not in CHECKS or model not in harm.SIZES:
-        typer.echo("keepmum guard setup: use `injection`, or `harm` with --model 0.6b or 4b", err=True)
+        typer.echo("keepmum guard setup: use `injection`, or `harm` with --model small, 0.6b or 4b", err=True)
         raise typer.Exit(2)
     last = [-1]
 
@@ -530,7 +532,7 @@ def guard_setup(check: str = typer.Argument(..., help="injection or harm"),
                           by=caller("keepmum guard setup injection"))
     else:
         repo, commit, file, *_ = harm.MODELS[model]
-        typer.echo(f"Qwen3Guard-Gen {model} (Apache-2.0, Qwen team), {file} from {repo}", err=True)
+        typer.echo(f"{harm.NAMES[model]} (Apache-2.0), {file} from {repo}", err=True)
         try:
             path = harm.download(model, progress)
         except (harm.HarmError, OSError) as e:
@@ -548,7 +550,19 @@ def guard_setup(check: str = typer.Argument(..., help="injection or harm"),
     typer.echo(f"Turn it on with `keepmum guard {check} warn` (log and send) or `keepmum guard {check} block` (refuse).", err=True)
 
 
+def _harm_model_set(path) -> bool:
+    import tomllib
+
+    if path is None:  # no config file yet
+        return False
+    try:
+        return "harm_model" in tomllib.loads(Path(path).read_text()).get("guard", {})
+    except (OSError, ValueError):
+        return False
+
+
 def _set_mode(check: str, mode: str, model: str | None = None) -> None:
+    from . import harm
     from .config import ConfigError
 
     if mode not in ("off", "warn", "block"):
@@ -560,13 +574,15 @@ def _set_mode(check: str, mode: str, model: str | None = None) -> None:
         typer.echo(f"keepmum guard {check}: {why}", err=True)
         raise typer.Exit(2)
     try:
-        if check == "harm" and model and model != cfg.guard_harm_model:
-            _update_config(cfg.path, "guard", "harm_model", model, f"keepmum guard harm --model {model}")
+        # Turning the harm check on writes its model down: a check on with no model set means the
+        # 0.6B (config.py), the default before "small".
+        if check == "harm" and (model and model != cfg.guard_harm_model or mode != "off" and not _harm_model_set(cfg.path)):
+            _update_config(cfg.path, "guard", "harm_model", size, f"keepmum guard harm --model {size}")
         _update_config(cfg.path, "guard", check, mode, f"keepmum guard {check} {mode}")
     except (ConfigError, OSError) as e:
         typer.echo(f"keepmum guard {check}: {e}", err=True)
         raise typer.Exit(1)
-    typer.echo(f"{check}: {_MODE_TEXT[mode]}" + (f", Qwen3Guard-Gen {size}" if check == "harm" and mode != "off" else ""),
+    typer.echo(f"{check}: {_MODE_TEXT[mode]}" + (f", {harm.NAMES[size]}" if check == "harm" and mode != "off" else ""),
                err=True)
     typer.echo("Running proxies switch on their next request.", err=True)
 
@@ -579,12 +595,12 @@ def guard_injection(mode: str = typer.Argument(..., help="warn, block or off")) 
 
 @guard_app.command("harm")
 def guard_harm(mode: str = typer.Argument(..., help="warn, block or off"),
-               model: str = typer.Option(None, "--model", help="0.6b or 4b (default: the current one).")) -> None:
+               model: str = typer.Option(None, "--model", help="small, 0.6b or 4b (default: the current one).")) -> None:
     """Check what you type for requests a policy may not allow."""
     from . import harm
 
     if model is not None and model not in harm.SIZES:
-        typer.echo("keepmum guard harm: --model is 0.6b or 4b", err=True)
+        typer.echo("keepmum guard harm: --model is small, 0.6b or 4b", err=True)
         raise typer.Exit(2)
     _set_mode("harm", mode, model)
 

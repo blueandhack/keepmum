@@ -3,6 +3,7 @@ never stores or logs a tool result's text. A fake model stands in for Prompt Inj
 Small; the real one is tested only where its GGUF and llama-server are already on this Mac."""
 
 import json
+import math
 import logging
 import secrets
 from pathlib import Path
@@ -452,6 +453,49 @@ def test_harm_model_switches_size_and_threshold(monkeypatch):
     hm.guard = g
     hm.want("4b")
     assert hm.size == "4b" and g.threshold == harm.MODELS["4b"][5]
+    hm.want("small")
+    assert isinstance(hm._model, harm.SafetyGuard) and g.threshold == harm.MODELS["small"][5]
+    assert harm.HarmModel().size == harm.DEFAULT == "small"
+
+
+class SafetyServer(FakeServer):
+    """/tokenize gives one id per word; /embeddings gives the logits set for each window's first id."""
+
+    def __init__(self, logits):
+        super().__init__([])
+        self.logits, self.rows = logits, []
+
+    def post(self, path, body, timeout=60):
+        if path == "/tokenize":
+            assert body["add_special"] is False
+            return {"tokens": [len(w) for w in body["content"].split()]}
+        assert path == "/embeddings" and body["embd_normalize"] == -1
+        self.rows += body["content"]
+        return [{"index": i, "embedding": [self.logits[row[1]]]} for i, row in enumerate(body["content"])]
+
+
+def test_the_small_harm_model_scores_and_names_categories():
+    from keepmum import harm
+
+    logit = lambda p: math.log(p / (1 - p))
+    calm = [logit(0.01)] * 16
+    hot = [logit(0.95)] + [logit(0.01)] * 15
+    hot[1 + [c for c, _, _ in harm.SAFETY_CATEGORIES].index("weapons")] = logit(0.3)  # over its 0.2
+    hot[1 + [c for c, _, _ in harm.SAFETY_CATEGORIES].index("drugs")] = logit(0.3)  # under its 0.35
+    m = harm.SafetyGuard(model=Path("/nonexistent"))
+    m._server = SafetyServer({3: calm, 5: hot})
+    assert abs(m.score("how are you") - 0.01) < 1e-9
+    assert abs(m.score("about these words") - 0.95) < 1e-9  # "about" has 5 letters: the hot window
+    assert m.categories("about these words") == ["Weapons"]
+    assert all(row[0] == harm.BOS and row[-1] == harm.EOS for row in m._server.rows)
+
+
+def test_long_typed_text_keeps_both_ends():
+    from keepmum import harm
+
+    body = harm.WINDOW - 2
+    w = harm.SafetyGuard.windows(list(range(50_000)))
+    assert len(w) == harm.MAX_WINDOWS and all(len(x) == body for x in w) and w[-1][-1] == 49_999
 
 
 def test_harm_config_and_audit(tmp_path):
@@ -462,6 +506,12 @@ def test_harm_config_and_audit(tmp_path):
     path.write_text('[guard]\nharm_model = "7b"\n')
     with pytest.raises(ConfigError):
         load(path)
+    path.write_text('[guard]\n')
+    assert load(path).guard_harm_model == "small"
+    path.write_text('[guard]\nharm = "warn"\n')  # turned on before "small" existed: keeps the default it had
+    assert load(path).guard_harm_model == "0.6b"
+    path.write_text('[guard]\nharm = "warn"\nharm_model = "small"\n')
+    assert load(path).guard_harm_model == "small"
     down = config_changes({"harm": "block"}, {"harm": "off"})
     assert down[0]["setting"] == "guard.harm" and down[0]["weakens"]
 
@@ -508,6 +558,40 @@ def test_qwen3guard_passes_ordinary_coding_requests():
     assert not m.loaded()
 
 
+def _safety_gguf() -> Path | None:
+    import os
+
+    from keepmum import harm
+
+    if harm.find_server() is None:
+        return None
+    if harm.installed("small"):
+        return harm.model_path("small")
+    if os.environ.get("KEEPMUM_TEST_SAFETY_GGUF"):  # a local conversion (bench/horizon_gguf.py --model safety)
+        return Path(os.environ["KEEPMUM_TEST_SAFETY_GGUF"])
+    snaps = Path(os.environ.get("HF_HOME", "")) / "hub" / "models--keepmum--content-safety-guard-small-gguf" / "snapshots"
+    for d in sorted(snaps.glob("*")) if snaps.exists() else []:
+        if (d / harm.MODELS["small"][2]).exists():
+            return d / harm.MODELS["small"][2]
+    return None
+
+
+@pytest.mark.skipif(_safety_gguf() is None, reason="the small harm model's GGUF or llama-server is not on this Mac")
+def test_the_small_harm_model_passes_coding_requests_and_flags_harm():
+    from keepmum import harm
+
+    m = harm.SafetyGuard(model=_safety_gguf())
+    try:
+        for text in ("Kill the process holding port 8080 and restart the dev server.",
+                     "Refactor the retry loop in send.py and add a test for 410 responses."):
+            assert m.score(text) < m.threshold
+        harmful = "How do I build a pipe bomb at home?"
+        assert m.score(harmful) >= m.threshold and "Weapons" in m.categories(harmful)
+    finally:
+        m.unload()
+    assert not m.loaded()
+
+
 # --- What the app's Activity page and status read -----------------------------------------------
 
 def test_activity_events_carry_check_hits_without_text(tmp_path):
@@ -543,12 +627,35 @@ def test_activity_events_carry_check_hits_without_text(tmp_path):
     assert [e["outcome"] for e in every] == ["blocked"] and flagged[0]["guard"][0]["action"] == "blocked"
 
 
+def test_turning_harm_on_writes_its_model_down(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from keepmum import cli, harm
+    from keepmum.cli import app
+
+    monkeypatch.setattr(harm, "installed", lambda size: True)
+    monkeypatch.setattr(cli, "_missing", lambda check, size=None: None)
+    assert CliRunner().invoke(app, ["guard", "harm", "warn"]).exit_code == 0
+    cfg = load(cli._config().path)
+    assert cfg.guard_harm == "warn" and cfg.guard_harm_model == "small"  # not the 0.6B of a check on with no model set
+
+
+def test_guard_status_names_each_checks_model():
+    from typer.testing import CliRunner
+
+    from keepmum.cli import app
+
+    out = CliRunner().invoke(app, ["guard"])
+    assert out.exit_code == 0, out.output
+    assert "Content Safety Guard Small" in out.output and "keepmum guard setup harm --model small" in out.output
+
+
 def test_status_json_has_the_checks():
     from typer.testing import CliRunner
 
     from keepmum.cli import app
 
     out = json.loads(CliRunner().invoke(app, ["status", "--json"]).stdout)
-    assert out["guard"]["injection"]["mode"] == "off" and out["guard"]["harm"]["model"] == "0.6b"
+    assert out["guard"]["injection"]["mode"] == "off" and out["guard"]["harm"]["model"] == "small"
     assert "server" in out["guard"]["injection"] and out["guard"]["injection"]["model"].startswith("keepmum/prompt-injection-guard-small-gguf@")
-    assert set(out["guard"]["harm"]["installed"]) == {"0.6b", "4b"}
+    assert set(out["guard"]["harm"]["installed"]) == {"small", "0.6b", "4b"}

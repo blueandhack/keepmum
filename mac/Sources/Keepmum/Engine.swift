@@ -53,7 +53,7 @@ final class Engine {
         }
         struct Harm: Decodable, Equatable {
             var mode: String
-            /// 0.6b or 4b.
+            /// small, 0.6b or 4b.
             var model: String
             var installed: [String: Bool]
             /// llama-server's path; nil when it is not found.
@@ -178,7 +178,7 @@ final class Engine {
     private(set) var serviceStatus: SMAppService.Status = .notRegistered
     /// 0...1 while the model downloads.
     private(set) var download: Double?
-    /// A check's model downloading: which (injection, harm 0.6b, harm 4b), and 0...1.
+    /// A check's model downloading: which (injection, harm small, harm 0.6b, harm 4b), and 0...1.
     private(set) var checkDownload: (what: String, progress: Double)?
     private(set) var busy = false
     /// The background service on its way up or down: from the click until it answers, or stops.
@@ -358,7 +358,7 @@ final class Engine {
     // MARK: The optional checks (`keepmum guard`)
 
     /// Download a check's model with progress from its "NN% of N MB" lines.
-    func setUpCheck(_ check: String, model: String = "0.6b") async {
+    func setUpCheck(_ check: String, model: String = "small") async {
         await act {
             let what = check == "harm" ? "harm \(model)" : "injection"
             self.checkDownload = (what, 0)
@@ -636,7 +636,7 @@ final class Engine {
                           destinations: ["gitlab-token": ["gitlab.corp.example"]], previews: true, context: true, keepDays: 90,
                           guard: .init(injection: .init(mode: "warn", installed: true,
                                                         server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0"),
-                                       harm: .init(mode: "block", model: "0.6b", installed: ["0.6b": true, "4b": false],
+                                       harm: .init(mode: "block", model: "small", installed: ["small": true, "0.6b": false, "4b": false],
                                                    server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0")))
         e.serviceStatus = .enabled
         if around {

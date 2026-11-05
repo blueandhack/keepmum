@@ -111,7 +111,7 @@ struct Snapshot: Decodable, Sendable {
             /// The tool whose result was flagged; nil for what the user typed.
             var source: String? = nil
             var score: Double
-            /// Qwen3Guard's categories for a harm hit (Violent, Jailbreak, ...).
+            /// The harm model's categories for a hit (Violence, Jailbreak, ...).
             var categories: [String]? = nil
         }
         var checks: [Check] { `guard` ?? [] }
@@ -539,7 +539,7 @@ struct SampleFeed {
         snap.recent[10].tools = [.init(tool: "mcp__claude_ai_Gmail__search_threads", action: "keep", values: 1,
                                        reason: "not_allowed", types: ["EMAIL": 1])]
         // The optional checks: a web page flagged after it was sent, and a typed request refused.
-        snap.checks = .init(injection: "warn", harm: "block", harmModel: "0.6b")
+        snap.checks = .init(injection: "warn", harm: "block", harmModel: "small")
         var flagged = event(at: snap.recent[6].ts + 1)
         flagged.outcome = "flagged"; flagged.status = 0; flagged.scanMs = nil; flagged.redacted = [:]; flagged.restored = [:]
         flagged.new = 0; flagged.client = "claude-code"; flagged.provider = "anthropic"

@@ -48,6 +48,16 @@ DETECTORS = {
     "granite-guardian-3b": ("granite", "ibm-granite/granite-guardian-3.2-3b-a800m", "Apache-2.0"),
     "granite-hap-125m": ("cls", "ibm-granite/granite-guardian-hap-125m", "Apache-2.0"),
     "koala-moderation": ("koala", "KoalaAI/Text-Moderation", "OpenRAIL"),
+    # Multi-label classifiers: a sigmoid per label. Horizon Labs' have an "unsafe" label (mmBERT, 141M
+    # and 308M); DuoGuard (Qwen2.5-0.5B) has only categories, so its score is the highest of them.
+    "horizon-safety-small": ("multilabel", "Horizon-Labs/content-safety-guard-small", "Apache-2.0"),
+    "horizon-safety-base": ("multilabel", "Horizon-Labs/content-safety-guard-base", "Apache-2.0"),
+    "duoguard-0.5b": ("multilabel", "DuoGuard/DuoGuard-0.5B", "Apache-2.0"),
+    # Knowledgator's Opir (GLiClass, `uv pip install gliclass`): P("unsafe") over the labels safe/unsafe.
+    "opir-edge": ("gliclass", "knowledgator/opir-edge-v1.0", "Apache-2.0"),
+    "opir-edge-multilang": ("gliclass", "knowledgator/opir-edge-multilang-v1.0", "Apache-2.0"),
+    "opir-multitask-multilang": ("gliclass", "knowledgator/opir-multitask-multilang-v1.0", "Apache-2.0"),
+    "opir-multitask-large": ("gliclass", "knowledgator/opir-multitask-large-v1.0", "Apache-2.0"),
     # Quantized GGUFs on llama.cpp (llama-server, Metal): the runtime keepmum could use.
     "qwen3guard-0.6b-q8": ("gguf", "mradermacher/Qwen3Guard-Gen-0.6B-GGUF", "Apache-2.0"),
     "qwen3guard-0.6b-q4km": ("gguf", "mradermacher/Qwen3Guard-Gen-0.6B-GGUF", "Apache-2.0"),
@@ -131,6 +141,47 @@ class Classifier:
         with self.torch.no_grad():
             p = self.torch.softmax(self.model(**enc).logits.float(), dim=-1)[0]
         return 1 - float(p[self.safe])
+
+
+class MultiLabel:
+    """A multi-label classifier: P(harmful) is the sigmoid of its "unsafe" label, or of its highest label."""
+
+    TOKENIZER = {"DuoGuard/DuoGuard-0.5B": "Qwen/Qwen2.5-0.5B"}  # its card's; the repo has none
+
+    def __init__(self, repo):
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        self.torch, self.device = torch, _device()
+        self.tok = AutoTokenizer.from_pretrained(self.TOKENIZER.get(repo, repo))
+        if self.tok.pad_token is None:
+            self.tok.pad_token = self.tok.eos_token
+        self.model = AutoModelForSequenceClassification.from_pretrained(repo).to(self.device).eval()
+        labels = {v: int(k) for k, v in self.model.config.id2label.items()}
+        self.unsafe = labels.get("unsafe")
+
+    def score(self, text):
+        enc = self.tok(text, truncation=True, max_length=1024, return_tensors="pt").to(self.device)
+        with self.torch.no_grad():
+            p = self.torch.sigmoid(self.model(**enc).logits.float())[0]
+        return float(p[self.unsafe] if self.unsafe is not None else p.max())
+
+
+class GLiClass:
+    """A GLiClass classifier with the labels its card recommends for safety (single-label: safe, unsafe)."""
+
+    def __init__(self, repo):
+        from gliclass import GLiClassModel, ZeroShotClassificationPipeline
+        from transformers import AutoTokenizer
+
+        self.device = _device()
+        model = GLiClassModel.from_pretrained(repo).float()  # some are saved in bf16, with float32 parts
+        self.pipe = ZeroShotClassificationPipeline(model=model, tokenizer=AutoTokenizer.from_pretrained(repo),
+                                                   classification_type="single-label", device=self.device)
+
+    def score(self, text):
+        top = self.pipe(text, ["safe", "unsafe"], threshold=0.0)[0][0]  # single-label: the top label of a softmax
+        return float(top["score"] if top["label"] == "unsafe" else 1 - top["score"])
 
 
 class VerdictLM:
@@ -270,6 +321,10 @@ def make(name):
         return VerdictLM(repo, kind)
     if kind == "koala":
         return Classifier(repo, safe_label="OK")
+    if kind == "multilabel":
+        return MultiLabel(repo)
+    if kind == "gliclass":
+        return GLiClass(repo)
     return Classifier(repo)
 
 

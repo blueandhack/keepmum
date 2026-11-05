@@ -74,9 +74,13 @@ Which local model could flag harmful requests in user prompts without blocking o
 and security work. Results and the verdict: [`results/HARM.md`](results/HARM.md).
 
 ```sh
-uv sync --group torch && uv pip install gliner2 pyarrow
+uv sync --group torch && uv pip install gliner2 gliclass pyarrow
 uv run python bench/harm_data.py                     # bench/data/harm-coding.jsonl: benign prompts that sound harmful
-uv run --group torch python bench/harm.py            # gliguard, qwen3guard-0.6b/4b, granite-guardian-3b, granite-hap-125m, koala-moderation
+uv run --group torch python bench/harm.py            # every model in DETECTORS but the GGUFs; --detectors a,b
+# Content Safety Guard Small (the harm check's default) as a GGUF: convert, and compare with the original
+uv run --no-project --python 3.12 --with "numpy~=2.2.6" --with safetensors --with "torch==2.11.0" \
+    --with "transformers==4.57.6" --with "sentencepiece<0.3" --with "protobuf<5" python bench/horizon_gguf.py SRC MMBERT OUT --model safety
+uv run --group torch python bench/safety_parity.py SRC OUT/content-safety-guard-small-v1.2.F32.gguf OUT/content-safety-guard-small-v1.2.Q8_0.gguf
 ```
 
 - Harmful prompts come only from published, labelled sets, downloaded at run time and not committed: XSTest v2 and Aegis 2.0 (CC-BY-4.0), ToxicChat (CC-BY-NC-4.0, evaluation only).

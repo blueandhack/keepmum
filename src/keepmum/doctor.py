@@ -173,7 +173,7 @@ def checks() -> list[tuple[str, str]]:
 
 
 # Memory each optional check's model takes while loaded (measured on an M5 Pro), next to pf-serve's 1.7 GB.
-GUARD_MEMORY = {"injection": "0.4 GB", "0.6b": "1.1 GB", "4b": "4.9 GB"}
+GUARD_MEMORY = {"injection": "0.4 GB", "small": "0.4 GB", "0.6b": "1.1 GB", "4b": "4.9 GB"}
 
 
 def _guard_checks(r, cfg) -> None:
@@ -193,8 +193,8 @@ def _guard_checks(r, cfg) -> None:
                else "llama-server not found (brew install llama.cpp)" if find_server() is None else None)
         heavy = size == "4b" and 0 < gb < 32
         _check(r, FAIL if why else WARN if heavy else OK, f"harm check {cfg.guard_harm}: " + (why or
-               f"Qwen3Guard-Gen {size}; {GUARD_MEMORY[size]} while in use" +
-               (f", a lot for this Mac's {gb:.0f} GB: `keepmum guard harm {cfg.guard_harm} --model 0.6b`" if heavy else "")))
+               f"{harm.NAMES[size]}; {GUARD_MEMORY[size]} while in use" +
+               (f", a lot for this Mac's {gb:.0f} GB: `keepmum guard harm {cfg.guard_harm} --model small`" if heavy else "")))
 
 
 def _tool_warnings(policy: dict) -> list[str]:

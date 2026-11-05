@@ -183,6 +183,23 @@ class Idle:
                     self.unload()
 
 
+def windows(ids: list[int], window: int, overlap: int, most: int, tail: int) -> list[list[int]]:
+    """Windows of `window` tokens (with the two special tokens added later) overlapping by `overlap`.
+    A text longer than `most` of them keeps its first `most - tail` and its last `tail`."""
+    body = window - 2
+    step = body - overlap
+    if len(ids) <= body:
+        return [ids]
+    starts = list(range(0, len(ids) - body + step, step))
+    if len(starts) > most:
+        starts = starts[:most - tail] + [len(ids) - body - k * step for k in range(tail - 1, -1, -1)]
+    return [ids[s:s + body] for s in starts]
+
+
+def sigmoid(x: float) -> float:
+    return 1 / (1 + math.exp(-x)) if x >= 0 else math.exp(x) / (1 + math.exp(x))
+
+
 class InjectionModel(Idle):
     """Prompt Injection Guard Small in llama-server (Metal), started on first use and stopped when
     idle; calls are serialized. `model` is the GGUF (default: the one `keepmum guard setup injection`
@@ -220,17 +237,7 @@ class InjectionModel(Idle):
 
     @staticmethod
     def windows(ids: list[int]) -> list[list[int]]:
-        """Windows of WINDOW tokens (with <bos> and <eos>) overlapping by OVERLAP. A text longer than
-        MAX_WINDOWS of them keeps its first MAX_WINDOWS - TAIL_WINDOWS and its last TAIL_WINDOWS."""
-        body = WINDOW - 2
-        step = body - OVERLAP
-        if len(ids) <= body:
-            return [ids]
-        starts = list(range(0, len(ids) - body + step, step))
-        if len(starts) > MAX_WINDOWS:
-            head = starts[:MAX_WINDOWS - TAIL_WINDOWS]
-            starts = head + [len(ids) - body - k * step for k in range(TAIL_WINDOWS - 1, -1, -1)]
-        return [ids[s:s + body] for s in starts]
+        return windows(ids, WINDOW, OVERLAP, MAX_WINDOWS, TAIL_WINDOWS)
 
     def score(self, text: str) -> float:
         """P(INJECTION) of the text's most likely window."""
@@ -245,8 +252,7 @@ class InjectionModel(Idle):
                 out = self._server.post("/embeddings", {"content": rows, "embd_normalize": -1})
                 for e in out:
                     safe, injection = e["embedding"][0]  # the classifier's logits: [SAFE, INJECTION]
-                    d = injection - safe  # softmax over two labels: a sigmoid of the margin
-                    best = max(best, 1 / (1 + math.exp(-d)) if d >= 0 else math.exp(d) / (1 + math.exp(d)))
+                    best = max(best, sigmoid(injection - safe))  # softmax over two labels: a sigmoid of the margin
             return best
 
 

@@ -35,7 +35,7 @@
     [guard]                # optional checks (`keepmum guard setup injection|harm` first)
     injection = "off"      # tool results, for planted instructions (guard.py): "warn" logs and sends; "block" refuses
     harm = "off"           # what the user typed, for harmful requests (harm.py): "warn" or "block"
-    harm_model = "0.6b"    # Qwen3Guard size: "0.6b" (about 1.1 GB while in use) or "4b" (about 4.9 GB)
+    harm_model = "small"   # "small" (Content Safety Guard, 0.4 GB while in use), or Qwen3Guard "0.6b" (1.1 GB) or "4b" (4.9 GB)
 
     [log]
     level = "info"
@@ -115,7 +115,7 @@ class Config:
     audit_keep_days: int = 90
     guard_injection: str = "off"
     guard_harm: str = "off"
-    guard_harm_model: str = "0.6b"
+    guard_harm_model: str = "small"
     path: Path | None = None
 
 
@@ -238,9 +238,10 @@ def load(path: Path | None = None) -> Config:
     for key, value in (("injection", cfg.guard_injection), ("harm", cfg.guard_harm)):
         if value not in ("off", "warn", "block"):
             raise ConfigError(f"{path}: guard.{key} must be \"off\", \"warn\" or \"block\"")
-    cfg.guard_harm_model = guard.get("harm_model", cfg.guard_harm_model)
-    if cfg.guard_harm_model not in ("0.6b", "4b"):
-        raise ConfigError(f"{path}: guard.harm_model must be \"0.6b\" or \"4b\"")
+    # A harm check turned on before "small" existed, without a model set, keeps the default it had.
+    cfg.guard_harm_model = guard.get("harm_model", "0.6b" if cfg.guard_harm != "off" else cfg.guard_harm_model)
+    if cfg.guard_harm_model not in ("small", "0.6b", "4b"):
+        raise ConfigError(f"{path}: guard.harm_model must be \"small\", \"0.6b\" or \"4b\"")
     return cfg
 
 
