@@ -1,9 +1,12 @@
 name: CI
 
+# Skipped when a change only touches the website or the docs: nothing it tests or builds changed.
 on:
   push:
     branches: [main]
+    paths-ignore: ["site/**", "docs/**", "**/*.md"]
   pull_request:
+    paths-ignore: ["site/**", "docs/**", "**/*.md"]
 
 permissions:
   contents: read
