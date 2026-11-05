@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>keepmum: keep secrets on your Mac while you use coding agents</title>
+<meta name="description" content="A local proxy for Claude Code, Codex, pi and opencode. It masks API keys, tokens, passwords and personal data before a request leaves your Mac, and restores them in the answer.">
+<meta name="theme-color" content="#E4572E">
+<link rel="canonical" href="https://keepmum.app/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://keepmum.app/">
+<meta property="og:title" content="keepmum: keep secrets on your Mac">
+<meta property="og:description" content="Your coding agent reads your secrets. keepmum makes sure that’s where they stop.">
+<meta property="og:image" content="https://keepmum.app/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Keep mum. The keepmum mark on coral.">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="hero">
+  <div class="wrap top">
+    <a class="brand" href="/">
+      <svg width="30" height="30" viewBox="0 0 100 100" aria-hidden="true"><path d="M21.6 69.8 L21.6 46.3 C21.6 37 27.8 30.9 35.8 30.9 C43.8 30.9 50 37 50 46.3 L50 69.8 M50 69.8 L50 46.3 C50 37 56.2 30.9 64.2 30.9 C72.2 30.9 78.4 37 78.4 46.3 L78.4 69.8 M12.9 69.8 L87.1 69.8" fill="none" stroke="#1A0F0B" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      keepmum
+    </a>
+    <nav aria-label="Main">
+      <a class="hide-narrow" href="#how">How it works</a>
+      <a class="hide-narrow" href="#app">Mac app</a>
+      <a class="hide-narrow" href="#limits">Limitations</a>
+      <a class="hide-phone" href="https://github.com/blueandhack/keepmum">GitHub</a>
+      <a class="btn small" href="#install">Download</a>
+    </nav>
+  </div>
+
+  <div class="wrap hero-body">
+    <div class="hero-copy">
+      <p class="pill">Pre-release · not yet independently audited</p>
+      <h1>Keep<br>mum.</h1>
+      <p class="lede">Your coding agent reads your secrets. keepmum makes sure that’s where they stop: masked before a request leaves your Mac, restored when the answer comes back.</p>
+      <div class="actions">
+        <a class="btn" href="https://github.com/blueandhack/keepmum/releases">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          Download for Mac
+        </a>
+        <a class="btn outline" href="https://github.com/blueandhack/keepmum">Read the source</a>
+      </div>
+      <p class="fine">For Claude Code, Codex, pi and opencode · Free and open source</p>
+    </div>
+    <div class="hero-mark">
+      <svg viewBox="0 0 100 100" role="img" aria-label="The keepmum mark: a lowercase m closed off by a line, like a shut mouth"><path d="M21.6 69.8 L21.6 46.3 C21.6 37 27.8 30.9 35.8 30.9 C43.8 30.9 50 37 50 46.3 L50 69.8 M50 69.8 L50 46.3 C50 37 56.2 30.9 64.2 30.9 C72.2 30.9 78.4 37 78.4 46.3 L78.4 69.8 M12.9 69.8 L87.1 69.8" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="wrap section split" aria-labelledby="leaves">
+    <div class="side">
+      <h2 id="leaves">What you wrote, and what leaves.</h2>
+      <p class="intro">Secrets are always masked. Names, emails, phone numbers and addresses are masked too when you turn personal data on.</p>
+    </div>
+    <div class="main example">
+      <div class="panel mac">
+        <span class="label">ON YOUR MAC</span>
+        <p>The staging deploy fails. Log in as <strong>dana.whitfield@example.com</strong> with password <strong>Zq8vX2mN4pL7kR9t</strong> and check why the key <strong>sk_live_51Hx8fQ2eZvKYlo2C7a9Rb</strong> is rejected.</p>
+      </div>
+      <div class="panel sent">
+        <span class="label">SENT TO THE PROVIDER</span>
+        <p>The staging deploy fails. Log in as <span class="ph">KEEPMUM_EMAIL_a41c07e2</span> with password <span class="ph">KEEPMUM_SECRET_3b91d0aa</span> and check why the key <span class="ph">KEEPMUM_SECRET_7f3a9c2e</span> is rejected.</p>
+      </div>
+      <div class="panel back">
+        <span class="label">BACK TO YOUR AGENT</span>
+        <p>Placeholders in the answer become real values again, so your agent can still log in, edit your .env and run your tests. Web and MCP tools keep the placeholders, so an injected prompt can’t send a real value out.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="how" class="wrap section steps" aria-labelledby="how-title">
+    <h2 id="how-title">Four steps, all on your Mac.</h2>
+    <div class="cols">
+      <div class="step">
+        <span class="n">01</span>
+        <h3>Detect</h3>
+        <p>96 rules with entropy and checksum checks, then OpenAI Privacy Filter on your Mac’s GPU for what only context gives away. A last step drops UUIDs, hashes and documented example keys.</p>
+      </div>
+      <div class="step">
+        <span class="n">02</span>
+        <h3>Mask</h3>
+        <p>Each value becomes a placeholder made with a key only your Mac has. The same value always gets the same placeholder, so the provider’s prompt cache keeps working.</p>
+      </div>
+      <div class="step">
+        <span class="n">03</span>
+        <h3>Restore</h3>
+        <p>Real values go back into streamed text, file edits and shell commands. They live only in memory, and are cleared when keepmum quits.</p>
+      </div>
+      <div class="step">
+        <span class="n">04</span>
+        <h3>Fail closed</h3>
+        <p>A request keepmum can’t scan (an unknown endpoint, an unreadable body, a WebSocket) is blocked. It is never sent raw.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="app" class="app" aria-labelledby="app-title">
+    <div class="wrap section">
+      <div class="app-head">
+        <h2 id="app-title">A menu bar app that shows its work.</h2>
+        <p class="intro">Set up in three steps: download the model, start the background service, switch on protection for each agent. Then watch requests go out and replies come back, see what was masked, choose what gets masked, and check the audit log.</p>
+      </div>
+      <div class="shots">
+        <figure class="shot"><img src="img/dashboard.webp" width="2400" height="1560" alt="The keepmum dashboard: requests going out and replies coming back, per coding agent"></figure>
+        <img class="menu-shot" src="img/menu.webp" width="640" height="704" alt="The keepmum menu in the menu bar" loading="lazy">
+      </div>
+      <div class="cols">
+        <div class="feature">
+          <h3>Every session</h3>
+          <p>With protection on, Claude Code goes through keepmum in the terminal, VS Code and the desktop app.</p>
+        </div>
+        <div class="feature">
+          <h3>Your rules</h3>
+          <p>Turn off a type, add your own patterns, list exceptions, or leave a project out entirely.</p>
+        </div>
+        <div class="feature">
+          <h3>An audit log</h3>
+          <p>Every change that turned protection down, who made it and when, in a log that shows if it was edited.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="dark numbers" aria-labelledby="numbers-title">
+    <div class="wrap section">
+      <div class="numbers-head">
+        <h2 id="numbers-title">Measured, not promised.</h2>
+        <p>On synthetic, labeled datasets on an M5 Pro. <a href="https://github.com/blueandhack/keepmum/tree/main/bench/results">The method and every result</a> are in the repo.</p>
+      </div>
+      <div class="cols">
+        <div class="stat"><b>0.989–1</b><span>secret recall across five datasets, four of them held out</span></div>
+        <div class="stat"><b>0.996–1</b><span>personal data recall, with personal data on</span></div>
+        <div class="stat"><b>100–145 ms</b><span>added at the 95th percentile for 4K tokens of new text</span></div>
+        <div class="stat"><b>8–9 ms</b><span>for the rules alone, if you turn the model off</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="limits" class="wrap section split" aria-labelledby="limits-title">
+    <div class="side">
+      <h2 id="limits-title">What keepmum doesn’t do.</h2>
+      <p class="intro">It’s a safety layer, not a guarantee. Here is where it stops.</p>
+      <a class="more" href="https://github.com/blueandhack/keepmum#limitations">Every limitation, in full</a>
+    </div>
+    <div class="main cols">
+      <div class="limit">
+        <h3>Shell commands get real values</h3>
+        <p>An agent can still run a command that sends a secret somewhere. Pair keepmum with a sandbox that limits the network.</p>
+      </div>
+      <div class="limit">
+        <h3>Your local history keeps them too</h3>
+        <p>keepmum protects what leaves your Mac, not what your agent stores on it.</p>
+      </div>
+      <div class="limit">
+        <h3>Unusual IDs get masked by mistake</h3>
+        <p>On the hardest fresh tests, 3 to 9 of 15 harmless IDs were flagged. That costs the model some context, never a leak.</p>
+      </div>
+      <div class="limit">
+        <h3>Images and PDFs pass unscanned</h3>
+        <p>Only text is checked. The local model is strongest on English.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" class="install" aria-labelledby="install-title">
+    <div class="wrap section">
+      <h2 id="install-title">Two ways in.</h2>
+      <div class="ways">
+        <div class="way app-way">
+          <h3>The Mac app</h3>
+          <p>Everything included: keepmum, its Python runtime and the model server. Drag it to Applications, open it, and follow Settings › Setup.</p>
+          <a class="btn" href="https://github.com/blueandhack/keepmum/releases">Download for Mac</a>
+          <p class="req">macOS 14 or later on Apple silicon. The model needs 1.6 GB of disk and about 1.7 GB of memory while it runs.</p>
+        </div>
+        <div class="way cli">
+          <h3>The command line</h3>
+          <p>With Python 3.12, uv and the Xcode command line tools.</p>
+          <pre><code>git clone https://github.com/blueandhack/keepmum.git
+cd keepmum &amp;&amp; uv tool install --editable .
+native/pf-serve/build.sh
+keepmum setup
+keepmum claude</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<section class="closing" aria-labelledby="closing-title">
+  <div class="wrap">
+    <div class="closing-cta">
+      <h2 id="closing-title">Say nothing<br>you don’t mean to.</h2>
+      <a class="btn" href="https://github.com/blueandhack/keepmum/releases">Download for Mac</a>
+    </div>
+    <footer>
+      <p>keepmum is an independent open-source project, not affiliated with or endorsed by Anthropic or OpenAI. Apache 2.0.</p>
+      <nav aria-label="Footer">
+        <a href="https://github.com/blueandhack/keepmum">GitHub</a>
+        <a href="https://github.com/blueandhack/keepmum/security">Report a vulnerability</a>
+        <a href="https://github.com/blueandhack/keepmum/blob/main/LICENSE">License</a>
+      </nav>
+    </footer>
+  </div>
+</section>
+</body>
+</html>

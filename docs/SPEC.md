@@ -268,6 +268,7 @@ keepmum/
   native/pf-serve/  # pinned build of the model runtime
   mac/              # the SwiftUI app, bundling and release scripts
   bench/            # run.py, gen.py, candidate detectors, data/, results/
+  site/             # keepmum.app: one static page, published by .github/workflows/site.yml
   tests/
 ```
 
