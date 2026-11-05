@@ -192,8 +192,8 @@ final class Engine {
     enum ServiceChange { case starting, stopping }
     private(set) var serviceChange: ServiceChange?
     var error: String?
-    /// The menu bar asks the dashboard to open on Settings, where Setup is.
-    var settingsRequested = false
+    /// The menu bar asks the dashboard to open Settings on a pane: Setup, or Tools to review one.
+    var settingsRequested: SettingsPane?
 
     /// Contents/Resources/keepmum. Missing when the app was built without the engine (SKIP_RUNTIME).
     let cli = Bundle.main.url(forResource: "keepmum", withExtension: nil)

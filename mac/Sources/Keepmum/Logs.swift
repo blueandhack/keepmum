@@ -267,7 +267,7 @@ struct LogsPage: View {
             } content: {
                 VStack(spacing: 0) {
                     if !store.previewsOn {
-                        Text("Previews are off (Settings › Logs page): types and rules only.")
+                        Text("Previews are off (Settings › General › Logs page): types and rules only.")
                             .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, Space.s)
                     }
@@ -451,7 +451,7 @@ struct FindingDetail: View {
                          : "As the provider received it, with every masked value shown as its type, like ‹SECRET›.")
                         .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text("Not kept. Text around values is off (Settings › Logs page), or this value was masked before it was turned on.")
+                    Text("Not kept. Text around values is off (Settings › General › Logs page), or this value was masked before it was turned on.")
                         .font(.km(.callout)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                 }
             }

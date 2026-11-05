@@ -4,10 +4,19 @@ import SwiftUI
 /// model, start the background service, then switch on each agent (the second section).
 struct SetupSection: View {
     var engine: Engine
+    /// Both parts, or one: Settings puts them side by side when the window is wide.
+    enum Part { case all, service, agents }
+    var part: Part = .all
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xl) {
-            FormSection(title: "Setup", footer: engine.setupDone ? nil : "Three steps, once: the model, the background service, then your coding agents below.") {
+            if part != .agents { service }
+            if part != .service { agents }
+        }
+    }
+
+    @ViewBuilder private var service: some View {
+            FormSection(title: "Setup", footer: engine.setupDone ? nil : "Three steps, once: the model, the background service, then your coding agents.") {
                 if !engine.isBundled {
                     FormRow(title: "No bundled engine",
                             detail: "Build the app with mac/build-app.sh, or use the keepmum command line.") { EmptyView() }
@@ -45,6 +54,9 @@ struct SetupSection: View {
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, Space.s + Space.xxs)
                 }
             }
+    }
+
+    @ViewBuilder private var agents: some View {
             if engine.isBundled {
                 FormSection(title: "Coding agents",
                             footer: "Each switch points that agent at keepmum. An agent already set up for another gateway, such as Magpie or LiteLLM, keeps it: keepmum goes in front and forwards there, and turning the switch off puts it back. Claude Code's open sessions switch right away; the others on their next session. Gemini CLI has no setting keepmum can rely on, so it is protected one run at a time.") {
@@ -60,7 +72,6 @@ struct SetupSection: View {
                                     why: "Gemini CLI has no setting keepmum can rely on: any project's .env file would override it")
                 }
             }
-        }
     }
 
     private var modelDetail: String {

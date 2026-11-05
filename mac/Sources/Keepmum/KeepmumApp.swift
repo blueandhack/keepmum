@@ -90,7 +90,7 @@ struct MenuPanel: View {
             .padding(.vertical, Space.s + Space.xxs)
             .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
             ProtectionRow(engine: engine) {
-                engine.settingsRequested = true
+                engine.settingsRequested = .setup
                 DashboardWindow.show(openWindow)
             }
             if let around = engine.aroundClient {
@@ -116,7 +116,7 @@ struct MenuPanel: View {
                         .font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1)
                     Spacer(minLength: Space.s)
                     PillButton(title: "Review") {
-                        engine.settingsRequested = true
+                        engine.settingsRequested = .tools
                         DashboardWindow.show(openWindow)
                     }
                 }
@@ -165,7 +165,7 @@ struct MenuPanel: View {
 
 /// The dashboard window, and keepmum's place in the Dock. keepmum lives in the menu bar; while the
 /// dashboard is open it is also an ordinary app, in the Dock and in Cmd-Tab, so the window can be
-/// found again behind other apps (unless Settings › Display turns that off).
+/// found again behind other apps (unless Settings › General › Display turns that off).
 @MainActor
 enum DashboardWindow {
     static let dockKey = "showInDock"
@@ -296,9 +296,14 @@ enum Snapshotter {
         }
         for dark in [false, true] {
             render(MenuPanel(store: store, engine: .preview()), to: "\(dir)/menu-\(dark ? "dark" : "light").png", dark: dark)
-            // Settings in full: the window scrolls it, a snapshot cannot.
-            render(Dashboard(store: store, engine: .preview(), page: .settings).frame(width: 1200, height: 2700),
-                   to: "\(dir)/settings-full-\(dark ? "dark" : "light").png", dark: dark)
+            // Each Settings pane in full (the window scrolls a long one, a snapshot cannot), and on a
+            // wide window, where a pane with two groups of sections puts them side by side.
+            for pane in SettingsPane.allCases {
+                render(Dashboard(store: store, engine: .preview(), page: .settings, settingsPane: pane).frame(width: 1200, height: 1240),
+                       to: "\(dir)/settings-\(pane.rawValue)-\(dark ? "dark" : "light").png", dark: dark)
+                render(Dashboard(store: store, engine: .preview(), page: .settings, settingsPane: pane).frame(width: 1900, height: 980),
+                       to: "\(dir)/settings-wide-\(pane.rawValue)-\(dark ? "dark" : "light").png", dark: dark)
+            }
         }
         // Every built-in rule, as the Detection page's sheet shows them.
         let rulesEngine = Engine.preview()
@@ -315,7 +320,7 @@ enum Snapshotter {
         render(MenuPanel(store: store, engine: .preview(starting: true)), to: "\(dir)/menu-starting-light.png", dark: false)
         // A gateway's app pointed Claude Code back at itself, around keepmum.
         render(MenuPanel(store: store, engine: .preview(around: true)), to: "\(dir)/menu-around-light.png", dark: false)
-        render(Dashboard(store: store, engine: .preview(around: true), page: .settings).frame(width: 1200, height: 2140),
+        render(Dashboard(store: store, engine: .preview(around: true), page: .settings).frame(width: 1200, height: 1100),
                to: "\(dir)/settings-around-light.png", dark: false)
         // The menu bar icon, plain and with the dot that points at Settings › Tools.
         for (name, image) in [("menubar", Brand.menuBarActive), ("menubar-attention", Brand.menuBarAttention)] {

@@ -26,6 +26,7 @@ struct Dashboard: View {
     @Bindable var engine: Engine
     @AppStorage("appearance") private var appearance: Appearance = .system
     @State var page: Page = .overview
+    @State var settingsPane: SettingsPane = .setup
 
     var body: some View {
         HStack(spacing: 0) {
@@ -41,7 +42,7 @@ struct Dashboard: View {
                     case .performance: PerformancePage(store: store)
                     case .detection: DetectionPage(store: store, engine: engine)
                     case .audit: AuditPage(engine: engine)
-                    case .settings: SettingsPage(store: store, engine: engine, appearance: $appearance)
+                    case .settings: SettingsPage(store: store, engine: engine, appearance: $appearance, pane: $settingsPane)
                     }
                 }
                 // Both bounds set, so the frame keeps its offered height and a taller page runs off
@@ -56,7 +57,7 @@ struct Dashboard: View {
         .background(Theme.canvas)
         .preferredColorScheme(appearance.scheme)
         .onChange(of: engine.settingsRequested, initial: true) { _, requested in
-            if requested { page = .settings; engine.settingsRequested = false }
+            if let requested { page = .settings; settingsPane = requested; engine.settingsRequested = nil }
         }
         .onChange(of: engine.status?.port, initial: true) { _, p in
             if let p { store.configuredPort = p }
@@ -156,7 +157,7 @@ private struct Notices: View {
                 if case .offline(let reason) = store.connection {
                     Banner(tone: .warning, icon: "bolt.horizontal.circle", title: "Not connected.",
                            message: "\(reason.sentence). Start the background service in Settings, or run keepmum claude.") {
-                        if page != .settings { PillButton(title: "Open Settings") { page = .settings } }
+                        if page != .settings { PillButton(title: "Open Settings") { engine.settingsRequested = .setup } }
                     }
                 }
                 if store.sampleMode {
@@ -269,84 +270,6 @@ struct PerformancePage: View {
 
 /// Settings as one column of groups, as in System Settings: setup and the agents first, then
 /// what gets masked, exclusions, display, and the connection.
-struct SettingsPage: View {
-    var store: StatsStore
-    var engine: Engine
-    @Binding var appearance: Appearance
-    @AppStorage(DashboardWindow.dockKey) private var showInDock = true
-    @Environment(\.isSnapshot) private var isSnapshot
-
-    var body: some View {
-        VStack(spacing: Space.l) {
-            PageHeader(title: "Settings", subtitle: "Setup, masking, tools, checks, exclusions and display")
-            if isSnapshot {
-                form
-                Spacer(minLength: 0)
-            } else {
-                ScrollView { form.padding(.bottom, Space.xl) }.scrollIndicators(.automatic)
-            }
-        }
-    }
-
-    private var form: some View {
-        let s = store.snapshot
-        return VStack(alignment: .leading, spacing: Space.xl) {
-            SetupSection(engine: engine)
-            MaskingSection(engine: engine, observing: s.observe == true, modelError: s.detection.modelError)
-            ToolsSection(store: store, engine: engine)
-            ChecksSection(engine: engine)
-            if engine.isBundled { ShellDestinationsSection(engine: engine) }
-            ExclusionsSection(engine: engine)
-            if engine.isBundled { LogsPageSection(engine: engine) }
-            FormSection(title: "Display") {
-                FormRow(title: "Appearance") {
-                    Segmented(options: Appearance.allCases.map { ($0, $0.title) }, selection: $appearance)
-                }
-                Hairline()
-                FormRow(title: "Show in Dock", detail: "While the dashboard is open, so you can switch back to it; keepmum always stays in the menu bar") {
-                    Switch(isOn: showInDock) { showInDock = $0; DashboardWindow.applyDockPolicy() }.accessibilityLabel("Show in Dock")
-                }
-                Hairline()
-                FormRow(title: "Preview data", detail: "Synthetic numbers on every page, clearly labeled, to see the dashboard without real traffic") {
-                    Switch(isOn: store.sampleMode) { store.sampleMode = $0 }.accessibilityLabel("Preview data")
-                }
-            }
-            UpdatesSection()
-            if engine.isBundled { DoctorSection(engine: engine) }
-            FormSection(title: "Connection",
-                        footer: "This app reads keepmum's stats feed: counts, types and timestamps, and for the Logs page the first and last character of long masked values (Settings › Logs page turns that off). It never receives a whole value or a placeholder and talks only to 127.0.0.1, apart from update checks (Settings › Updates). It sends no telemetry.") {
-                row("Status") { StatusDot(connection: store.connection, observing: s.observe == true) }
-                row("Endpoint", "127.0.0.1:\(store.port)")
-                row("Mode", s.modeLabel)
-                row("Personal data", s.pii.map { $0 ? "masked" : "not masked" } ?? "—")
-                row("Detector", s.detector ?? "—")
-                row("Upstream", s.upstream ?? "—")
-                row("Version", s.version ?? "—")
-                row("Token", "~/.config/keepmum/stats-token", last: true)
-            }
-        }
-        .frame(maxWidth: 760, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func row(_ key: String, _ value: String, last: Bool = false) -> some View {
-        row(key, last: last) {
-            Text(value).font(.km(.mono)).foregroundStyle(Theme.textSecondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-        }
-    }
-
-    private func row(_ key: String, last: Bool = false, @ViewBuilder _ value: () -> some View) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(key).font(.km(.body)).foregroundStyle(Theme.text)
-                Spacer(minLength: Space.m)
-                value()
-            }
-            .padding(.vertical, Space.s)
-            if !last { Hairline() }
-        }
-    }
-}
 
 /// `mcp__claude_ai_Gmail__search_threads` -> "Gmail".
 func toolLabel(_ tool: String) -> String {
@@ -383,7 +306,7 @@ func checkHelp(_ c: Snapshot.Event.Check) -> String {
 func keptHelp(_ t: Snapshot.Event.ToolCall) -> String {
     if t.reason == "destination" {
         return "\(t.tool) kept \(t.values) placeholder(s): the command would have sent a token to a host its issuer "
-            + "does not use. If that host is yours, add it in Settings › Shell commands."
+            + "does not use. If that host is yours, add it in Settings › Tools › Shell commands."
     }
     let what = (t.types ?? [:]).sorted { $0.key < $1.key }.map { "\($0.value) \(Theme.label($0.key).lowercased())" }.joined(separator: ", ")
     let why = switch t.reason ?? "" {

@@ -6,7 +6,7 @@ import Sparkle
 /// release's notarized DMG with its EdDSA signature (SUPublicEDKey), checked before it is unpacked.
 ///
 /// Nothing is checked until the user says so. On the first launch keepmum asks, once, whether to
-/// check automatically (once a day); Settings › Updates changes it, and "Check now" always works.
+/// check automatically (once a day); Settings › General › Updates changes it, and "Check now" always works.
 /// Sparkle's own permission prompt is off, and it sends no system profile. A check is one request
 /// for the feed: GitHub sees the IP address and keepmum's version in the user agent.
 ///
@@ -92,7 +92,7 @@ final class Updates: NSObject {
             Each check downloads keepmum's update list from github.com, so GitHub sees your IP address and \
             keepmum's version. Nothing else is sent: no usage data, no system details.
 
-            You can change this, or check now, in Settings › Updates.
+            You can change this, or check now, in Settings › General › Updates.
             """
         alert.addButton(withTitle: "Check Automatically")
         alert.addButton(withTitle: "Don't Check")
