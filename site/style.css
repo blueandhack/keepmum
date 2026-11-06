@@ -122,12 +122,18 @@ a { color: var(--ink); }
 .step h3 { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
 .step p { font-size: 17px; line-height: 1.55; color: var(--body); }
 
+/* Checks */
+.checks { display: flex; flex-direction: column; gap: 48px; padding-top: 32px; }
+.checks-head { display: flex; flex-wrap: wrap; gap: 24px 64px; align-items: flex-end; }
+.checks-head > * { flex: 1 1 420px; }
+@media (max-width: 600px) { .checks .shot { display: none; } }
+
 /* The Mac app */
 .app { background: var(--sand); }
 .app .wrap { display: flex; flex-direction: column; gap: 56px; }
 .app-head { display: flex; flex-wrap: wrap; gap: 24px 64px; align-items: flex-end; }
 .app-head > * { flex: 1 1 420px; }
-.shots { position: relative; padding-bottom: 40px; }
+.shots { position: relative; padding-bottom: 120px; }
 .shot { border-radius: 20px; overflow: hidden; background: #fff; border: 1px solid rgba(26, 15, 11, 0.08); box-shadow: 0 40px 80px -40px rgba(26, 15, 11, 0.35); }
 .menu-shot { position: absolute; right: 24px; bottom: 0; width: 24%; min-width: 150px; border-radius: 14px; box-shadow: 0 24px 48px -16px rgba(26, 15, 11, 0.4); }
 .feature { display: flex; flex-direction: column; gap: 8px; }

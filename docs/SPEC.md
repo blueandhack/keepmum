@@ -183,12 +183,15 @@ The user experience is one command, `keepmum claude` or `keepmum codex`, or the 
 | --- | --- |
 | `keepmum claude [args]` | Starts the proxy on a free local port, runs `claude` with `ANTHROPIC_BASE_URL` pointing at it, stops the proxy when Claude exits. Passes all args through. |
 | `keepmum codex [args]` | The same for Codex, with `-c` overrides for that run (a `keepmum` provider, WebSockets off). |
+| `keepmum gemini [args]` | The same for Gemini CLI, through `GOOGLE_GEMINI_BASE_URL` and `CODE_ASSIST_ENDPOINT` for that run. |
 | `keepmum serve` | Runs the proxy standalone on `127.0.0.1:7788` (configurable). Binds to localhost only. |
 | `keepmum protect on\|off\|status [--client]` | Points Claude Code, Codex, pi and opencode at `keepmum serve` in their own config files, or undoes it. |
 | `keepmum observe on\|off` | Observe only: scan and count, but forward requests unchanged. |
 | `keepmum model on\|off` | The rules and the local model, or the rules alone. |
 | `keepmum pii on\|off` | Mask personal data too, or only secrets and your own rules (the default). |
 | `keepmum types` / `keepmum rules` | What gets masked: types passed through, your own mask rules, exceptions, built-in rules turned off. |
+| `keepmum tools [allow\|set\|trust]` | MCP servers and web tools seen, and which real values each may receive. |
+| `keepmum guard [setup\|injection\|harm\|commands\|local\|remove]` | The optional checks: prompt injection in tool results, harmful requests in what you type, risky shell commands in replies; off, warn, block, or local (a flagged request answered by a model on this Mac). |
 | `keepmum destinations [add\|remove]` | Hosts a shell command may send a rule's tokens to, besides its issuer's own. Adding needs `--yes`. |
 | `keepmum log previews\|context on\|off` | What the app's Logs page may show about masked values (memory only). |
 | `keepmum exclude` / `keepmum include` | Lets one project's Claude Code skip keepmum. |
@@ -226,11 +229,24 @@ WebFetch = "keep"
 WebSearch = "keep"
 "mcp__*" = "own"
 
+[destinations]                       # hosts a shell command may also send a rule's tokens to
+gitlab-token = ["gitlab.corp.example"]
+
+[gateways]                           # gateways behind keepmum, each at /gateway/<name> (`keepmum protect on` adds them)
+local-3425 = "http://127.0.0.1:3425"
+
 [log]
 level = "info"                       # never logs values, only type + counts
 
 [audit]
 keep_days = 90                       # audit log retention; shortening it is recorded as weakening
+
+[guard]                              # the optional checks, all "off" by default
+injection = "off"                    # tool results: "warn", "block" or "local"
+harm = "off"                         # what the user typed: "warn", "block" or "local"
+harm_model = "small"                 # or "0.6b", "4b"
+commands = "off"                     # shell commands in replies: "warn" or "block"
+local_servers = []                   # [{ url, model, checks?, api? }] on this Mac, tried in order
 ```
 
 `keepmum claude` writes logs to `~/.config/keepmum/keepmum.log` (mode 0600), because the terminal belongs to Claude Code, and records its port in `~/.config/keepmum/runtime.json` (0600) for the Mac app. It refuses to start if any Claude Code settings file sets `ANTHROPIC_BASE_URL` or a Bedrock/Vertex/Foundry switch, or if such a switch is in the environment, since that could route traffic around the proxy. An `ANTHROPIC_BASE_URL` already in the environment (another gateway) becomes keepmum's upstream.
@@ -257,6 +273,15 @@ keepmum/
     audit.py        # tamper-evident audit log: hash chain, settings diffs, verify
     protect.py      # Claude Code settings, project exclusions
     clients.py      # Codex, pi and opencode configs, `keepmum codex`
+    gemini.py       # Gemini API and Code Assist restore, whole and streamed
+    gateway.py      # gateways behind keepmum, routes per gateway
+    tools.py        # what each network tool may receive, servers seen, tool hashes
+    destinations.py # where a token with a known issuer may go in a shell command
+    guard.py        # the prompt-injection check
+    harm.py         # the harm check (and qwen3guard_prompt.py)
+    commands.py     # the risky-commands check on replies
+    local.py        # local mode: a flagged request answered on this Mac
+    llamacpp.py     # llama-server, the checks' runtime
     launch.py       # `keepmum claude`, the VS Code wrapper, background server
     detect/
       rules.py      # L1 regex + entropy + checksums, user rules
@@ -292,6 +317,7 @@ keepmum/
 - [x] **Other gateways (Nov 2, 2026).** `keepmum protect on` goes in front of a gateway an agent already uses, through a route per gateway; see *Other gateways* above. Verified with Claude Code, Codex, pi and opencode against a stand-in gateway: placeholders only at the gateway, its own key, and `off` restoring every config file byte for byte.
 - [x] **Web addresses in replies (Nov 2, 2026).** A placeholder inside an http(s) address in reply text stays a placeholder, so a rendered image or link cannot carry a value out; see Restore. Verified with Claude Code: the text got the real value, the image address the placeholder.
 - [x] **Shell destinations (Nov 3, 2026).** A token whose issuer is known stays a placeholder in a shell command that names another host (`destinations.py`, Open questions). Verified with Claude Code running two curl commands: attacker.test received the placeholder, api.github.com the token. Cases: `docs/test-cases/shell-destinations.md`.
+- [x] **Optional checks (Nov 4–5, 2026).** Off by default, each warn or block: prompt injection in tool results (`guard.py`, Prompt Injection Guard Small as a GGUF keepmum converted and hosts; `bench/results/GUARD.md`), harmful requests in what the user typed (`harm.py`, Content Safety Guard Small, or Qwen3Guard-Gen 0.6B or 4B; `bench/results/HARM.md`), both in llama-server on Metal and downloaded only by `keepmum guard setup`; and risky shell commands in the model's replies (`commands.py`, seven rules, no model). Local mode (injection and harm) answers a flagged request with a model on this Mac (`local.py`; Ollama, LM Studio, llama.cpp, or Chat Completions for others), tried in order, never sent to the provider. Hits are logged, counted and audited with the check, score and length, never the text; the Mac app shows them in the flow diagram, Activity and Logs. The README has the details.
 - [ ] **M6 Ship.** README, Homebrew tap, name check on GitHub, PyPI and Homebrew. *Oct 26, 2026: Keepmum.app is self-contained (bundled Python runtime, pf-serve, a LaunchAgent via SMAppService) and sets itself up: model download, background service, `keepmum protect`. Nov 3, 2026: signed with Developer ID, notarized, and released as a DMG on GitHub Releases, [0.1.0a1](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a1) (pre-release). Nov 5, 2026: [0.1.0a2](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a2), the first that updates itself (Sparkle, a signed feed, asked on first launch). Left: a Homebrew cask, PyPI, and Windows (pf-serve already builds there; the app would need its own UI).*
 
 ## Audit log
@@ -348,7 +374,7 @@ The one test that must never fail: a canary secret sent through keepmum never ap
 - Bind to `127.0.0.1` only. Reject requests with a non-local `Host` header.
 - Third-party loggers (httpx, httpcore, uvicorn) are capped at WARNING so they cannot print URLs or request details; uvicorn's access log is off.
 - **Stats feeds** (for the Mac app): `GET /_keepmum/stats` has request counts by outcome, masked and restored counts by type, the detection report, scan latency, and the last 200 events (time, path, status, client, provider, counts); `/_keepmum/history` pages the history file and `/_keepmum/flows` totals it for the flow diagrams. None holds a value or a placeholder. It requires `Authorization: Bearer <token>`, with the token in `~/.config/keepmum/stats-token` (mode 0600).
-- No telemetry, no update checks, no network calls except the forwarded request.
+- No telemetry, and no network calls except the forwarded request, the model downloads the user starts (`keepmum setup`, `keepmum guard setup`), and the Mac app's update checks, which it asks about first and makes only with the user's yes.
 - Synthetic secrets only in the repo. Add `keepmum scan` as a pre-commit hook on the keepmum repo itself.
 
 **Risks**

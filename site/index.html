@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>keepmum: keep secrets on your Mac while you use coding agents</title>
-<meta name="description" content="A local proxy for Claude Code, Codex, pi and opencode. It masks API keys, tokens, passwords and personal data before a request leaves your Mac, and restores them in the answer.">
+<meta name="description" content="A local proxy for Claude Code, Codex, Gemini CLI, pi and opencode. It masks API keys, tokens, passwords and personal data before a request leaves your Mac, and restores them in the answer.">
 <meta name="theme-color" content="#E4572E">
 <link rel="canonical" href="https://keepmum.app/">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -34,6 +34,7 @@
     </a>
     <nav aria-label="Main">
       <a class="hide-narrow" href="#how">How it works</a>
+      <a class="hide-narrow" href="#checks">Checks</a>
       <a class="hide-narrow" href="#app">Mac app</a>
       <a class="hide-narrow" href="#limits">Limitations</a>
       <a class="hide-phone" href="https://github.com/blueandhack/keepmum">GitHub</a>
@@ -43,7 +44,7 @@
 
   <div class="wrap hero-body">
     <div class="hero-copy">
-      <p class="pill">Pre-release · not yet independently audited</p>
+      <p class="pill">Alpha · not yet independently audited</p>
       <h1>Keep<br>mum.</h1>
       <p class="lede">Your coding agent reads your secrets. keepmum makes sure that’s where they stop: masked before a request leaves your Mac, restored when the answer comes back.</p>
       <div class="actions">
@@ -53,7 +54,7 @@
         </a>
         <a class="btn outline" href="https://github.com/blueandhack/keepmum">Read the source</a>
       </div>
-      <p class="fine">For Claude Code, Codex, pi and opencode · Free and open source</p>
+      <p class="fine">For Claude Code, Codex, Gemini CLI, pi and opencode · Free and open source</p>
     </div>
     <div class="hero-mark">
       <svg viewBox="0 0 100 100" role="img" aria-label="The keepmum mark: a lowercase m closed off by a line, like a shut mouth"><path d="M21.6 69.8 L21.6 46.3 C21.6 37 27.8 30.9 35.8 30.9 C43.8 30.9 50 37 50 46.3 L50 69.8 M50 69.8 L50 46.3 C50 37 56.2 30.9 64.2 30.9 C72.2 30.9 78.4 37 78.4 46.3 L78.4 69.8 M12.9 69.8 L87.1 69.8" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -78,7 +79,7 @@
       </div>
       <div class="panel back">
         <span class="label">BACK TO YOUR AGENT</span>
-        <p>Placeholders in the answer become real values again, so your agent can still log in, edit your .env and run your tests. Web and MCP tools keep the placeholders, so an injected prompt can’t send a real value out.</p>
+        <p>Placeholders in the answer become real values again, so your agent can still log in, edit your .env and run your tests. Tools that reach the network get less: web search and fetch keep the placeholders, an MCP server gets back only what it returned itself, and none of them ever gets a secret.</p>
       </div>
     </div>
   </section>
@@ -109,14 +110,36 @@
     </div>
   </section>
 
+  <section id="checks" class="wrap section checks" aria-labelledby="checks-title">
+    <div class="checks-head">
+      <h2 id="checks-title">Three checks, if you want them.</h2>
+      <p class="intro">All off until you turn them on, and all on your Mac. Warn sends the request and logs a hit. Block refuses it. Local, for the first two, sends a flagged request to a model on your Mac instead of the provider, so your agent still gets an answer.</p>
+    </div>
+    <div class="cols">
+      <div class="feature">
+        <h3>Prompt injection</h3>
+        <p>Checks what tools bring back (web pages, files, shell output, MCP replies) for instructions planted for your agent. On the benchmark it caught every injected document and flagged 3% of ordinary ones.</p>
+      </div>
+      <div class="feature">
+        <h3>Harmful requests</h3>
+        <p>Checks what you type, not what tools return. The default model catches 66% of harmful prompts and flags 5% of safe ones, in 8 ms; larger ones catch up to 82%.</p>
+      </div>
+      <div class="feature">
+        <h3>Risky commands</h3>
+        <p>Checks the shell commands a reply asks your agent to run: a download piped into a shell, deleting your home folder, erasing a disk, credentials sent over the network. Seven rules, no download.</p>
+      </div>
+    </div>
+    <figure class="shot"><img src="img/checks.webp" width="2860" height="910" alt="keepmum’s Checks settings: each check off, warn, block or local, and the local servers that answer flagged requests" loading="lazy"></figure>
+  </section>
+
   <section id="app" class="app" aria-labelledby="app-title">
     <div class="wrap section">
       <div class="app-head">
         <h2 id="app-title">A menu bar app that shows its work.</h2>
-        <p class="intro">Set up in three steps: download the model, start the background service, switch on protection for each agent. Then watch requests go out and replies come back, see what was masked, choose what gets masked, and check the audit log.</p>
+        <p class="intro">Set up in three steps: download the model, start the background service, switch on protection for each agent. Then watch requests go out and replies come back, see what was masked and what a check flagged, choose what gets masked, and check the audit log.</p>
       </div>
       <div class="shots">
-        <figure class="shot"><img src="img/dashboard.webp" width="2400" height="1560" alt="The keepmum dashboard: requests going out and replies coming back, per coding agent"></figure>
+        <figure class="shot"><img src="img/dashboard.webp" width="2400" height="1560" alt="The keepmum dashboard: requests going out and replies coming back, per coding agent, with what was masked, blocked and flagged by a check"></figure>
         <img class="menu-shot" src="img/menu.webp" width="640" height="704" alt="The keepmum menu in the menu bar" loading="lazy">
       </div>
       <div class="cols">
@@ -160,7 +183,7 @@
     <div class="main cols">
       <div class="limit">
         <h3>Shell commands get real values</h3>
-        <p>An agent can still run a command that sends a secret somewhere. Pair keepmum with a sandbox that limits the network.</p>
+        <p>A GitHub, Stripe or AWS token stays a placeholder in a command that would send it to another host. A password, or a command built to hide where it sends things, gets past that: pair keepmum with a sandbox that limits the network.</p>
       </div>
       <div class="limit">
         <h3>Your local history keeps them too</h3>
@@ -208,7 +231,7 @@ keepmum claude</code></pre>
       <a class="btn" href="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a3/Keepmum-0.1.0a3.dmg">Download for Mac</a>
     </div>
     <footer>
-      <p>keepmum is an independent open-source project, not affiliated with or endorsed by Anthropic or OpenAI. Apache 2.0.</p>
+      <p>keepmum is an independent open-source project, not affiliated with or endorsed by Anthropic, OpenAI or Google. Apache 2.0.</p>
       <nav aria-label="Footer">
         <a href="https://github.com/blueandhack/keepmum">GitHub</a>
         <a href="https://github.com/blueandhack/keepmum/security">Report a vulnerability</a>
