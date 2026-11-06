@@ -379,6 +379,7 @@ struct OutcomeLabel: View {
         case .masked: ("Masked", "eye.slash", Theme.masked)
         case .clean: ("Clean", "checkmark.circle", Theme.textSecondary)
         case .flagged: ("Flagged", "flag.fill", Theme.warning)
+        case .local: ("Local", "desktopcomputer", Theme.restored)
         }
         HStack(spacing: Space.xs + 1) {
             Image(systemName: icon).font(.km(.caption))

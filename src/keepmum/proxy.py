@@ -51,6 +51,10 @@ from starlette.routing import Route
 
 from .gateway import ROUTE, api_of_route
 from .gemini import GeminiStreamRestorer, restore_gemini
+from .local import DEFAULT_URL as LOCAL_URL
+from .local import PATHS as LOCAL_PATHS
+from .local import LocalRoute
+from .local import prepare as prepare_local
 from .redact import Redactor
 from .responses import ResponsesStreamRestorer, restore_responses
 from .restore import DEFAULT_POLICY, StreamRestorer, ToolPolicy, restore_response, rule_for, take_tools, take_urls
@@ -168,13 +172,15 @@ class Proxy:
                  info: dict | None = None, observe=None, openai_upstream: str = OPENAI_UPSTREAM,
                  chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
                  gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM,
-                 tools=None, guards=None, commands=None):
+                 tools=None, guards=None, commands=None, local=None):
         self.redactor = redactor
         # The checks on a request's texts (guard.Guard): "injection" on tool results, "harm" on what
         # the user typed. Warn-mode checks run after the request is sent, in `_background`.
         self.guards = [guards] if hasattr(guards, "check") else list(guards or [])
         # The check on the replies' shell commands (commands.CommandsCheck), or None.
         self.commands = commands
+        # Where local mode sends a flagged request: a callable giving (url, model), or None (local.py).
+        self.local = local
         self._background: set = set()
         self.upstream = upstream.rstrip("/")
         self.prefixed = {"/openai": openai_upstream.rstrip("/"), "/chatgpt": chatgpt_upstream.rstrip("/"),
@@ -341,7 +347,9 @@ class Proxy:
             log.error("blocked %s: scan failed (%s)", path, type(e).__name__)
             self._record(path, "blocked", 500, origin=origin)
             return api_error(500, "api_error", "could not scan this request, so it was not sent")
-        refused = await self._guarded(texts, path, origin, kind="masked" if new else "clean")
+        refused = await self._guarded(texts, path, origin, kind="masked" if new else "clean", api=t.api)
+        if isinstance(refused, LocalRoute):
+            return await self._answer_locally(request, t, body, refused, origin)
         if refused is not None:
             return refused
         scan_ms = (time.perf_counter() - started) * 1000
@@ -469,7 +477,8 @@ class Proxy:
                 log.warning("tool list not recorded (%s)", type(e).__name__)
         return result
 
-    async def _guarded(self, texts: dict, path: str, origin, observing: bool = False, kind: str = "clean") -> Response | None:
+    async def _guarded(self, texts: dict, path: str, origin, observing: bool = False, kind: str = "clean",
+                       api: str | None = None) -> Response | LocalRoute | None:
         """Run each guard on its texts: None to send the request, or the refusal. Block mode checks
         before the request goes; warn mode, and every mode while observing, checks after it is sent,
         so a warning adds no delay. `kind` is how the request goes out (masked, clean, observed): a
@@ -480,17 +489,19 @@ class Proxy:
             mode = guard.mode
             if mode == "off" or not items:
                 continue
-            if mode == "block" and not observing:
-                refused = await self._check_now(guard, items, path, origin)
+            if mode in ("block", "local") and not observing:
+                refused = await self._check_now(guard, items, path, origin, api)
                 if refused is not None:
                     return refused
             else:
                 self._later(self._check_later(guard, items, path, origin, kind, request))
         return None
 
-    async def _check_now(self, guard, items, path: str, origin) -> Response | None:
+    async def _check_now(self, guard, items, path: str, origin, api: str | None = None) -> Response | LocalRoute | None:
         """Block mode: a hit, or a text flagged before and still in the conversation, refuses the
-        request. A guard that fails refuses it too: it cannot vouch for what it did not check."""
+        request. A guard that fails refuses it too: it cannot vouch for what it did not check.
+        Local mode: such a request goes to the local model instead (local.py), if its API is one
+        the local server speaks; otherwise it is refused, as in block mode."""
         try:
             hits = await anyio.to_thread.run_sync(guard.check, items, True)
         except Exception as e:
@@ -500,6 +511,9 @@ class Proxy:
                              f"(`keepmum guard {guard.name} warn` sends such requests with a warning)")
         if not hits:
             return None
+        if guard.mode == "local" and api in LOCAL_PATHS:
+            self._record_hits(guard, hits, "local", path, origin)
+            return LocalRoute(guard.name, hits)
         self._record_hits(guard, hits, "blocked", path, origin)
         self._record(path, "blocked", 403, origin=origin, guard=guard_summary(hits, "blocked"))
         if guard.name == "harm":
@@ -513,6 +527,49 @@ class Proxy:
                          f"the injection check found a likely prompt injection in what {sources} returned, so this "
                          "request was not sent. Remove that result from the conversation (rewind, or /clear), or run "
                          "`keepmum guard injection warn` to send such requests with a warning.")
+
+    async def _answer_locally(self, request: Request, t: Target, body: dict, route: LocalRoute, origin) -> Response:
+        """Local mode: the flagged request goes to the local model, as the agent wrote it (real
+        values included: it stays on this Mac) but with the local model's name, no tools and a note
+        (local.py), and its answer goes back to the agent. Never the agent's API key."""
+        path = request.url.path
+        url, model = self.local() if callable(self.local) else (LOCAL_URL, "")
+        refused = guard_summary(route.hits, "blocked")
+        if not model:
+            self._record(path, "blocked", 403, origin=origin, guard=refused)
+            return api_error(403, "permission_error", f"the {route.check} check flagged this request for the local model, "
+                             "but none is set, so it was not sent. Set one with `keepmum guard local --model <name>`.")
+        data = prepare_local(body, t.api, model, route)
+        target = url.rstrip("/") + LOCAL_PATHS[t.api]
+        headers = {"content-type": "application/json"}
+        if t.api == "messages":
+            headers["anthropic-version"] = request.headers.get("anthropic-version", "2023-06-01")
+        payload = json.dumps(data, ensure_ascii=False).encode("utf-8", "replace")
+        local_origin = (origin[0] if origin else None, "local")
+        try:
+            if wants_stream(t, body, request.url.query):
+                resp = await self.client.send(self.client.build_request("POST", target, headers=headers, content=payload),
+                                              stream=True)
+
+                async def stream():
+                    try:
+                        async for chunk in resp.aiter_raw():
+                            yield chunk
+                    finally:
+                        await resp.aclose()
+                        self._record(path, "local", resp.status_code, origin=local_origin, guard=guard_summary(route.hits, "local"))
+                        log.info("%s -> local model %s: %d (streamed)", path, model, resp.status_code)
+
+                return StreamingResponse(stream(), status_code=resp.status_code, headers=self._response_headers(resp))
+            resp = await self.client.post(target, headers=headers, content=payload)
+        except httpx.HTTPError as e:
+            log.error("%s: the local model at %s did not answer (%s)", path, url, type(e).__name__)
+            self._record(path, "blocked", 502, origin=origin, guard=refused)
+            return api_error(502, "api_error", f"the {route.check} check sent this request to the local model at {url}, "
+                             f"which did not answer ({type(e).__name__}). It was not sent anywhere else.")
+        self._record(path, "local", resp.status_code, origin=local_origin, guard=guard_summary(route.hits, "local"))
+        log.info("%s -> local model %s: %d", path, model, resp.status_code)
+        return Response(resp.content, status_code=resp.status_code, headers=self._response_headers(resp))
 
     async def _check_later(self, guard, items, path: str, origin, kind: str = "clean", request: str | None = None) -> None:
         """Warn mode, after the request is sent: record new hits; a failure is logged and nothing more."""
@@ -547,7 +604,7 @@ class Proxy:
                     else f"a {h['source']} command in the reply ({cats})" if guard.name == "commands"
                     else f"a {h['source'] or 'tool'} result")
             done = ("sent to the agent as a refusal" if guard.name == "commands" else "request not sent") \
-                if action == "blocked" else "sent (warn)"
+                if action == "blocked" else "sent to the local model instead" if action == "local" else "sent (warn)"
             log.warning("%s: %s check flagged %s (score %.2f, %d chars%s): %s", path, guard.name, what, h["score"],
                         h["chars"], ", flagged before" if h["earlier"] else "", done)
         self.stats.record_guard(hits, action, origin)

@@ -187,6 +187,16 @@ def _guard_checks(r, cfg) -> None:
                else "llama-server not found (brew install llama.cpp)" if find_server() is None else None)
         _check(r, FAIL if why else OK, f"injection check {cfg.guard_injection}: " + (why or
                f"Prompt Injection Guard Small, Apache-2.0; {GUARD_MEMORY['injection']} while in use"))
+    if "local" in (cfg.guard_injection, cfg.guard_harm):
+        from .local import models
+
+        have = models(cfg.guard_local_url)
+        why = ("no local model set (`keepmum guard local --model <name>`)" if not cfg.guard_local_model
+               else f"nothing answers at {cfg.guard_local_url} (open Ollama, or `ollama serve`)" if have is None
+               else f"{cfg.guard_local_url} has no {cfg.guard_local_model} (`ollama pull {cfg.guard_local_model}`)"
+               if cfg.guard_local_model not in have else None)
+        _check(r, FAIL if why else OK, "local mode: " + (why or f"flagged requests go to {cfg.guard_local_model} at "
+               f"{cfg.guard_local_url}, without tools") + ("; until then they are refused" if why else ""))
     if cfg.guard_commands != "off":
         from .commands import RULES, SENDS
 

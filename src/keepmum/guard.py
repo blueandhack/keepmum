@@ -55,7 +55,7 @@ FILES = {
 }
 # What earlier keepmum versions downloaded: Shield Small (ZeroLeaks, CC BY-NC 4.0). Removed on setup.
 LEGACY = ("shield-small-s15e",)
-MODES = ("off", "warn", "block")
+MODES = ("off", "warn", "block", "local")  # local: local.py
 THRESHOLD = 0.65
 WINDOW, OVERLAP, MAX_WINDOWS, TAIL_WINDOWS = 2048, 256, 16, 4
 BOS, EOS = 2, 1  # <bos>, <eos>

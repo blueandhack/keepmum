@@ -133,10 +133,11 @@ struct Snapshot: Decodable, Sendable {
             (tools ?? []).filter { $0.action == "keep" && ["not_allowed", "paused", "too_many", "destination"].contains($0.reason ?? "") }
         }
 
-        enum Kind: String, CaseIterable { case masked, clean, blocked, observed, flagged }
+        enum Kind: String, CaseIterable { case masked, clean, blocked, observed, flagged, local }
         /// Matches `event_kind` in keepmum's stats.py.
         var kind: Kind {
             if outcome == "flagged" { return .flagged }
+            if outcome == "local" { return .local }
             if outcome == "blocked" || outcome == "rejected" { return .blocked }
             if outcome == "observed" { return .observed }
             return (new ?? (redacted.isEmpty ? 0 : 1)) > 0 ? .masked : .clean
@@ -474,7 +475,7 @@ final class StatsStore {
             let result = event.outcome == "upstream_error" ? "failed"
                 : event.kind == .blocked && !event.checks.isEmpty ? "refused" : event.kind.rawValue
             pulses.append(Pulse(kind: .out(result), client: client, provider: provider, born: now))
-            if !["blocked", "refused", "failed"].contains(result) {
+            if !["blocked", "refused", "failed", "local"].contains(result) {
                 pulses.append(Pulse(kind: .back(restored: event.restored.values.reduce(0, +) > 0), client: client,
                                     provider: provider, born: now.addingTimeInterval(FlowGeometry.replyDelay)))
             }

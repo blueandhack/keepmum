@@ -69,7 +69,15 @@ final class Engine {
         var harm: Harm
         /// nil from older engines.
         var commands: Commands?
+        /// Where local mode sends a flagged request (local.py); nil from older engines.
+        struct Local: Decodable, Equatable { var url: String; var model: String }
+        var local: Local?
     }
+
+    /// `keepmum guard local --json`: the local server, its model, and the models it has (nil: it
+    /// did not answer).
+    struct LocalModels: Decodable, Equatable { var url: String; var model: String; var models: [String]? }
+    private(set) var localModels: LocalModels?
 
     /// `keepmum rules builtin --json`: one built-in rule, its type, and whether it is on.
     struct BuiltinRule: Decodable, Equatable, Identifiable {
@@ -387,6 +395,19 @@ final class Engine {
         await act { try await self.check(["guard", check, mode] + (model.map { ["--model", $0] } ?? [])) }
     }
 
+    /// What the local server has, for the Local model picker. Asks it (on 127.0.0.1) each time.
+    func loadLocalModels() async {
+        guard let out = try? await run(["guard", "local", "--json"]), out.code == 0,
+              let m = try? JSONDecoder().decode(LocalModels.self, from: Data(out.stdout.utf8)) else { return }
+        localModels = m
+    }
+
+    /// The local model that answers flagged requests in local mode.
+    func setLocalModel(_ name: String) async {
+        await act { try await self.check(["guard", "local", "--model", name]) }
+        await loadLocalModels()
+    }
+
     /// Turn a check off and delete its model.
     func removeCheck(_ check: String) async {
         await act { try await self.check(["guard", "remove", check]) }
@@ -648,7 +669,9 @@ final class Engine {
                                        commands: .init(mode: "warn", rules: ["a download run as a script", "decoded text run as a script",
                                                                              "deleting your home folder or the system", "erasing a disk",
                                                                              "a fork bomb", "credential files sent over the network",
-                                                                             "environment variables sent over the network"])))
+                                                                             "environment variables sent over the network"]),
+                                       local: .init(url: "http://localhost:11434", model: "qwen3:8b")))
+        e.localModels = .init(url: "http://localhost:11434", model: "qwen3:8b", models: ["gemma3:12b", "qwen3:8b"])
         e.serviceStatus = .enabled
         if around {
             e.status?.protect = .init(settings: "~/.claude/settings.json", on: false, baseUrl: "http://127.0.0.1:3425")

@@ -158,14 +158,15 @@ def flows(events, since: float) -> dict:
     """Totals for the app's flow diagram over events newer than `since`: requests from each
     client through keepmum's result to each provider, and replies back through restore.
 
-    The optional checks have two results of their own: "refused" (block mode: never sent) and
-    "flagged" (warn mode: sent, then a check flagged it). A warning is an event of its own, after
+    The optional checks have three results of their own: "refused" (block mode: never sent),
+    "local" (local mode: answered by the local model, never sent) and "flagged" (warn mode: sent,
+    then a check flagged it). A warning is an event of its own, after
     the request's: it moves its request out of masked, clean or observed into flagged, once per
     request, and only when that request is counted (a check may finish before a streamed reply).
     `checks` counts each result's requests by check (injection, harm)."""
     out, back = Counter(), Counter()
     values, unresolved = Counter(), 0
-    checks = {"flagged": Counter(), "refused": Counter()}
+    checks = {"flagged": Counter(), "refused": Counter(), "local": Counter()}
     warned: dict[str, dict] = {}  # request id (or the event's own place) -> its warnings
     for i, e in enumerate(events):
         if e.get("ts", 0) < since:
@@ -184,6 +185,10 @@ def flows(events, since: float) -> dict:
             out[(client, None, "failed")] += 1
             continue
         kind = event_kind(e)
+        if kind == "local":  # answered by the local model (local.py): it never left this Mac
+            out[(client, None, "local")] += 1
+            checks["local"].update({g.get("check", "injection") for g in e.get("guard") or []})
+            continue
         if kind == "blocked":
             if e.get("guard"):
                 out[(client, None, "refused")] += 1
@@ -231,6 +236,8 @@ def event_kind(e: dict) -> str:
     sent), masked (new sensitive text) or clean."""
     if e.get("outcome") == "flagged":
         return "flagged"
+    if e.get("outcome") == "local":
+        return "local"
     if e.get("outcome") in ("blocked", "rejected"):
         return "blocked"
     if e.get("outcome") == "observed":

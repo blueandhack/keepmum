@@ -443,7 +443,22 @@ CHECKS = ("injection", "harm")
 _COMMANDS_TEXT = {"off": "off", "warn": "warn (a flagged command is logged, then run as the agent decides)",
                   "block": "block (a flagged command is replaced by one that says why and fails)"}
 _MODE_TEXT = {"off": "off", "warn": "warn (flagged requests are logged, then sent)",
-              "block": "block (flagged requests are refused)"}
+              "block": "block (flagged requests are refused)",
+              "local": "local (flagged requests are answered by your local model, never sent)"}
+
+
+def _local_missing(cfg) -> str | None:
+    """Why local mode cannot work yet, or None: no model set, or the local server lacks it."""
+    from .local import models
+
+    if not cfg.guard_local_model:
+        return "no local model is set: run `keepmum guard local --model <name>` first (`keepmum guard local` lists them)"
+    have = models(cfg.guard_local_url)
+    if have is None:
+        return f"nothing answers at {cfg.guard_local_url}: start Ollama (`ollama serve`, or open the Ollama app)"
+    if cfg.guard_local_model not in have:
+        return f"{cfg.guard_local_url} has no model {cfg.guard_local_model}: `ollama pull {cfg.guard_local_model}`"
+    return None
 
 
 def _guard_status() -> dict:
@@ -458,6 +473,7 @@ def _guard_status() -> dict:
                       "server": server, "model": f"{guard.REPO}@{guard.REVISION}", "source": f"{guard.SOURCE}@{guard.RELEASE}",
                       "licence": guard.LICENCE, "threshold": guard.THRESHOLD},
         "commands": {"mode": cfg.guard_commands, "rules": [label for _, label, _ in RULES + SENDS]},
+        "local": {"url": cfg.guard_local_url, "model": cfg.guard_local_model},
         "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
                  "installed": {size: harm.installed(size) for size in harm.SIZES},
                  "server": server, "licence": harm.LICENCE,
@@ -506,6 +522,8 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
                + ("" if hm["installed"][hm["model"]] else f", not downloaded (`keepmum guard setup harm --model {hm['model']}`)")
                + (f"; downloaded: {', '.join(have)}" if have else ""))
     typer.echo(f"runtime (both): {hm['server'] or 'llama-server not found (brew install llama.cpp)'}")
+    if "local" in (inj["mode"], hm["mode"]) or st["local"]["model"]:
+        typer.echo(f"local model (for local mode): {st['local']['model'] or 'not set'} at {st['local']['url']}")
     cm = st["commands"]
     typer.echo(f"commands: {_COMMANDS_TEXT[cm['mode']]}")
     typer.echo(f"  rules ({len(cm['rules'])}, no model): {', '.join(cm['rules'])}")
@@ -575,12 +593,16 @@ def _set_mode(check: str, mode: str, model: str | None = None) -> None:
     from . import harm
     from .config import ConfigError
 
-    if mode not in ("off", "warn", "block"):
-        typer.echo(f"keepmum guard {check}: use warn, block or off", err=True)
+    modes = ("off", "warn", "block") if check == "commands" else ("off", "warn", "block", "local")
+    if mode not in modes:
+        typer.echo(f"keepmum guard {check}: use {', '.join(modes[1:])} or off", err=True)
         raise typer.Exit(2)
     cfg = _config()
     size = model or cfg.guard_harm_model
     if mode != "off" and (why := _missing(check, size)):
+        typer.echo(f"keepmum guard {check}: {why}", err=True)
+        raise typer.Exit(2)
+    if mode == "local" and (why := _local_missing(cfg)):
         typer.echo(f"keepmum guard {check}: {why}", err=True)
         raise typer.Exit(2)
     try:
@@ -599,9 +621,46 @@ def _set_mode(check: str, mode: str, model: str | None = None) -> None:
 
 
 @guard_app.command("injection")
-def guard_injection(mode: str = typer.Argument(..., help="warn, block or off")) -> None:
+def guard_injection(mode: str = typer.Argument(..., help="warn, block, local or off")) -> None:
     """Check what tools return (web pages, files, MCP replies) for planted instructions."""
     _set_mode("injection", mode)
+
+
+@guard_app.command("local")
+def guard_local(model: str = typer.Option(None, "--model", help="The local model that answers flagged requests."),
+                url: str = typer.Option(None, "--url", help="The local server (default http://localhost:11434, Ollama)."),
+                as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """The local model that local mode sends flagged requests to: show it and the models there, or set it."""
+    import json
+
+    from .config import ConfigError
+    from .local import models
+
+    cfg = _config()
+    try:
+        if url and url != cfg.guard_local_url:
+            _update_config(cfg.path, "guard", "local_url", url, f"keepmum guard local --url {url}")
+        if model is not None and model != cfg.guard_local_model:
+            _update_config(cfg.path, "guard", "local_model", model, f"keepmum guard local --model {model}")
+    except (ConfigError, OSError) as e:
+        typer.echo(f"keepmum guard local: {e}", err=True)
+        raise typer.Exit(1)
+    cfg = _config()
+    have = models(cfg.guard_local_url)
+    if as_json:
+        typer.echo(json.dumps({"url": cfg.guard_local_url, "model": cfg.guard_local_model, "models": have}))
+        return
+    typer.echo(f"local model: {cfg.guard_local_model or 'not set'} at {cfg.guard_local_url}")
+    if have is None:
+        typer.echo("  nothing answers there: start Ollama (`ollama serve`, or open the Ollama app)")
+    elif not have:
+        typer.echo("  no models there yet: `ollama pull qwen3:8b`, for example")
+    else:
+        typer.echo("  models there: " + ", ".join(have))
+        if cfg.guard_local_model and cfg.guard_local_model not in have:
+            typer.echo(f"  {cfg.guard_local_model} is not one of them: `ollama pull {cfg.guard_local_model}`")
+    if model is not None or url:
+        typer.echo("Running proxies switch on their next request.", err=True)
 
 
 @guard_app.command("commands")
@@ -611,7 +670,7 @@ def guard_commands(mode: str = typer.Argument(..., help="warn, block or off")) -
 
 
 @guard_app.command("harm")
-def guard_harm(mode: str = typer.Argument(..., help="warn, block or off"),
+def guard_harm(mode: str = typer.Argument(..., help="warn, block, local or off"),
                model: str = typer.Option(None, "--model", help="small, 0.6b or 4b (default: the current one).")) -> None:
     """Check what you type for requests a policy may not allow."""
     from . import harm

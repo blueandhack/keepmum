@@ -10,12 +10,14 @@ struct ChecksSection: View {
 
     private var checks: Engine.Checks? { engine.status?.guard }
     private let modes = [("off", "Off"), ("warn", "Warn"), ("block", "Block")]
+    /// Injection and harm can also send a flagged request to the local model instead (local.py).
+    private let modesWithLocal = [("off", "Off"), ("warn", "Warn"), ("block", "Block"), ("local", "Local")]
     /// This Mac's memory, for the 4B's warning.
     private var memoryGB: Double { Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824 }
 
     var body: some View {
         FormSection(title: "Checks",
-                    footer: "Optional, and off until you turn one on. Warn sends a request at once and checks it afterwards, so it adds no delay; Block checks first and refuses what it flags, and every retry of it. Risky commands reads the model's replies instead: Block hands the agent a refusal in place of the command. A hit keeps the check, the score and the length, never the text: see Logs and Activity. None of them replaces masking.") {
+                    footer: "Optional, and off until you turn one on. Warn sends a request at once and checks it afterwards, so it adds no delay; Block checks first and refuses what it flags, and every retry of it. Local checks first, like Block, and sends what it flags to your local model instead of the cloud. Risky commands reads the model's replies instead: Block hands the agent a refusal in place of the command. A hit keeps the check, the score and the length, never the text: see Logs and Activity. None of them replaces masking.") {
             if let checks {
                 injection(checks.injection)
                 Hairline()
@@ -23,6 +25,10 @@ struct ChecksSection: View {
                 if let commands = checks.commands {
                     Hairline()
                     self.commands(commands)
+                }
+                if let local = checks.local {
+                    Hairline()
+                    localModel(local, used: [checks.injection.mode, checks.harm.mode].contains("local"))
                 }
             } else {
                 FormRow(title: "Not available", detail: engine.isBundled ? "This engine has no optional checks" : "Needs the bundled engine") { EmptyView() }
@@ -47,7 +53,7 @@ struct ChecksSection: View {
                 detail: c.installed ? injectionDetail(c.mode) : "Checks what tools return (web pages, files, MCP replies) for instructions planted for the agent",
                 detailTone: c.mode == "off" ? Theme.textSecondary : Theme.text) {
             if c.installed {
-                modePicker(c.mode) { await engine.setCheck("injection", mode: $0) }
+                modePicker(c.mode, options: modesWithLocal) { await engine.setCheck("injection", mode: $0) }
             } else if engine.checkDownload?.what == "injection" {
                 progress(engine.checkDownload?.progress ?? 0)
             } else {
@@ -64,6 +70,7 @@ struct ChecksSection: View {
 
     private func injectionDetail(_ mode: String) -> String {
         switch mode {
+        case "local": "Tool results are checked before each request is sent; one with a likely injection is answered by your local model instead"
         case "warn": "Tool results are checked after each request is sent; a likely injection is logged"
         case "block": "Requests carrying a likely injection in a tool result are refused"
         default: "Off: tool results are not checked"
@@ -79,7 +86,7 @@ struct ChecksSection: View {
                 detail: have ? harmDetail(c.mode) : "Checks what you type, without what agents add to your turn, for requests a policy may not allow",
                 detailTone: c.mode == "off" ? Theme.textSecondary : Theme.text) {
             if have {
-                modePicker(c.mode) { await engine.setCheck("harm", mode: $0) }
+                modePicker(c.mode, options: modesWithLocal) { await engine.setCheck("harm", mode: $0) }
             } else if downloading {
                 progress(engine.checkDownload?.progress ?? 0)
             } else {
@@ -116,6 +123,36 @@ struct ChecksSection: View {
         }
     }
 
+    // MARK: Local model
+
+    /// The model local mode sends a flagged request to: a menu of what Ollama has.
+    @ViewBuilder private func localModel(_ c: Engine.Checks.Local, used: Bool) -> some View {
+        let have = engine.localModels?.models
+        FormRow(title: "Local model", detail: localDetail(c, have: have, used: used),
+                detailTone: used && (c.model.isEmpty || !(have ?? []).contains(c.model)) ? Theme.warning : Theme.textSecondary) {
+            if let have, !have.isEmpty, !isSnapshot {
+                Menu(c.model.isEmpty ? "Choose…" : c.model) {
+                    ForEach(have, id: \.self) { name in
+                        Button(name) { Task { await engine.setLocalModel(name) } }
+                    }
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                .disabled(!engine.isBundled || engine.busy)
+            } else if isSnapshot {
+                Text(c.model.isEmpty ? "Choose…" : c.model).font(.km(.callout)).foregroundStyle(Theme.text)
+            }
+        }
+        .task(id: c.url + c.model) { await engine.loadLocalModels() }
+    }
+
+    private func localDetail(_ c: Engine.Checks.Local, have: [String]?, used: Bool) -> String {
+        let what = "For Local mode: a flagged request is answered by this model on your Mac, without tools, instead of being sent."
+        guard let have else { return "Ollama does not answer at \(c.url): open the Ollama app or run ollama serve. " + what }
+        if have.isEmpty { return "No models in Ollama yet: ollama pull qwen3:8b, for example. " + what }
+        if !c.model.isEmpty && !have.contains(c.model) { return "Ollama has no \(c.model): ollama pull \(c.model). " + what }
+        return what + " Use a capable model (8B or larger): a small one may repeat a planted instruction as advice."
+    }
+
     // MARK: Commands
 
     @ViewBuilder private func commands(_ c: Engine.Checks.Commands) -> some View {
@@ -135,6 +172,7 @@ struct ChecksSection: View {
 
     private func harmDetail(_ mode: String) -> String {
         switch mode {
+        case "local": "What you type is checked before each request is sent; a flagged request is answered by your local model instead"
         case "warn": "What you type is checked after each request is sent; a flagged request is logged"
         case "block": "Requests whose typed text the model flags are refused, with its categories"
         default: "Off: what you type is not checked"
@@ -154,12 +192,13 @@ struct ChecksSection: View {
 
     // MARK: Pieces
 
-    private func modePicker(_ mode: String, set: @escaping (String) async -> Void) -> some View {
-        Group {
+    private func modePicker(_ mode: String, options: [(String, String)]? = nil, set: @escaping (String) async -> Void) -> some View {
+        let options = options ?? modes
+        return Group {
             if isSnapshot {
-                Segmented(options: modes, selection: .constant(mode))
+                Segmented(options: options, selection: .constant(mode))
             } else {
-                Segmented(options: modes, selection: Binding(get: { mode }, set: { new in
+                Segmented(options: options, selection: Binding(get: { mode }, set: { new in
                     if new != mode { Task { await set(new) } }
                 }))
             }

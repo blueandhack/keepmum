@@ -99,7 +99,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
                   stats=Stats(history=history), stats_token=stats_token(), info=info, observe=observe,
                   previews=lambda: observe.config.log_previews,
                   context=lambda: observe.config.log_context, audit=audit, tools=ToolRegistry(), guards=[injection, harm],
-                  commands=CommandsCheck(lambda: observe.config.guard_commands))
+                  commands=CommandsCheck(lambda: observe.config.guard_commands),
+                  local=lambda: (observe.config.guard_local_url, observe.config.guard_local_model))
     proxy.gateways = {**cfg.gateways, **(gateways or {})}
     proxy.destinations = cfg.destinations
     switch = ModelSwitch(pipeline, proxy._scan_lock)

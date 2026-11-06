@@ -272,7 +272,8 @@ _SETTINGS = {
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
 _ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model", "commands"}
-_GUARD_RANK = {"off": 0, "warn": 1, "block": 2}
+# Local is below block: a flagged request is answered (on this Mac) rather than refused.
+_GUARD_RANK = {"off": 0, "warn": 1, "local": 2, "block": 3}
 
 
 def config_changes(old: dict, new: dict) -> list[dict]:
@@ -479,8 +480,9 @@ def summary(entry: dict) -> str:
         else:
             what = "possible prompt injection in " + ", ".join(
                 f"{h.get('source') or h.get('tool') or 'a tool'} ({h.get('score', 0):.2f})" for h in hits)
+        done = {"blocked": "request not sent", "local": "answered by the local model, not sent"}
         return (f"{entry.get('client', '?')} -> {entry.get('provider', '?')}; {what}; "
-                + ("request not sent" if entry.get("action") == "blocked" else "sent with a warning"))
+                + done.get(entry.get("action"), "sent with a warning"))
     if e == "guard-model":
         return f"guard model {entry.get('action')}: {entry.get('model')} ({entry.get('licence')})"
     return e or "?"

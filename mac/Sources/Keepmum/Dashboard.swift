@@ -240,6 +240,7 @@ struct ActivityPage: View {
         case .blocked: "Never sent: scanning failed, the endpoint is not scanned, or a check refused it"
         case .flagged: "What the optional checks flagged: sent with a warning, or refused (Settings › Checks)"
         case .observed: "Observe mode: sent unmasked, only counted"
+        case .local: "Answered by your local model because a check flagged them: never sent (Settings › Checks)"
         case nil: "Kept across restarts in ~/.config/keepmum/history.jsonl"
         }
     }

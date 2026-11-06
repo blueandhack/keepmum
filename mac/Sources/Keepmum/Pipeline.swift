@@ -161,7 +161,7 @@ private struct FlowBands {
 
     /// What keepmum did with each request: sent (clean, masked, observed, flagged by a check) or not
     /// (failed upstream, blocked by keepmum, refused by a check).
-    static let results = ["clean", "masked", "observed", "flagged", "failed", "blocked", "refused"]
+    static let results = ["clean", "masked", "observed", "flagged", "failed", "blocked", "refused", "local"]
 
     init(flows: Flows, size: CGSize) {
         self.flows = flows
@@ -237,6 +237,7 @@ private struct FlowBands {
         case "masked": Theme.masked
         case "observed", "flagged": Theme.warning
         case "blocked", "refused": Theme.blocked
+        case "local": Theme.restored
         case "failed": Theme.textSecondary
         default: Theme.neutral
         }
@@ -330,7 +331,9 @@ private struct FlowBands {
         let key = String(id.dropFirst(2))
         if id.hasPrefix("c:") { return flows.clients.first { $0.id == key }?.name ?? key }
         if id.hasPrefix("p:") { return flows.providers.first { $0.id == key }?.name ?? key }
-        if id.hasPrefix("r:") { return key == "refused" ? "Refused by a check" : key.prefix(1).uppercased() + key.dropFirst() }
+        if id.hasPrefix("r:") {
+            return ["refused": "Refused by a check", "local": "Answered on this Mac"][key] ?? key.prefix(1).uppercased() + key.dropFirst()
+        }
         return ["keepmum": "keepmum", "restored": "Real values put back", "plain": "Nothing to put back"][id] ?? id
     }
 
@@ -417,12 +420,12 @@ private struct FlowBands {
         }
         let detail = ["clean": "sent as is", "masked": "as placeholders", "observed": "sent unmasked", "failed": "upstream failed",
                       "blocked": "never sent", "flagged": byCheck("flagged", "sent with a warning"),
-                      "refused": byCheck("refused", "never sent")]
+                      "refused": byCheck("refused", "never sent"), "local": byCheck("local", "by your local model")]
         // Results that are usually thin take one line each, so four of them fit below the others.
-        let oneLine: Set = ["flagged", "failed", "blocked", "refused"]
+        let oneLine: Set = ["flagged", "failed", "blocked", "refused", "local"]
         let title = ["clean": "Clean", "masked": "Masked", "observed": "Observed", "failed": "Failed", "blocked": "Blocked",
-                     "flagged": "Flagged", "refused": "Refused by a check"]
-        let tint: [String: Color] = ["masked": Theme.masked, "blocked": Theme.blocked, "refused": Theme.blocked,
+                     "flagged": "Flagged", "refused": "Refused by a check", "local": "Answered on this Mac"]
+        let tint: [String: Color] = ["masked": Theme.masked, "blocked": Theme.blocked, "refused": Theme.blocked, "local": Theme.restored,
                                      "observed": Self.resultColor("observed"), "flagged": Self.resultColor("flagged")]
         for r in Self.results {
             guard let n = out.nodes["r:" + r] else { continue }
@@ -487,7 +490,7 @@ private struct FlowBands {
             guard age >= 0, age < FlowGeometry.lifetime else { continue }
             let (layout, route): (BandLayout, [(String, String)]) = switch pulse.kind {
             case .out(let r):
-                (out, [("c:" + pulse.client, "keepmum"), ("keepmum", "r:" + r)] + (["blocked", "refused", "failed"].contains(r) ? [] : [("r:" + r, "p:" + pulse.provider)]))
+                (out, [("c:" + pulse.client, "keepmum"), ("keepmum", "r:" + r)] + (["blocked", "refused", "failed", "local"].contains(r) ? [] : [("r:" + r, "p:" + pulse.provider)]))
             case .back(let restored):
                 (back, [("p:" + pulse.provider, restored ? "restored" : "plain"), (restored ? "restored" : "plain", "c:" + pulse.client)])
             }
