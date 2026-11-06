@@ -107,6 +107,6 @@ fi
 if [ -z "${SKIP_NOTARIZE:-}" ]; then
   sed -i '' -E "s|releases/download/v[^/\"]+/Keepmum-[^/\"]+\.dmg|releases/download/v$VERSION/Keepmum-$VERSION.dmg|g" "$ROOT/site/index.html"
 fi
-echo "next: git tag v$VERSION && git push origin v$VERSION, then gh release create (see mac/README.md),"
+echo "next: git tag -s v$VERSION -m \"keepmum $VERSION\" && git push origin v$VERSION, then gh release create (see mac/README.md),"
 echo "      then commit and push mac/appcast.xml and site/index.html: installed apps see the update,"
 echo "      and keepmum.app links to the new DMG, once they are on main"
