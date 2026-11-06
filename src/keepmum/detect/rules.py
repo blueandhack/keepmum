@@ -63,6 +63,28 @@ class Allowlist:
         return [s for s in spans if not self.allows(text[s.start : s.end])]
 
 
+# File names and paths: what an agent's tools list and read all day. The entropy check and the model
+# take some for secrets (bench/results/PHASE0, guard-20261104-231405.md); a key has no extension.
+FILE_EXT = ("md|markdown|mdx|txt|rst|adoc|org|json|jsonl|ndjson|toml|ya?ml|ini|cfg|conf|lock|csv|tsv|xml|plist|"
+            "py|pyi|ipynb|swift|mm?|h|hh|hpp|c|cc|cpp|rs|go|java|kt|kts|scala|rb|php|cs|lua|dart|ex|exs|"
+            "js|mjs|cjs|jsx|ts|mts|cts|tsx|vue|svelte|astro|html?|css|scss|sass|less|sh|bash|zsh|fish|ps1|sql|"
+            "svg|png|jpe?g|gif|webp|ico|icns|pdf|gguf|safetensors|onnx|dmg|pkg|zip|tar|gz|tgz|bz2|xz|whl|"
+            "log|patch|diff|tmpl|j2|proto|graphql|tf|hcl|gradle|cmake|mk|dockerfile|storyboard|xib|xcconfig")
+_FILE = re.compile(rf"(?:[\w.~@+-]*/)*[\w.@+-]*[A-Za-z0-9]\.(?:{FILE_EXT})", re.I)
+_EXT_AFTER = re.compile(rf"\.(?:{FILE_EXT})(?![\w])", re.I)
+_ESCAPES_AT_END = re.compile(r'(?:\\[nrt"\\/])+$')
+# Detectors that guess at secrets from a string's look, not from a token's known format.
+GUESSES = frozenset({"rules:entropy", "pf-serve"})
+
+
+def is_file_name(text: str, start: int, end: int) -> bool:
+    """text[start:end] is a file name or path: it ends in a known extension, or one follows it."""
+    value = _ESCAPES_AT_END.sub("", text[start:end])  # a path in JSON text: notes/plan.md\\n
+    if m := _EXT_AFTER.match(text, end):
+        value += m.group()
+    return bool(_FILE.fullmatch(value))
+
+
 def shannon_entropy(value: str) -> float:
     n = len(value)
     if n == 0:

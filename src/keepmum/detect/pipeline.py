@@ -102,6 +102,14 @@ class Pipeline:
                      and (t.type == "SECRET" or t.source.startswith("user:") or self.keep_pii(text, t))]
         if not self.pii:  # your own rules apply whatever their type
             spans = [s for s in spans if s.type == "SECRET" or s.source.startswith("user:")]
+        # A file name or path that only a guess (entropy, the model) took for a secret is not one:
+        # a token rule that knows the format still masks a key, wherever it is.
+        from .rules import GUESSES, is_file_name
+
+        # The model also calls some dated file names an EMAIL: without an @, nothing is one.
+        spans = [s for s in spans if not (s.source in GUESSES and (
+            s.type == "SECRET" and is_file_name(text, s.start, s.end)
+            or s.type == "EMAIL" and "@" not in text[s.start:s.end]))]
         refined = len(spans)
         # Counted per value, after overlapping hits merge: three rules on one token are one secret.
         for s in merge(spans):
@@ -154,6 +162,10 @@ class Pipeline:
         detector that found it is turned off ([rules] off, or the model) or was your own rule and is gone."""
         if self.allowlist and self.allowlist.allows(value):
             return True
+        from .rules import GUESSES, is_file_name
+
+        if kind == "SECRET" and sources and set(sources) <= GUESSES | {"known"} and is_file_name(value, 0, len(value)):
+            return True  # a file name masked before keepmum knew better
         mine = {f"user:{r.id}" for r in self.rules.user_rules} if self.rules else set()
         if not self.pii and kind != "SECRET" and not any(x in mine for x in sources):
             return True

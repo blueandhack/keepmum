@@ -224,3 +224,42 @@ def test_claude_product_names_are_not_people(rules, text, name):
     a = text.index(name)
     pf = _FakePF([Span(a, a + len(name), "PERSON", 0.9, "pf")])
     assert Pipeline(rules, pf, pii=True).detect(text) == []
+
+
+# --- File names are not secrets ------------------------------------------------------------------
+
+def test_file_names_the_entropy_check_or_the_model_took_for_secrets_are_not_masked(rules):
+    names = ["bench/results/PHASE0", "bench/results/guard-20261104-231405.md", "docs/Zq7Xw2Lm9Pk4Rt6Vb1Nc8.json"]
+    text = f"Read {names[0]}.md, then {names[1]}, and {names[2]}.\n"
+    # What the model flagged in a real session: dated report names, as SECRET.
+    pf = _FakePF([Span(text.index(n), text.index(n) + len(n), "SECRET", 0.9, "pf-serve") for n in names])
+    assert Pipeline(rules, pf, pii=False).detect(text) == []
+
+
+def test_a_key_is_still_masked_next_to_a_file_name_or_inside_one(rules):
+    key = "ghp_" + "Zq7Xw2Lm9Pk4Rt6Vb1Nc8Hd3Jf5Gs0Ya2Ue7"
+    loose = "Xq3k9ZpL2mN8vB4cR7tY1wE5aQ"
+    text = f"token {key}.md and {loose} in notes/plan.md\n"
+    pf = _FakePF([Span(text.index(loose), text.index(loose) + len(loose), "SECRET", 0.9, "pf-serve")])
+    got = values(text, Pipeline(rules, pf, pii=False).detect(text))
+    assert key in got  # a token rule knows the format: masked even as a file name
+    assert loose in got  # no extension of its own: still a secret
+
+
+def test_a_file_name_masked_earlier_is_let_through_now(rules):
+    p = Pipeline(rules, None, pii=False)
+    assert p.lets_through("bench/results/guard-20261104-231405.md", frozenset({"pf-serve"}))
+    assert not p.lets_through("bench/results/guard-20261104-231405.md", frozenset({"rules:github-token"}))
+    assert not p.lets_through("Xq3k9ZpL2mN8vB4cR7tY1wE5aQ", frozenset({"rules:entropy"}))
+
+
+def test_a_path_in_json_text_and_an_email_without_an_at_are_not_masked(rules):
+    text = r'{"file_path": "notes/plan.md\n", "out": "bench/guard-20261104-231405.md"}'
+    path = text.index("notes")
+    dated = text.index("bench")
+    pf = _FakePF([Span(path, text.index('", "out"'), "SECRET", 0.9, "pf-serve"),
+                  Span(dated, dated + len("bench/guard-20261104-231405.md"), "EMAIL", 0.9, "pf-serve")])
+    assert Pipeline(rules, pf, pii=True).detect(text) == []
+    mail = "write to ana@keepmum.app"
+    pf = _FakePF([Span(9, len(mail), "EMAIL", 0.9, "pf-serve")])
+    assert values(mail, Pipeline(rules, pf, pii=True).detect(mail)) == ["ana@keepmum.app"]
