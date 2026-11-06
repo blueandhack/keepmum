@@ -375,3 +375,18 @@ def test_the_audit_log_records_servers_added_and_reordered():
     moved = config_changes({"local_servers": a}, {"local_servers": a[::-1]})
     assert moved == [{"setting": "guard.local_servers", "from": a, "to": a[::-1], "weakens": False}]
     assert config_changes({}, {"local_servers": a}) == []  # a log from before local_servers
+
+
+def test_the_logs_page_learns_how_each_hit_ended():
+    servers = [Server("http://localhost:1111", "a"), Server("http://localhost:2222", "b")]
+    _, _, proxy = run("local", [conversation(ATTACK)], servers=servers, local={1111: refused})
+    hit = proxy.stats.guard_hits[-1]
+    assert hit["action"] == "local" and hit["mode"] == "local" and hit["path"] == "/v1/messages"
+    assert hit["threshold"] == guard.THRESHOLD and hit["source"] == "WebFetch" and "text" not in hit
+    assert hit["answered_by"] == {"model": "b", "url": "http://localhost:2222", "api": "native",
+                                  "passed_over": ["http://localhost:1111 did not answer (ConnectError)"]}
+    _, _, proxy = run("local", [conversation(ATTACK)], local_up=False)
+    assert proxy.stats.guard_hits[-1]["local_error"].startswith("no local server answered: http://localhost:11434")
+    _, _, proxy = run("block", [conversation(ATTACK)])
+    hit = proxy.stats.guard_hits[-1]
+    assert hit["action"] == "blocked" and hit["mode"] == "block" and "answered_by" not in hit

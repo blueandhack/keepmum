@@ -181,8 +181,9 @@ struct ChecksCard: View {
     var body: some View {
         let s = store.snapshot
         let hits = s.guardHits.sorted { $0.ts > $1.ts }
+        let r = s.guard?.requests ?? [:]
         Card(title: "Checks", subtitle: hits.isEmpty ? "Nothing flagged since keepmum started"
-                 : "\(hits.count) flagged: \(s.guard?.requests["blocked"] ?? 0) refused, \(s.guard?.requests["warned"] ?? 0) sent with a warning") {
+                 : "\(hits.count) flagged: \(r["blocked"] ?? 0) stopped, \(r["local"] ?? 0) answered on this Mac, \(r["warned"] ?? 0) sent with a warning. Click one for details.") {
             VStack(spacing: 0) {
                 ColumnHeader {
                     Text("Time").frame(width: 70, alignment: .leading)
@@ -206,8 +207,10 @@ struct ChecksCard: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
+    @State private var selected: String?
+
     private func row(_ h: Snapshot.GuardHit) -> some View {
-        TableRow {
+        CheckRow(hit: h, selected: Binding(get: { selected == h.id }, set: { selected = $0 ? h.id : nil })) {
             Text(h.date, format: .dateTime.hour().minute().second())
                 .font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary).frame(width: 70, alignment: .leading)
             HStack(spacing: Space.s - Space.xxs) {
@@ -216,27 +219,217 @@ struct ChecksCard: View {
             }
             .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 92, alignment: .leading)
             HStack(spacing: Space.s - Space.xxs) {
-                Image(systemName: h.check == "harm" ? "exclamationmark.bubble" : h.check == "commands" ? "terminal" : "syringe")
-                    .font(.km(.caption)).foregroundStyle(Theme.textSecondary).frame(width: 14)
-                Text(h.check == "harm" ? "Harm" : h.check == "commands" ? "Command" : "Injection")
+                Image(systemName: h.checkIcon).font(.km(.caption)).foregroundStyle(Theme.textSecondary).frame(width: 14)
+                Text(h.checkName)
             }
             .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 100, alignment: .leading)
-            Text(h.check == "harm" ? "What was typed" + ((h.categories ?? []).isEmpty ? "" : ": \((h.categories ?? []).joined(separator: ", "))")
-                 : h.check == "commands" ? "\(h.source ?? "Shell") command: \((h.categories ?? []).joined(separator: ", "))"
-                 : "\(toolLabel(h.source ?? "a tool")) result" + (h.earlier == true ? " (flagged before)" : ""))
-                .font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+            Text(h.flagged).font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(String(format: "%.2f", h.score)).font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
-                .frame(width: 50, alignment: .trailing)
-            Text("\(h.chars)").font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
+            Text(h.check == "commands" ? "—" : String(format: "%.2f", h.score)).font(.km(.callout)).monospacedDigit()
+                .foregroundStyle(Theme.textSecondary).frame(width: 50, alignment: .trailing)
+                .help(h.check == "commands" ? "A rule matched: rules have no score" : "")
+            Text(h.chars.formatted()).font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
                 .frame(width: 60, alignment: .trailing)
-            HStack(spacing: Space.xs + 1) {
-                Image(systemName: h.action == "blocked" ? "hand.raised.fill" : "flag.fill").font(.km(.caption))
-                Text(h.action == "blocked" ? "Refused" : "Warned")
+            CheckOutcome(hit: h).frame(width: 80, alignment: .leading).padding(.leading, Space.s)
+        }
+    }
+}
+
+extension Snapshot.GuardHit {
+    var checkName: String { check == "harm" ? "Harm" : check == "commands" ? "Command" : "Injection" }
+    var checkTitle: String { check == "harm" ? "Harmful request" : check == "commands" ? "Risky command" : "Prompt injection" }
+    var checkIcon: String { check == "harm" ? "exclamationmark.bubble" : check == "commands" ? "terminal" : "syringe" }
+    var cats: [String] { categories ?? [] }
+
+    /// Where it was flagged, short, for the row.
+    var flagged: String {
+        switch check {
+        case "harm": "What was typed" + (cats.isEmpty ? "" : ": \(cats.joined(separator: ", "))")
+        case "commands": "\(source ?? "Shell") command: \(cats.joined(separator: ", "))"
+        default: "\(toolLabel(source ?? "a tool")) result" + (earlier == true ? " (flagged before)" : "")
+        }
+    }
+
+    /// The outcome in a word, its icon and tone.
+    var outcome: (String, String, Color) {
+        switch action {
+        case "blocked" where check == "commands": ("Replaced", "hand.raised.fill", Theme.blocked)
+        case "blocked": ("Refused", "hand.raised.fill", Theme.blocked)
+        case "local" where localError != nil: ("Refused", "hand.raised.fill", Theme.blocked)
+        case "local": ("Local", "desktopcomputer", Theme.restored)
+        default: ("Warned", "flag.fill", Theme.warning)
+        }
+    }
+
+    var providerName: String {
+        switch provider ?? "anthropic" {
+        case "anthropic": "Anthropic"
+        case "openai": "OpenAI"
+        case "google": "Google"
+        case let other: other
+        }
+    }
+
+    /// What keepmum did, in a sentence or two.
+    var whatHappened: String {
+        let agent = agentName(client)
+        switch (check, action) {
+        case ("commands", "blocked"):
+            return "\(agent) got a command that prints why it was stopped and fails, in place of this one. The command never ran."
+        case ("commands", _):
+            return "The reply went to \(agent) unchanged: the command ran only if \(agent) or you approved it. Check what it did."
+        case (_, "blocked"):
+            return "The request was refused before it left this Mac: \(providerName) received nothing, and \(agent) got an error saying why."
+        case (_, "local"):
+            if let e = localError {
+                return "The request was meant for a local model, but it was refused instead: \(e). \(providerName) received nothing."
             }
-            .font(.km(.callout)).foregroundStyle(h.action == "blocked" ? Theme.blocked : Theme.warning)
-            .frame(width: 80, alignment: .leading).padding(.leading, Space.s)
-            .help(h.action == "blocked" ? "Not sent" : "Sent; the check ran after it")
+            return "A model on this Mac answered instead of \(providerName), without tools; \(providerName) received nothing."
+        default:
+            return "The request was sent to \(providerName) at once and checked afterwards, so this was logged, not stopped."
+        }
+    }
+
+    /// What to do about it.
+    var advice: String {
+        switch (check, action) {
+        case ("commands", "blocked"):
+            return "If the command was what you wanted, run it yourself, or set Risky commands to Warn."
+        case ("commands", _):
+            return "To have such commands replaced before the agent gets them, set Risky commands to Block (Settings › Checks)."
+        case ("harm", "blocked"):
+            return "Rephrase the request, or rewind (or /clear). Harm in Warn mode would send such requests with a warning."
+        case ("harm", "local"):
+            return "Later requests that still carry this text go to the local model too, until you rewind or /clear."
+        case ("harm", _):
+            return "To refuse such requests instead, set Harmful requests to Block (Settings › Checks)."
+        case (_, "blocked"):
+            return "Every request that still carries this result is refused: rewind to before it, or /clear, to go on."
+        case (_, "local"):
+            return "Later requests that still carry this result stay on this Mac too, until you rewind to before it or /clear."
+        default:
+            return "If the agent acted on it, check what it did. Block refuses such requests; Local answers them on this Mac."
+        }
+    }
+}
+
+/// A check's outcome in the Logs table and details.
+struct CheckOutcome: View {
+    var hit: Snapshot.GuardHit
+
+    var body: some View {
+        let (label, icon, tone) = hit.outcome
+        HStack(spacing: Space.xs + 1) {
+            Image(systemName: icon).font(.km(.caption))
+            Text(label)
+        }
+        .font(.km(.callout)).foregroundStyle(tone)
+    }
+}
+
+/// A Checks row: hover to highlight, click for its details in a popover.
+private struct CheckRow<Cells: View>: View {
+    var hit: Snapshot.GuardHit
+    @Binding var selected: Bool
+    @ViewBuilder var cells: Cells
+    @State private var hovering = false
+
+    var body: some View {
+        Button { selected.toggle() } label: {
+            VStack(spacing: 0) {
+                HStack(spacing: Space.m) { cells }
+                    .padding(.vertical, Space.s - 1).padding(.horizontal, Space.xs)
+                    .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+                        .fill(selected ? Theme.accentSoft : hovering ? Theme.fill : .clear))
+                    .contentShape(Rectangle())
+                Hairline()
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .popover(isPresented: $selected, arrowEdge: .bottom) {
+            CheckDetail(hit: hit).frame(width: 460).background(Theme.canvas).presentationBackground(Theme.canvas)
+        }
+        .accessibilityHint("Shows what the check found and what keepmum did")
+    }
+}
+
+/// One check's hit in full: what it found and where, how sure, what keepmum did, and what to do.
+struct CheckDetail: View {
+    var hit: Snapshot.GuardHit
+
+    var body: some View {
+        let h = hit
+        VStack(alignment: .leading, spacing: Space.l) {
+            HStack(spacing: Space.s) {
+                Image(systemName: h.checkIcon).foregroundStyle(Theme.textSecondary)
+                Text(h.checkTitle).font(.km(.headline)).foregroundStyle(Theme.text)
+                Spacer()
+                CheckOutcome(hit: h)
+            }
+            Text(h.whatHappened).font(.km(.body)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Space.l, verticalSpacing: Space.s) {
+                field("Found in", found(h))
+                if !h.cats.isEmpty { field(h.check == "commands" ? "Rule" : "Categories", h.cats.joined(separator: ", ")) }
+                field("Score", score(h))
+                field("Length", "\(h.chars.formatted()) characters")
+                if let mode = h.mode { field("Mode", modeName(mode)) }
+                if let model = h.model { field(h.check == "commands" ? "Checked by" : "Model", model) }
+                field("Agent", agentName(h.client))
+                field(h.action == "warned" && h.check != "commands" ? "Sent to" : h.check == "commands" ? "Reply from" : "Meant for",
+                      h.providerName)
+                if let a = h.answeredBy {
+                    field("Answered by", "\(LocalServersSection.shortName(a.model)) at \(a.url.replacingOccurrences(of: "http://", with: ""))"
+                          + (a.api == "chat" ? ", as Chat Completions" : ""))
+                    if let skipped = a.passedOver, !skipped.isEmpty {
+                        field("Passed over", skipped.joined(separator: "\n"))
+                    }
+                }
+                if let path = h.path { field("Request", path, mono: true) }
+                field("Time", h.date.formatted(date: .abbreviated, time: .standard))
+            }
+            VStack(alignment: .leading, spacing: Space.xs) {
+                Text("What to do").eyebrow()
+                Text(h.advice).font(.km(.callout)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
+            }
+            Text("keepmum keeps the check, where, the score, the length and the categories, never the flagged text.")
+                .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(Space.l + Space.xs)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func found(_ h: Snapshot.GuardHit) -> String {
+        switch h.check {
+        case "harm": return "What you typed"
+        case "commands": return "A \(h.source ?? "shell") command in the model's reply"
+        default:
+            return "What \(toolLabel(h.source ?? "a tool")) returned"
+                + (h.earlier == true ? ", flagged on an earlier request and still in the conversation" : "")
+        }
+    }
+
+    private func score(_ h: Snapshot.GuardHit) -> String {
+        if h.check == "commands" { return "A rule matched" }
+        let s = String(format: "%.2f", h.score)
+        guard let t = h.threshold else { return s }
+        return "\(s), at or over the \(String(format: "%.2f", t)) threshold (1.00 is certain)"
+    }
+
+    private func modeName(_ mode: String) -> String {
+        switch mode {
+        case "warn": "Warn: send, then check"
+        case "block": "Block: check first, refuse what it flags"
+        case "local": "Local: check first, answer what it flags on this Mac"
+        default: mode.capitalized
+        }
+    }
+
+    private func field(_ key: String, _ value: String, mono: Bool = false) -> some View {
+        GridRow {
+            Text(key).font(.km(.callout)).foregroundStyle(Theme.textSecondary).gridColumnAlignment(.trailing)
+            Text(value).font(mono ? .km(.mono) : .km(.callout)).foregroundStyle(Theme.text).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

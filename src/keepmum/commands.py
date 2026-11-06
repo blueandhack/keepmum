@@ -105,6 +105,7 @@ class CommandsCheck:
     the hits it found, for the caller to record: [{check, source, score, chars, categories}]."""
 
     name = "commands"
+    label = "keepmum's command rules"
 
     def __init__(self, mode):
         self._mode = mode if callable(mode) else (lambda: mode)

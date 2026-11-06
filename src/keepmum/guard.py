@@ -205,6 +205,8 @@ class InjectionModel(Idle):
     idle; calls are serialized. `model` is the GGUF (default: the one `keepmum guard setup injection`
     downloaded)."""
 
+    label = f"Prompt Injection Guard Small {RELEASE}"
+
     def __init__(self, model: Path | None = None, server: Path | None = None):
         self.model, self.server = model, server
         self._lock = threading.Lock()

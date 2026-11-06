@@ -530,8 +530,8 @@ class Proxy:
         if not hits:
             return None
         if guard.mode == "local" and api in LOCAL_PATHS:
-            self._record_hits(guard, hits, "local", path, origin)
-            return LocalRoute(guard.name, hits)
+            entries = self._record_hits(guard, hits, "local", path, origin)
+            return LocalRoute(guard.name, hits, entries)
         self._record_hits(guard, hits, "blocked", path, origin)
         self._record(path, "blocked", 403, origin=origin, guard=guard_summary(hits, "blocked"))
         if guard.name == "harm":
@@ -556,6 +556,7 @@ class Proxy:
         servers = self.local(route.check) if callable(self.local) else []
         refused = guard_summary(route.hits, "blocked")
         if not servers:
+            self.stats.note_guard(route.entries, local_error="no local server is set for this check")
             self._record(path, "blocked", 403, origin=origin, guard=refused)
             return api_error(403, "permission_error", f"the {route.check} check flagged this request for a local model, "
                              "but none is set for it, so it was not sent. Add one with "
@@ -604,8 +605,11 @@ class Proxy:
                     self._chat_only.add((server.url, t.api))
                 if failures:
                     log.warning("%s: %s; answered by the next local server", path, "; ".join(failures))
+                self.stats.note_guard(route.entries, answered_by={"model": server.model, "url": server.url,
+                                                                  "api": way, "passed_over": failures})
                 return self._local_answer(resp, content, path, server, way, t.api, local_origin, route)
         log.error("%s: no local server answered (%s); not sent anywhere else", path, "; ".join(failures))
+        self.stats.note_guard(route.entries, local_error="no local server answered: " + "; ".join(failures))
         self._record(path, "blocked", 502, origin=origin, guard=refused)
         return api_error(502, "api_error", f"the {route.check} check sent this request to a local model, and none "
                          f"answered: {'; '.join(failures)}. It was not sent anywhere else.")
@@ -673,8 +677,9 @@ class Proxy:
         while self._background:
             await asyncio.gather(*list(self._background), return_exceptions=True)
 
-    def _record_hits(self, guard, hits: list[dict], action: str, path: str, origin) -> None:
-        """Log, count and audit hits: the check, source, score, length and categories, never the text."""
+    def _record_hits(self, guard, hits: list[dict], action: str, path: str, origin) -> list[dict]:
+        """Log, count and audit hits: the check, source, score, length and categories, never the text.
+        Returns the Logs page's entries for them."""
         for h in hits:
             cats = ", ".join(h.get("categories") or []) or "no category"
             what = (f"what the user typed ({cats})" if guard.name == "harm"
@@ -684,12 +689,17 @@ class Proxy:
                 if action == "blocked" else "sent to the local model instead" if action == "local" else "sent (warn)"
             log.warning("%s: %s check flagged %s (score %.2f, %d chars%s): %s", path, guard.name, what, h["score"],
                         h["chars"], ", flagged before" if h["earlier"] else "", done)
-        self.stats.record_guard(hits, action, origin)
+        threshold = getattr(guard, "threshold", None)
+        about = {"mode": guard.mode, "path": path,
+                 "model": getattr(getattr(guard, "model", None), "label", None) or getattr(guard, "label", None),
+                 "threshold": round(threshold, 3) if isinstance(threshold, (int, float)) else None}
+        entries = self.stats.record_guard(hits, action, origin, about)
         if self.audit is not None:
             client, provider = origin or (None, None)
             self.audit.append("guard", client=client, provider=provider, path=path, check=guard.name, action=action,
                               hits=[{k: (round(v, 3) if k == "score" else v) for k, v in h.items()
                                      if k in ("source", "score", "chars", "earlier", "categories")} for h in hits])
+        return entries
 
     def _restore(self, data: dict, counts: Counter, api: str = "messages", policy: ToolPolicy | None = None) -> dict:
         policy = policy if policy is not None else self.policy

@@ -322,6 +322,10 @@ enum Snapshotter {
             render(FindingDetail(finding: Finding.samples[0]).frame(width: 440).background(Theme.canvas),
                    to: "\(dir)/logs-detail-\(dark ? "dark" : "light").png", dark: dark)
         }
+        // A Checks row's details: one per outcome in the preview data.
+        for (i, hit) in store.snapshot.guardHits.enumerated() {
+            render(CheckDetail(hit: hit).frame(width: 460).background(Theme.canvas), to: "\(dir)/logs-check-\(i)-light.png", dark: false)
+        }
         // The background service just started, waiting for it to answer.
         render(Dashboard(store: store, engine: .preview(starting: true), page: .settings).frame(width: 1200, height: 780),
                to: "\(dir)/settings-starting-light.png", dark: false)

@@ -297,6 +297,10 @@ class HarmModel:
     def threshold(self) -> float:
         return self._model.threshold
 
+    @property
+    def label(self) -> str:
+        return NAMES[self._model.size]
+
     def want(self, size: str) -> None:
         if size == self._model.size or size not in MODELS:
             return

@@ -167,6 +167,21 @@ struct Snapshot: Decodable, Sendable {
         var action: String
         var client: String?
         var provider: String?
+        /// The check's mode, its model, the threshold the score crossed, and the request's path (nil
+        /// from older engines).
+        var mode: String?
+        var model: String?
+        var threshold: Double?
+        var path: String?
+        /// Local mode: the local server that answered, or why none did.
+        struct Answered: Decodable, Sendable, Equatable {
+            var model: String
+            var url: String
+            var api: String
+            var passedOver: [String]?
+        }
+        var answeredBy: Answered?
+        var localError: String?
         var id: String { "\(ts)-\(check)-\(source ?? "")-\(score)-\(chars)" }
         var date: Date { Date(timeIntervalSince1970: ts) }
     }
@@ -552,11 +567,20 @@ struct SampleFeed {
         snap.recent[3].outcome = "blocked"; snap.recent[3].status = 403; snap.recent[3].scanMs = 31; snap.recent[3].redacted = [:]
         snap.recent[3].restored = [:]; snap.recent[3].new = 0; snap.recent[3].client = "codex"; snap.recent[3].provider = "openai"
         snap.recent[3].guard = [.init(check: "harm", action: "blocked", score: 0.99, categories: ["Jailbreak"])]
-        snap.guard = .init(requests: ["warned": 1, "blocked": 1], hits: [
+        snap.guard = .init(requests: ["warned": 2, "blocked": 1, "local": 1], hits: [
             .init(ts: snap.recent[7].ts, check: "injection", source: "WebFetch", score: 0.98, chars: 5_101, earlier: false,
-                  action: "warned", client: "claude-code", provider: "anthropic"),
+                  action: "warned", client: "claude-code", provider: "anthropic", mode: "warn",
+                  model: "Prompt Injection Guard Small v2.3", threshold: 0.65, path: "/v1/messages"),
             .init(ts: snap.recent[3].ts, check: "harm", source: nil, score: 0.99, chars: 212, categories: ["Jailbreak"],
-                  earlier: false, action: "blocked", client: "codex", provider: "openai"),
+                  earlier: false, action: "blocked", client: "codex", provider: "openai", mode: "block",
+                  model: "Content Safety Guard Small by Horizon Labs", threshold: 0.82, path: "/openai/v1/responses"),
+            .init(ts: snap.recent[5].ts, check: "injection", source: "mcp__github__get_file_contents", score: 1.0, chars: 1_840,
+                  earlier: false, action: "local", client: "claude-code", provider: "anthropic", mode: "local",
+                  model: "Prompt Injection Guard Small v2.3", threshold: 0.65, path: "/v1/messages",
+                  answeredBy: .init(model: "qwen3:8b", url: "http://localhost:11434", api: "native", passedOver: [])),
+            .init(ts: snap.recent[1].ts, check: "commands", source: "Bash", score: 1.0, chars: 64,
+                  categories: ["a download run as a script"], earlier: false, action: "warned", client: "claude-code",
+                  provider: "anthropic", mode: "warn", model: "keepmum's command rules", path: "/v1/messages"),
         ])
     }
 

@@ -71,9 +71,11 @@ class Server:
 
 @dataclass(frozen=True)
 class LocalRoute:
-    """A check's verdict in local mode: send this request to the local model."""
+    """A check's verdict in local mode: send this request to the local model. `entries`: the Logs
+    page's records of its hits, which learn which local server answered."""
     check: str
     hits: list[dict]
+    entries: list[dict] = field(default_factory=list, compare=False)
 
 
 def on_this_mac(url: str) -> bool:

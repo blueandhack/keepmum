@@ -334,16 +334,29 @@ class Stats:
         if self.history:
             self.history.append(event)
 
-    def record_guard(self, hits: list[dict], action: str, origin: tuple[str, str] | None = None) -> None:
+    def record_guard(self, hits: list[dict], action: str, origin: tuple[str, str] | None = None,
+                     about: dict | None = None) -> list[dict]:
+        """The Logs page's check hits: what was flagged where, the score, the length and the
+        categories, never the text; and `about` the check (mode, model, threshold, path). Returns
+        the entries, for local mode to add which local server answered (`note_guard`)."""
         ts = round(time.time(), 6)
         client, provider = origin or (None, None)
+        added = []
         with self._lock:
             self.guarded[action] += 1
             for h in hits:
-                self.guard_hits.append({"ts": ts, "check": h.get("check", "injection"), "source": h.get("source"),
-                                        "score": round(h["score"], 3), "chars": h["chars"],
-                                        "categories": h.get("categories"), "earlier": h.get("earlier", False),
-                                        "action": action, "client": client, "provider": provider})
+                added.append({"ts": ts, "check": h.get("check", "injection"), "source": h.get("source"),
+                              "score": round(h["score"], 3), "chars": h["chars"],
+                              "categories": h.get("categories"), "earlier": h.get("earlier", False),
+                              "action": action, "client": client, "provider": provider, **(about or {})})
+            self.guard_hits.extend(added)
+        return added
+
+    def note_guard(self, entries: list[dict], **facts) -> None:
+        """Add facts learned after a hit was recorded: the local server that answered, or why none did."""
+        with self._lock:
+            for e in entries:
+                e.update(facts)
 
     def findings_page(self, limit: int = 2000) -> list[dict]:
         with self._lock:
