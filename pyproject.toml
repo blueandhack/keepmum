@@ -23,6 +23,10 @@ dev = [
     "pytest>=8",
     "faker>=30",
 ]
+# The DMG's window: background, icon places, volume icon, without scripting Finder (mac/make-dmg.sh).
+release = [
+    "dmgbuild==1.6.7",
+]
 # Benchmark comparisons only (bench/): `uv sync --group mlx`, `--group torch`, `--group afm`.
 # OpenAI Privacy Filter on MLX or PyTorch/MPS, compared with pf-serve (the runtime).
 mlx = [

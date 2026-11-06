@@ -75,14 +75,10 @@ if [ -z "${SKIP_NOTARIZE:-}" ]; then
   xcrun stapler staple -q "$APP"
 fi
 
-# The DMG: the app and a link to /Applications to drag it onto.
+# The DMG: the app and a link to /Applications to drag it onto, on a background that says so,
+# with the app's icon as the volume's (make-dmg.sh).
 mkdir -p "$DIST"
-stage=build/dmg
-rm -rf "$stage" "$DMG" && mkdir -p "$stage"
-ditto "$APP" "$stage/Keepmum.app"
-ln -s /Applications "$stage/Applications"
-hdiutil create -quiet -volname "keepmum $VERSION" -srcfolder "$stage" -fs APFS -format UDZO -ov "$DMG"
-rm -rf "$stage"
+./make-dmg.sh "$APP" "$DMG" "keepmum $VERSION"
 if [ -z "${SKIP_NOTARIZE:-}" ]; then
   codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
   notarize "$DMG"

@@ -246,6 +246,7 @@ enum DashboardWindow {
 ///   `Keepmum --snapshot dir`         every page in light and dark, with preview data
 ///   `Keepmum --snapshot dir --live`  the overview from the running keepmum's stats feed
 ///   `Keepmum --icon dir`             the app icon at every size iconutil needs
+///   `Keepmum --dmg-background dir`   the DMG window's background, at 1x and 2x (make-dmg.sh)
 @MainActor
 enum Snapshotter {
     static func runIfRequested() {
@@ -256,6 +257,13 @@ enum Snapshotter {
                                ("128x128@2x", 256), ("256x256", 256), ("256x256@2x", 512), ("512x512", 512), ("512x512@2x", 1024)] {
                 render(AppIcon(weight: px <= 32 ? 14 : px <= 64 ? 12 : 10).frame(width: 1024, height: 1024).scaleEffect(CGFloat(px) / 1024).frame(width: CGFloat(px), height: CGFloat(px)),
                        to: "\(args[i + 1])/icon_\(name).png", dark: false, scale: 1)
+            }
+            exit(0)
+        }
+        if let i = args.firstIndex(of: "--dmg-background"), i + 1 < args.count {
+            _ = NSApplication.shared
+            for scale in [1, 2] {
+                render(DMGBackground(), to: "\(args[i + 1])/background\(scale == 2 ? "@2x" : "").png", dark: false, scale: CGFloat(scale))
             }
             exit(0)
         }
