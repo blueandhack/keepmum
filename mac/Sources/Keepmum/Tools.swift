@@ -6,6 +6,8 @@ struct ToolsSection: View {
     var store: StatsStore
     var engine: Engine
     @State private var confirm: Pending?
+    /// The action under way: "reviewed", or a server being trusted again. Its button spins.
+    @State private var working: String?
 
     /// A change to a public tool, waiting for the user to confirm it.
     struct Pending: Identifiable {
@@ -19,11 +21,28 @@ struct ToolsSection: View {
         let servers = store.toolServers
         FormSection(title: "Tools that reach the network",
                     footer: "Each MCP server gets back the values it returned itself, so it can open what it found. Secrets are never sent, nor more than 5 values in one call, nor anything while a server's tools differ from the ones you trusted.") {
+            if !engine.isBundled {
+                Banner(tone: .warning, icon: "exclamationmark.triangle", title: "No engine",
+                       message: "This copy of Keepmum was built without its engine, so it can show these settings but not change them. Use a full build (build-app.sh without SKIP_RUNTIME), or keepmum tools in a terminal.") {
+                    EmptyView()
+                }
+                .padding(.vertical, Space.s + Space.xxs)
+                Hairline()
+            }
+            if let error = engine.error, working == nil, lastAction != nil {
+                Banner(tone: .danger, icon: "xmark.octagon", title: "Not done", message: error) {
+                    PillButton(title: "Dismiss", onSolid: true) { lastAction = nil }
+                }
+                .padding(.vertical, Space.s + Space.xxs)
+                Hairline()
+            }
             if servers.contains(where: \.new) {
                 Banner(tone: .info, icon: "sparkles", title: "New tools",
                        message: "They start on “Values it gave you”. Change any, or keep them as they are.") {
-                    PillButton(title: "Keep these") { Task { await engine.toolsReviewed(); await store.loadTools() } }
-                        .disabled(!engine.isBundled || engine.busy)
+                    PillButton(title: "Keep these", loading: working == "reviewed") {
+                        run("reviewed") { await engine.toolsReviewed() }
+                    }
+                    .disabled(!engine.isBundled || engine.busy)
                 }
                 .padding(.vertical, Space.s + Space.xxs)
                 Hairline()
@@ -32,14 +51,15 @@ struct ToolsSection: View {
                 FormRow(title: "None yet", detail: "MCP servers and web tools show up after an agent's first request through keepmum") { EmptyView() }
             }
             ForEach(Array(servers.enumerated()), id: \.element.id) { i, server in
-                ToolRow(server: server, engine: engine, busy: !engine.isBundled || engine.busy) { setting, types in
+                ToolRow(server: server, engine: engine, busy: !engine.isBundled || engine.busy,
+                        trusting: working == server.server) { setting, types in
                     if server.public && lets(server, setting: setting, types: types) {
                         confirm = Pending(server: server, setting: setting, types: types)
                     } else {
                         apply(server, setting: setting, types: types, confirmed: false)
                     }
                 } trust: {
-                    Task { await engine.trustTool(server.server); await store.loadTools() }
+                    run(server.server) { await engine.trustTool(server.server) }
                 }
                 if i < servers.count - 1 { Hairline() }
             }
@@ -50,6 +70,20 @@ struct ToolsSection: View {
             Button("Send them", role: .destructive) { apply(p.server, setting: p.setting, types: p.types, confirmed: true) }
         } message: { _ in
             Text("A web tool passes what it gets to a search engine or any web page, in public. Secrets still never go, and the audit log records the change.")
+        }
+    }
+
+    @State private var lastAction: String?
+
+    /// Run an action with its button spinning, then reload the list; an error stays on screen.
+    private func run(_ what: String, _ action: @escaping () async -> Void) {
+        working = what
+        lastAction = what
+        Task {
+            await action()
+            await store.loadTools()
+            working = nil
+            if engine.error == nil { lastAction = nil }
         }
     }
 
@@ -75,6 +109,8 @@ private struct ToolRow: View {
     var server: ToolServer
     var engine: Engine
     var busy: Bool
+    /// Trust again is under way for this server.
+    var trusting = false
     /// A setting (placeholders, own, contacts, default), or nil and types to add.
     var change: (String?, [String]) -> Void
     var trust: () -> Void
@@ -102,7 +138,7 @@ private struct ToolRow: View {
                 Banner(tone: .warning, icon: "exclamationmark.shield",
                        title: "Its tools changed",
                        message: "\(server.changed.map(short).joined(separator: ", ")) no longer \(server.changed.count == 1 ? "matches" : "match") what you trusted, so \(server.label) gets placeholders only.") {
-                    PillButton(title: "Trust again", action: trust).disabled(busy)
+                    PillButton(title: "Trust again", loading: trusting, action: trust).disabled(busy)
                 }
             } else if let (kinds, calls) = suggestion {
                 HStack(spacing: Space.s) {
