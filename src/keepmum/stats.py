@@ -263,8 +263,13 @@ class Stats:
         # The Logs page: what new text held, one entry per masked value. In memory only, never in
         # the history file: a preview is the first and last character of a value.
         self.findings: deque[dict] = deque(maxlen=findings)
-        # The guards (guard.py, harm.py): texts they flagged. Check, source, score, length, categories; no text.
+        # The guards (guard.py, harm.py, commands.py): what they flagged. Check, source, score,
+        # length, categories; no text, so the stats feed stays small.
         self.guard_hits: deque[dict] = deque(maxlen=recent)
+        # With [log] context on: each hit's text and the user's prompt, every masked value shown as
+        # its type, by the hit's seq. In memory only, for the Logs page's check details.
+        self.check_texts: dict[int, dict] = {}
+        self._check_seq = 0
         self.guarded = Counter()  # requests with a hit, by action: warned, blocked
 
     def record(self, path: str, outcome: str, status: int, scan_ms: float | None = None,
@@ -335,22 +340,37 @@ class Stats:
             self.history.append(event)
 
     def record_guard(self, hits: list[dict], action: str, origin: tuple[str, str] | None = None,
-                     about: dict | None = None) -> list[dict]:
+                     about: dict | None = None, shown: list[tuple[str | None, str | None]] | None = None) -> list[dict]:
         """The Logs page's check hits: what was flagged where, the score, the length and the
-        categories, never the text; and `about` the check (mode, model, threshold, path). Returns
-        the entries, for local mode to add which local server answered (`note_guard`)."""
+        categories; and `about` the check (mode, model, threshold, path). `shown`, per hit, is the
+        flagged text and the user's prompt with every masked value as its type ([log] context),
+        kept apart in check_texts and served only with the findings. Returns the entries, for
+        local mode to add which local server answered (`note_guard`)."""
         ts = round(time.time(), 6)
         client, provider = origin or (None, None)
         added = []
         with self._lock:
             self.guarded[action] += 1
-            for h in hits:
-                added.append({"ts": ts, "check": h.get("check", "injection"), "source": h.get("source"),
-                              "score": round(h["score"], 3), "chars": h["chars"],
+            for i, h in enumerate(hits):
+                self._check_seq += 1
+                added.append({"ts": ts, "seq": self._check_seq, "check": h.get("check", "injection"),
+                              "source": h.get("source"), "score": round(h["score"], 3), "chars": h["chars"],
                               "categories": h.get("categories"), "earlier": h.get("earlier", False),
                               "action": action, "client": client, "provider": provider, **(about or {})})
+                text, prompt = (shown[i] if shown and i < len(shown) else (None, None))
+                if text or prompt:
+                    self.check_texts[self._check_seq] = {"text": text, "prompt": prompt}
             self.guard_hits.extend(added)
+            # The texts go with their hits: those the list no longer holds are forgotten.
+            oldest = self.guard_hits[0]["seq"] if self.guard_hits else self._check_seq + 1
+            for seq in [k for k in self.check_texts if k < oldest]:
+                del self.check_texts[seq]
         return added
+
+    def check_texts_page(self) -> dict[str, dict]:
+        """The flagged texts and prompts still kept, by hit (`seq`), for the Logs page."""
+        with self._lock:
+            return {str(k): dict(v) for k, v in self.check_texts.items()}
 
     def note_guard(self, entries: list[dict], **facts) -> None:
         """Add facts learned after a hit was recorded: the local server that answered, or why none did."""
@@ -369,10 +389,11 @@ class Stats:
                 f["preview"] = None
 
     def drop_context(self) -> None:
-        """[log] context turned off: forget the text kept around each value."""
+        """[log] context turned off: forget the text kept around each value, and the checks' texts."""
         with self._lock:
             for f in self.findings:
                 f["before"] = f["after"] = None
+            self.check_texts.clear()
 
     def snapshot(self, **extra) -> dict:
         with self._lock:

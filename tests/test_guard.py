@@ -85,7 +85,7 @@ def test_a_flagged_result_stays_flagged_when_it_comes_back():
     again = g.check([("WebFetch", ATTACK, False)])  # resent with the history: not new, still a hit
     assert first[0]["earlier"] is False and again[0]["earlier"] is True
     assert len(m.calls) == 1 and again[0]["score"] == first[0]["score"]
-    assert set(first[0]) == {"check", "source", "score", "chars", "earlier"}  # no text
+    assert set(first[0]) == {"check", "source", "score", "chars", "earlier", "at"}  # no text: "at" is the item's place
 
 
 def test_short_results_and_unknown_modes():

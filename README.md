@@ -178,7 +178,7 @@ Both checks are off by default, and keepmum downloads their models only when you
 
 Where it goes is a list of local servers (`keepmum guard local add`), each a URL on this Mac and a model there, for both checks or one (`--check harm`: a bigger model for harm, say). A flagged request goes to the first that answers for its check: one that is not running, lacks its model or answers with an error is passed over. If none answers, or none is set, the request is refused, never sent. Ollama (`--preset ollama`, the default), LM Studio (`lmstudio`) and llama.cpp's llama-server (`llamacpp`) speak the APIs Claude Code and Codex use, so the request goes as it is; a server that does not, such as `mlx_lm.server` (`mlx`), gets it as Chat Completions, earlier tool calls and results as text, and its answer goes back in the agent's API (`--api chat` asks that way from the start). Claude Code, Codex, pi and opencode can go local; Gemini CLI's API is one none of them speak, so its flagged requests are refused.
 
-**Warn** sends the request at once and runs the check afterwards, so it adds no delay. A hit is logged, counted in the stats feed and audited once, with the check, the tool (for injection), the score, the length and, for harm, the model's categories (Violent, Jailbreak, …), never the text. **Block** runs the check first. The agent gets an error that names the tool or the categories, and every retry that still carries the flagged text is refused too: rewind or `/clear` to drop it. If a check fails, block mode refuses the request and warn mode sends it.
+**Warn** sends the request at once and runs the check afterwards, so it adds no delay. A hit is logged, counted in the stats feed and audited once, with the check, the tool (for injection), the score, the length and, for harm, the model's categories (Violent, Jailbreak, …), never the text. With `[log] context` on, the Mac app's Logs page also shows, in memory only, what was flagged and what the user had typed, every masked value in them shown as its type. **Block** runs the check first. The agent gets an error that names the tool or the categories, and every retry that still carries the flagged text is refused too: rewind or `/clear` to drop it. If a check fails, block mode refuses the request and warn mode sends it.
 
 | Check | Model | Licence | Benchmark | Memory while in use | Time |
 | --- | --- | --- | --- | --- | --- |
@@ -279,7 +279,7 @@ local-3425 = "http://127.0.0.1:3425"
 [log]
 level = "info"         # logs contain types and counts, never values
 previews = true        # the app's Logs page shows the first and last character of masked values (memory only; `keepmum log previews on|off`)
-context = true         # and the text around each, with every masked value in it shown as its type (memory only; `keepmum log context on|off`)
+context = true         # and the text around each, and what the checks flagged, every masked value shown as its type (memory only; `keepmum log context on|off`)
 
 [audit]
 keep_days = 90         # how long the audit log keeps entries (`keepmum audit keep 365`)
@@ -308,6 +308,7 @@ local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
 | Network tools seen: server and tool names, a hash of each tool's definition, kept-call counts per day and type; never values | `~/.config/keepmum/tools.json` (0600), counts for the last 30 days |
 | The optional checks' models, only after `keepmum guard setup` | `~/.local/share/keepmum/guard/` (`prompt-injection-guard-small-v2.3/`, `content-safety-guard-small/`, `qwen3guard/`); `keepmum guard remove injection|harm` deletes them |
 | Check hits: check, tool, score, length and categories; never the text | Process memory (the stats feed, the last 200) and the audit log |
+| The Logs page's check details: the flagged text (up to 4,000 characters) and what the user had typed, every masked value and placeholder in them shown as its type | Process memory only, with the last 200 hits; `[log] context = false` turns it off and forgets what was kept |
 | Masked values, and which tool servers returned each | Process memory only, cleared on exit |
 | The Logs page: per masked value its type, rule and length, and the first and last character of values of 8 or more characters | Process memory only (the last 2,000), cleared on exit; `[log] previews = false` keeps types and rules only |
 | The Logs page's context: up to 80 characters each side of a masked value, with every masked value and placeholder in it shown as its type (`‹SECRET›`), as the provider received it | Process memory only, with the findings; `[log] context = false` turns it off and forgets what was kept |

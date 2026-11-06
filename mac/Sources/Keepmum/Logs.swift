@@ -196,7 +196,7 @@ struct ChecksCard: View {
                 }
                 .padding(.horizontal, Space.xs)
                 if hits.isEmpty {
-                    EmptyNote(text: "Turned-on checks flag here. A hit keeps the check, the score and the length, never the text.")
+                    EmptyNote(text: "Turned-on checks flag here. Click one for what was flagged, what you had asked, and what keepmum did.")
                 } else if isSnapshot {
                     ForEach(hits.prefix(4)) { row($0) }
                 } else {
@@ -210,7 +210,8 @@ struct ChecksCard: View {
     @State private var selected: String?
 
     private func row(_ h: Snapshot.GuardHit) -> some View {
-        CheckRow(hit: h, selected: Binding(get: { selected == h.id }, set: { selected = $0 ? h.id : nil })) {
+        CheckRow(hit: h, texts: h.seq.flatMap { store.checkTexts[$0] }, contextOn: store.contextOn,
+                 selected: Binding(get: { selected == h.id }, set: { selected = $0 ? h.id : nil })) {
             Text(h.date, format: .dateTime.hour().minute().second())
                 .font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary).frame(width: 70, alignment: .leading)
             HStack(spacing: Space.s - Space.xxs) {
@@ -330,6 +331,8 @@ struct CheckOutcome: View {
 /// A Checks row: hover to highlight, click for its details in a popover.
 private struct CheckRow<Cells: View>: View {
     var hit: Snapshot.GuardHit
+    var texts: StatsStore.CheckText?
+    var contextOn: Bool
     @Binding var selected: Bool
     @ViewBuilder var cells: Cells
     @State private var hovering = false
@@ -348,7 +351,8 @@ private struct CheckRow<Cells: View>: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .popover(isPresented: $selected, arrowEdge: .bottom) {
-            CheckDetail(hit: hit).frame(width: 460).background(Theme.canvas).presentationBackground(Theme.canvas)
+            CheckDetail(hit: hit, texts: texts, contextOn: contextOn).frame(width: 540).background(Theme.canvas)
+                .presentationBackground(Theme.canvas)
         }
         .accessibilityHint("Shows what the check found and what keepmum did")
     }
@@ -357,6 +361,10 @@ private struct CheckRow<Cells: View>: View {
 /// One check's hit in full: what it found and where, how sure, what keepmum did, and what to do.
 struct CheckDetail: View {
     var hit: Snapshot.GuardHit
+    /// The flagged text and the user's prompt, masked values as types; nil: not kept.
+    var texts: StatsStore.CheckText? = nil
+    var contextOn = true
+    @Environment(\.isSnapshot) private var isSnapshot
 
     var body: some View {
         let h = hit
@@ -388,15 +396,49 @@ struct CheckDetail: View {
                 if let path = h.path { field("Request", path, mono: true) }
                 field("Time", h.date.formatted(date: .abbreviated, time: .standard))
             }
+            if h.check != "harm", let prompt = texts?.prompt {
+                block("What you asked", prompt, maxHeight: 90)
+            }
+            if let text = texts?.text {
+                block(flaggedTitle(h), text, maxHeight: 220)
+            } else {
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    Text(flaggedTitle(h)).eyebrow()
+                    Text(contextOn ? "Not kept for this one: it was flagged before keepmum kept checks' text, or the text has since been dropped."
+                                   : "Not kept. Text around values is off (Settings › General › Logs page).")
+                        .font(.km(.callout)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
             VStack(alignment: .leading, spacing: Space.xs) {
                 Text("What to do").eyebrow()
                 Text(h.advice).font(.km(.callout)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
             }
-            Text("keepmum keeps the check, where, the score, the length and the categories, never the flagged text.")
+            Text("The text is as keepmum saw it, with every masked value shown as its type, like ‹SECRET›. It is kept in keepmum's memory only, never in the audit log or on disk, and goes when keepmum exits or text around values is turned off.")
                 .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(Space.l + Space.xs)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func flaggedTitle(_ h: Snapshot.GuardHit) -> String {
+        switch h.check {
+        case "harm": "What you typed"
+        case "commands": "The command"
+        default: "What \(toolLabel(h.source ?? "the tool")) returned"
+        }
+    }
+
+    /// A text in a box: monospaced, masked values tinted, scrolling past `maxHeight`.
+    @ViewBuilder private func block(_ title: String, _ text: String, maxHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(title).eyebrow()
+            let body = Text(typesTinted(text)).font(.km(.mono)).lineSpacing(3).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading).padding(Space.m)
+            Group {
+                if isSnapshot { body } else { ScrollView { body }.frame(maxHeight: maxHeight).fixedSize(horizontal: false, vertical: true) }
+            }
+            .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.surface))
+        }
     }
 
     private func found(_ h: Snapshot.GuardHit) -> String {
@@ -721,4 +763,20 @@ struct FinderLabel: View {
             if parts.isEmpty { Text("—").foregroundStyle(Theme.textSecondary) }
         }
     }
+}
+
+/// Text with its masked values (`‹SECRET›`) tinted, the rest in the text color.
+func typesTinted(_ s: String) -> AttributedString {
+    var out = AttributedString()
+    var rest = Substring(s)
+    while let open = rest.firstIndex(of: "‹"), let close = rest[open...].firstIndex(of: "›") {
+        out += AttributedString(String(rest[..<open]))
+        var mark = AttributedString(String(rest[open...close]))
+        mark.foregroundColor = Theme.masked
+        mark.backgroundColor = Theme.soft(Theme.masked)
+        out += mark
+        rest = rest[rest.index(after: close)...]
+    }
+    out += AttributedString(String(rest))
+    return out
 }

@@ -45,7 +45,7 @@
     [log]
     level = "info"
     previews = true        # the Logs page shows the first and last character of masked values (in memory only)
-    context = true         # and the text around each, every masked value in it shown as its type (in memory only)
+    context = true         # and the text around each, and what the checks flagged, every masked value shown as its type (in memory only)
 """
 
 from __future__ import annotations

@@ -319,7 +319,7 @@ class Proxy:
             if not self._context():
                 self.stats.drop_context()
             return JSONResponse({"findings": self.stats.findings_page(), "previews": self._previews(),
-                                 "context": self._context()})
+                                 "context": self._context(), "checks": self.stats.check_texts_page()})
         if path == "/_keepmum/tools" and request.method == "GET":
             # The network tools agents offered, each with its restore setting: names, never values.
             servers = self.tools.snapshot(self.policy) if self.tools else []
@@ -381,7 +381,8 @@ class Proxy:
             headers.append(("content-encoding", "zstd"))
         try:
             if wants_stream(t, masked, request.url.query):
-                return await self._stream(url, headers, payload, path, t, scan_ms, counts, new, origin=origin, found=found)
+                return await self._stream(url, headers, payload, path, t, scan_ms, counts, new, origin=origin, found=found,
+                                          texts=texts)
             resp = await self.client.post(url, headers=headers, content=payload)
         except httpx.HTTPError as e:
             log.error("upstream error on %s: %s", path, type(e).__name__)
@@ -392,7 +393,7 @@ class Proxy:
         if t.path != "/v1/messages/count_tokens" and resp.status_code < 300:
             try:
                 data = json.loads(content)
-                policy = self._reply_policy(path, origin, "masked" if new else "clean")
+                policy = self._reply_policy(path, origin, "masked" if new else "clean", texts)
                 content = json.dumps(await anyio.to_thread.run_sync(self._restore, data, restored, t.api, policy),
                                      ensure_ascii=False).encode("utf-8", "replace")
             except ValueError:
@@ -475,6 +476,7 @@ class Proxy:
             self.redactor.findings = []
             self.redactor.tool_results = []
             self.redactor.user_texts = []
+            self.redactor.shown = {}
             self.redactor.previews = self._previews()
             self.redactor.context = self._context()
             if api == "responses":
@@ -485,8 +487,9 @@ class Proxy:
                 masked = self.redactor.redact_request(body)
             self.stats.record_findings(self.redactor.findings, outcome, origin)
             result = (masked, Counter(self.redactor.counts), self.redactor.fresh, found_by(self.redactor.findings),
-                      {"injection": self.redactor.tool_results, "harm": self.redactor.user_texts})
-            self.redactor.tool_results, self.redactor.user_texts = [], []
+                      {"injection": self.redactor.tool_results, "harm": self.redactor.user_texts,
+                       "shown": self.redactor.shown})
+            self.redactor.tool_results, self.redactor.user_texts, self.redactor.shown = [], [], {}
         if self.tools is not None:
             try:
                 self.tools.observe(definitions(body, api), origin[0] if origin else None,
@@ -508,14 +511,15 @@ class Proxy:
             if mode == "off" or not items:
                 continue
             if mode in ("block", "local") and not observing:
-                refused = await self._check_now(guard, items, path, origin, api)
+                refused = await self._check_now(guard, items, path, origin, api, texts)
                 if refused is not None:
                     return refused
             else:
-                self._later(self._check_later(guard, items, path, origin, kind, request))
+                self._later(self._check_later(guard, items, path, origin, kind, request, texts))
         return None
 
-    async def _check_now(self, guard, items, path: str, origin, api: str | None = None) -> Response | LocalRoute | None:
+    async def _check_now(self, guard, items, path: str, origin, api: str | None = None,
+                         texts: dict | None = None) -> Response | LocalRoute | None:
         """Block mode: a hit, or a text flagged before and still in the conversation, refuses the
         request. A guard that fails refuses it too: it cannot vouch for what it did not check.
         Local mode: such a request goes to the local model instead (local.py), if its API is one
@@ -530,9 +534,9 @@ class Proxy:
         if not hits:
             return None
         if guard.mode == "local" and api in LOCAL_PATHS:
-            entries = self._record_hits(guard, hits, "local", path, origin)
+            entries = self._record_hits(guard, hits, "local", path, origin, self._shown(hits, items, texts))
             return LocalRoute(guard.name, hits, entries)
-        self._record_hits(guard, hits, "blocked", path, origin)
+        self._record_hits(guard, hits, "blocked", path, origin, self._shown(hits, items, texts))
         self._record(path, "blocked", 403, origin=origin, guard=guard_summary(hits, "blocked"))
         if guard.name == "harm":
             cats = sorted({c for h in hits for c in h.get("categories") or []})
@@ -652,7 +656,8 @@ class Proxy:
         log.info("%s -> local model %s at %s%s: %d", path, server.model, server.url, how, resp.status_code)
         return Response(content, status_code=resp.status_code, headers=headers)
 
-    async def _check_later(self, guard, items, path: str, origin, kind: str = "clean", request: str | None = None) -> None:
+    async def _check_later(self, guard, items, path: str, origin, kind: str = "clean", request: str | None = None,
+                           texts: dict | None = None) -> None:
         """Warn mode, after the request is sent: record new hits; a failure is logged and nothing more."""
         try:
             hits = await anyio.to_thread.run_sync(guard.check, items, False)
@@ -660,7 +665,7 @@ class Proxy:
             log.warning("%s: %s check did not run (%s)", path, guard.name, type(e).__name__)
             return
         if hits:
-            self._record_hits(guard, hits, "warned", path, origin)
+            self._record_hits(guard, hits, "warned", path, origin, self._shown(hits, items, texts))
             self.stats.record_flagged(path, hits, origin, kind=kind, request=request)
 
     def _later(self, coro) -> None:
@@ -677,9 +682,31 @@ class Proxy:
         while self._background:
             await asyncio.gather(*list(self._background), return_exceptions=True)
 
-    def _record_hits(self, guard, hits: list[dict], action: str, path: str, origin) -> list[dict]:
+    @staticmethod
+    def _prompt(texts: dict | None) -> str | None:
+        """What the user last typed in this request, as the Logs page may show it, or None."""
+        if not texts:
+            return None
+        typed = texts.get("harm") or []
+        return texts.get("shown", {}).get(typed[-1][1]) if typed else None
+
+    def _shown(self, hits: list[dict], items, texts: dict | None) -> list[tuple[str | None, str | None]]:
+        """For each hit, its text and the user's prompt, every masked value shown as its type
+        ([log] context on; else Nones). In memory only: never in the audit log or the history."""
+        shown = (texts or {}).get("shown") or {}
+        prompt = self._prompt(texts)
+        out = []
+        for h in hits:
+            at = h.get("at")
+            text = shown.get(items[at][1]) if isinstance(at, int) and 0 <= at < len(items) else None
+            out.append((text, None if h.get("check") == "harm" else prompt))  # harm's text is the prompt
+        return out
+
+    def _record_hits(self, guard, hits: list[dict], action: str, path: str, origin,
+                     shown: list[tuple[str | None, str | None]] | None = None) -> list[dict]:
         """Log, count and audit hits: the check, source, score, length and categories, never the text.
-        Returns the Logs page's entries for them."""
+        `shown`, per hit, is its text and the user's prompt for the Logs page alone. Returns the
+        Logs page's entries for them."""
         for h in hits:
             cats = ", ".join(h.get("categories") or []) or "no category"
             what = (f"what the user typed ({cats})" if guard.name == "harm"
@@ -693,7 +720,7 @@ class Proxy:
         about = {"mode": guard.mode, "path": path,
                  "model": getattr(getattr(guard, "model", None), "label", None) or getattr(guard, "label", None),
                  "threshold": round(threshold, 3) if isinstance(threshold, (int, float)) else None}
-        entries = self.stats.record_guard(hits, action, origin, about)
+        entries = self.stats.record_guard(hits, action, origin, about, shown)
         if self.audit is not None:
             client, provider = origin or (None, None)
             self.audit.append("guard", client=client, provider=provider, path=path, check=guard.name, action=action,
@@ -712,7 +739,7 @@ class Proxy:
                 return data
             return restore_response(data, self.redactor.vault, policy, counts)
 
-    def _reply_policy(self, path: str, origin, kind: str) -> ToolPolicy:
+    def _reply_policy(self, path: str, origin, kind: str, texts: dict | None = None) -> ToolPolicy:
         """The tool policy for one reply: with the commands check on, each shell command in it is
         reviewed as it is restored; a hit is a note on the request (Activity, the flow's Flagged band)."""
         if self.commands is None or self.commands.mode == "off":
@@ -723,14 +750,20 @@ class Proxy:
             replaced, hits = self.commands.review(name, value)
             if hits:
                 action = "blocked" if replaced is not None else "warned"
-                self._record_hits(self.commands, hits, action, path, origin)
+                shown = None
+                if self._context():
+                    from .commands import command_lines
+                    from .redact import as_types
+
+                    shown = [(as_types("\n".join(command_lines(name, value))), self._prompt(texts))] * len(hits)
+                self._record_hits(self.commands, hits, action, path, origin, shown)
                 self.stats.record_flagged(path, hits, origin, kind=kind, request=request, action=action)
             return replaced
 
         return self.policy.with_review(review)
 
     async def _stream(self, url, headers, payload, path, t: Target, scan_ms, counts, new=0, outcome="forwarded",
-                      origin=None, found=None) -> Response:
+                      origin=None, found=None, texts: dict | None = None) -> Response:
         req = self.client.build_request("POST", url, headers=headers, content=payload)
         resp = await self.client.send(req, stream=True)
         restored = Counter()
@@ -739,7 +772,7 @@ class Proxy:
         kind = {"responses": ResponsesStreamRestorer, "gemini": GeminiStreamRestorer,
                 "gemini-plain": GeminiStreamRestorer}.get(t.api, StreamRestorer)
         # Observed requests went out unmasked: there is nothing to restore, and no command is reviewed.
-        policy = self._reply_policy(path, origin, "masked" if new else "clean") if is_sse and outcome != "observed" else None
+        policy = self._reply_policy(path, origin, "masked" if new else "clean", texts) if is_sse and outcome != "observed" else None
         restorer = kind(self.redactor.vault, policy, restored) if policy is not None else None
 
         async def body():

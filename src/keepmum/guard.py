@@ -287,15 +287,16 @@ class Guard:
         """Hits among (source, text, new) items: new text is scored. A text flagged before is a hit
         again with `earlier` (block mode refuses every request that still carries it); warn mode
         leaves it out, so one hit is one warning. A hit holds the check, the source (a tool, or None
-        for what the user typed), the score, the length and any categories, never the text."""
+        for what the user typed), the score, the length and any categories, and `at`, the item it is
+        for; never the text."""
         hits = []
-        for source, text, new in items:
+        for at, (source, text, new) in enumerate(items):
             key = _key(text)
             with self._lock:
                 seen = self._flagged.get(key)
             if seen is not None:
                 if earlier:
-                    hits.append({**seen, "source": source, "earlier": True})
+                    hits.append({**seen, "source": source, "earlier": True, "at": at})
                 continue
             if not new or len(text) < self.min_chars:
                 continue
@@ -313,5 +314,5 @@ class Guard:
                 if len(self._flagged) >= self._keep:
                     self._flagged.pop(next(iter(self._flagged)))
                 self._flagged[key] = hit
-            hits.append(hit)
+            hits.append({**hit, "at": at})  # which of the items: the Logs page shows its text
         return hits

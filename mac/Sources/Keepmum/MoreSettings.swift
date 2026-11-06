@@ -109,8 +109,8 @@ struct LogsPageSection: View {
             }
             Hairline()
             FormRow(title: "Text around values",
-                    detail: context ? "The text before and after each masked value, every masked value in it shown as its type"
-                                    : "Off: no text around masked values is kept") {
+                    detail: context ? "The text before and after each masked value, and what a check flagged with what you had asked, every masked value in them shown as its type"
+                                    : "Off: no text around masked values, and no flagged text, is kept") {
                 Switch(isOn: context, enabled: engine.isBundled && !engine.busy) { on in Task { await engine.setLog("context", on) } }
                     .accessibilityLabel("Text around values")
             }

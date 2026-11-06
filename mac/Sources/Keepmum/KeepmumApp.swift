@@ -324,7 +324,7 @@ enum Snapshotter {
         }
         // A Checks row's details: one per outcome in the preview data.
         for (i, hit) in store.snapshot.guardHits.enumerated() {
-            render(CheckDetail(hit: hit).frame(width: 460).background(Theme.canvas), to: "\(dir)/logs-check-\(i)-light.png", dark: false)
+            render(CheckDetail(hit: hit, texts: hit.seq.flatMap { SampleFeed.sampleCheckTexts[$0] }).frame(width: 540).background(Theme.canvas), to: "\(dir)/logs-check-\(i)-light.png", dark: false)
         }
         // The background service just started, waiting for it to answer.
         render(Dashboard(store: store, engine: .preview(starting: true), page: .settings).frame(width: 1200, height: 780),

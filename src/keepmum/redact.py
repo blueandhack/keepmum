@@ -48,28 +48,45 @@ def preview(value: str) -> str:
 CONTEXT = 80
 
 
+# Characters of a flagged text kept for the Logs page's check details.
+CHECK_TEXT = 4000
+
+
+def _marks(text: str, spans: list[Span]) -> list[tuple[int, int, str]]:
+    return sorted([(s.start, s.end, s.type) for s in spans]
+                  + [(m.start(), m.end(), m.group(1)) for m in PLACEHOLDER.finditer(text)])
+
+
+def _render(text: str, marks, a: int, b: int) -> str:
+    """text[a:b] with each masked value and placeholder in it shown whole as its type."""
+    out, pos = [], a
+    for s, e, kind in marks:
+        if e <= a or s >= b or e <= pos:
+            continue
+        if s > pos:
+            out.append(text[pos:s])
+        out.append(f"‹{kind}›")
+        pos = e
+    if pos < b:
+        out.append(text[pos:b])
+    return "".join(out)
+
+
 def context(text: str, spans: list[Span], start: int, end: int) -> tuple[str, str]:
     """The text before and after text[start:end], CONTEXT characters each way, as the provider
     saw it but with every masked value in it, and every placeholder, shown as its type: `‹SECRET›`.
     A value or placeholder cut by the window is shown whole as its type, never in part."""
-    marks = sorted([(s.start, s.end, s.type) for s in spans]
-                   + [(m.start(), m.end(), m.group(1)) for m in PLACEHOLDER.finditer(text)])
-
-    def render(a: int, b: int) -> str:
-        out, pos = [], a
-        for s, e, kind in marks:
-            if e <= a or s >= b or e <= pos:
-                continue
-            if s > pos:
-                out.append(text[pos:s])
-            out.append(f"‹{kind}›")
-            pos = e
-        if pos < b:
-            out.append(text[pos:b])
-        return "".join(out)
-
+    marks = _marks(text, spans)
     a, b = max(0, start - CONTEXT), min(len(text), end + CONTEXT)
-    return ("…" if a > 0 else "") + render(a, start), render(end, b) + ("…" if b < len(text) else "")
+    return ("…" if a > 0 else "") + _render(text, marks, a, start), _render(text, marks, end, b) + ("…" if b < len(text) else "")
+
+
+def as_types(text: str, spans: list[Span] = (), limit: int = CHECK_TEXT) -> str:
+    """A whole text for the Logs page, every masked value and placeholder in it shown as its type
+    (`‹SECRET›`), never in part; at most `limit` characters of it, and how many more there were."""
+    end = len(text) if len(text) <= limit else limit
+    shown = _render(text, _marks(text, list(spans)), 0, end)
+    return shown if end == len(text) else shown + f"\n… {len(text) - end:,} more characters"
 
 
 def finders(sources) -> list[str]:
@@ -128,6 +145,9 @@ class Redactor:
         # The same for the harm check (harm.py): what the user typed, as (None, text, new), without
         # what agents add to a user turn. `_role` is the role of the message being masked.
         self.user_texts: list[tuple[None, str, bool]] = []
+        # With [log] context on: each of those texts as the Logs page may show it, every masked value
+        # in it as its type (as_types). Per request, in memory only.
+        self.shown: dict[str, str] = {}
         self._role: str | None = None
 
     def _detect(self, text: str) -> tuple[tuple[Span, ...], bool]:
@@ -170,11 +190,15 @@ class Redactor:
         spans, seen = self._spans(text)
         if self._in_result:
             self.tool_results.append((self._tool, text, not seen))
+            if self.context:
+                self.shown[text] = as_types(text, spans)
         elif self._role == "user":
             from .harm import typed
 
             if mine := typed(text):
                 self.user_texts.append((None, mine, not seen))
+                if self.context:
+                    self.shown[mine] = typed(as_types(text, spans, limit=len(text)))[:CHECK_TEXT]
         if not seen:
             self.fresh += len(spans)
             for s in spans:

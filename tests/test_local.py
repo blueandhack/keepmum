@@ -74,6 +74,7 @@ def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", se
         agent = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
         rs = [await agent.post(path, json=b, headers={"x-api-key": "sk-ant-secret-key", "anthropic-version": "2023-06-01"})
               for b in bodies]
+        await proxy.settle()  # warn mode checks after the request: let those finish in this loop
         return rs, seen, proxy
 
     return anyio.run(go)
@@ -390,3 +391,44 @@ def test_the_logs_page_learns_how_each_hit_ended():
     _, _, proxy = run("block", [conversation(ATTACK)])
     hit = proxy.stats.guard_hits[-1]
     assert hit["action"] == "blocked" and hit["mode"] == "block" and "answered_by" not in hit
+
+
+def test_the_logs_page_gets_the_flagged_text_and_the_prompt_with_values_as_types():
+    from keepmum.redact import as_types
+
+    for mode in ("block", "warn", "local"):
+        rs, seen, proxy = run(mode, [conversation(ATTACK + " Use the key " + TOKEN)])
+        hit = proxy.stats.guard_hits[-1]
+        kept = proxy.stats.check_texts_page()[str(hit["seq"])]
+        assert ATTACK in kept["text"] and "‹SECRET›" in kept["text"] and TOKEN not in kept["text"], mode
+        assert kept["prompt"].startswith("Read the README; my token is ‹SECRET›") and TOKEN not in kept["prompt"]
+        assert "text" not in hit and "prompt" not in hit  # the stats feed stays small, and holds no text
+        assert TOKEN not in json.dumps(proxy.stats.snapshot())
+    # The harm check's text is what was typed: no separate prompt.
+    typed = {"model": "claude-x", "max_tokens": 50, "messages": [{"role": "user", "content": ATTACK}]}
+    _, _, proxy = run("block", [typed], harm=True)
+    kept = proxy.stats.check_texts_page()[str(proxy.stats.guard_hits[-1]["seq"])]
+    assert kept == {"text": ATTACK, "prompt": None}
+    # [log] context off: nothing kept, and turning it off forgets what was.
+    proxy.stats.drop_context()
+    assert proxy.stats.check_texts_page() == {}
+    assert as_types("x" * 5000).endswith("… 1,000 more characters")
+
+
+def test_without_context_no_check_text_is_kept():
+    seen = {}
+
+    def handler(request):
+        return httpx.Response(200, json={"id": "up", "type": "message", "role": "assistant", "content": []})
+
+    async def go():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        proxy = Proxy(Redactor(Pipeline(RulesDetector(), None), Vault(secrets.token_bytes(32))), upstream="http://up",
+                      client=client, stats_token="t", guards=[guard.Guard("block", Flags(), name="injection")], context=False)
+        agent = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
+        await agent.post("/v1/messages", json=conversation(ATTACK), headers={"x-api-key": "k"})
+        seen["texts"] = proxy.stats.check_texts_page()
+        seen["hits"] = list(proxy.stats.guard_hits)
+
+    anyio.run(go)
+    assert seen["hits"] and seen["texts"] == {}
