@@ -447,18 +447,22 @@ _MODE_TEXT = {"off": "off", "warn": "warn (flagged requests are logged, then sen
               "local": "local (flagged requests are answered by your local model, never sent)"}
 
 
-def _local_missing(cfg) -> str | None:
-    """Why local mode cannot work yet, or None: no model set, or the local server lacks it."""
-    from .local import models
+def _local_missing(cfg, check: str) -> str | None:
+    """Why local mode cannot work for a check yet, or None: no server for it, or none can answer."""
+    from .local import kind, missing, models, servers_for
 
-    if not cfg.guard_local_model:
-        return "no local model is set: run `keepmum guard local --model <name>` first (`keepmum guard local` lists them)"
-    have = models(cfg.guard_local_url)
-    if have is None:
-        return f"nothing answers at {cfg.guard_local_url}: start Ollama (`ollama serve`, or open the Ollama app)"
-    if cfg.guard_local_model not in have:
-        return f"{cfg.guard_local_url} has no model {cfg.guard_local_model}: `ollama pull {cfg.guard_local_model}`"
-    return None
+    servers = servers_for(cfg.guard_local_servers, check)
+    if not servers:
+        return (f"no local server with a model for the {check} check: run `keepmum guard local add --model <name>` "
+                "first (`keepmum guard local` lists the servers and their models)")
+    whys = []
+    for server in servers:
+        have = models(server.url)
+        why = missing(server, have, kind(server.url) if have is not None else None)
+        if why is None:
+            return None
+        whys.append(why)
+    return "; ".join(whys)
 
 
 def _guard_status() -> dict:
@@ -473,7 +477,8 @@ def _guard_status() -> dict:
                       "server": server, "model": f"{guard.REPO}@{guard.REVISION}", "source": f"{guard.SOURCE}@{guard.RELEASE}",
                       "licence": guard.LICENCE, "threshold": guard.THRESHOLD},
         "commands": {"mode": cfg.guard_commands, "rules": [label for _, label, _ in RULES + SENDS]},
-        "local": {"url": cfg.guard_local_url, "model": cfg.guard_local_model},
+        "local": {"servers": [{"url": x.url, "model": x.model, "checks": list(x.checks), "api": x.api}
+                              for x in cfg.guard_local_servers]},
         "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
                  "installed": {size: harm.installed(size) for size in harm.SIZES},
                  "server": server, "licence": harm.LICENCE,
@@ -522,8 +527,11 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
                + ("" if hm["installed"][hm["model"]] else f", not downloaded (`keepmum guard setup harm --model {hm['model']}`)")
                + (f"; downloaded: {', '.join(have)}" if have else ""))
     typer.echo(f"runtime (both): {hm['server'] or 'llama-server not found (brew install llama.cpp)'}")
-    if "local" in (inj["mode"], hm["mode"]) or st["local"]["model"]:
-        typer.echo(f"local model (for local mode): {st['local']['model'] or 'not set'} at {st['local']['url']}")
+    servers = st["local"]["servers"]
+    if "local" in (inj["mode"], hm["mode"]) or servers:
+        typer.echo("local servers (for local mode, tried in order): " + ("; ".join(
+            f"{x['model'] or '(no model)'} at {x['url']}" + ("" if len(x["checks"]) == 2 else f" for {x['checks'][0]}")
+            for x in servers) or "none (`keepmum guard local add --model <name>`)"))
     cm = st["commands"]
     typer.echo(f"commands: {_COMMANDS_TEXT[cm['mode']]}")
     typer.echo(f"  rules ({len(cm['rules'])}, no model): {', '.join(cm['rules'])}")
@@ -602,7 +610,7 @@ def _set_mode(check: str, mode: str, model: str | None = None) -> None:
     if mode != "off" and (why := _missing(check, size)):
         typer.echo(f"keepmum guard {check}: {why}", err=True)
         raise typer.Exit(2)
-    if mode == "local" and (why := _local_missing(cfg)):
+    if mode == "local" and (why := _local_missing(cfg, check)):
         typer.echo(f"keepmum guard {check}: {why}", err=True)
         raise typer.Exit(2)
     try:
@@ -626,41 +634,174 @@ def guard_injection(mode: str = typer.Argument(..., help="warn, block, local or 
     _set_mode("injection", mode)
 
 
-@guard_app.command("local")
-def guard_local(model: str = typer.Option(None, "--model", help="The local model that answers flagged requests."),
-                url: str = typer.Option(None, "--url", help="The local server (default http://localhost:11434, Ollama)."),
-                as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
-    """The local model that local mode sends flagged requests to: show it and the models there, or set it."""
-    import json
+local_app = typer.Typer(help="The models on this Mac that local mode sends flagged requests to, tried in order.",
+                        invoke_without_command=True)
+guard_app.add_typer(local_app, name="local")
 
-    from .config import ConfigError
-    from .local import models
 
-    cfg = _config()
+def _save_servers(cfg, servers: list, command: str) -> None:
+    """Write [guard] local_servers, dropping the older local_url and local_model it replaces."""
+    from .config import ConfigError, set_value
+
     try:
-        if url and url != cfg.guard_local_url:
-            _update_config(cfg.path, "guard", "local_url", url, f"keepmum guard local --url {url}")
-        if model is not None and model != cfg.guard_local_model:
-            _update_config(cfg.path, "guard", "local_model", model, f"keepmum guard local --model {model}")
+        _update_config(cfg.path, "guard", "local_servers", [x.as_toml() for x in servers], command)
+        for key in ("local_url", "local_model"):
+            set_value("guard", key, None, cfg.path)
     except (ConfigError, OSError) as e:
         typer.echo(f"keepmum guard local: {e}", err=True)
         raise typer.Exit(1)
-    cfg = _config()
-    have = models(cfg.guard_local_url)
-    if as_json:
-        typer.echo(json.dumps({"url": cfg.guard_local_url, "model": cfg.guard_local_model, "models": have}))
+    typer.echo("Running proxies switch on their next request.", err=True)
+
+
+def _checks_option(checks: list[str] | None) -> tuple[str, ...] | None:
+    from .local import CHECKS
+
+    if not checks:
+        return None
+    if bad := [c for c in checks if c not in CHECKS]:
+        typer.echo(f"keepmum guard local: --check {bad[0]}: use injection or harm", err=True)
+        raise typer.Exit(2)
+    return tuple(c for c in CHECKS if c in checks)
+
+
+def _server_at(cfg, number: int):
+    if not 1 <= number <= len(cfg.guard_local_servers):
+        n = len(cfg.guard_local_servers)
+        typer.echo(f"keepmum guard local: no server {number}" + (f" (1 to {n})" if n else ": none is set"), err=True)
+        raise typer.Exit(2)
+    return cfg.guard_local_servers[number - 1]
+
+
+@local_app.callback()
+def guard_local(ctx: typer.Context,
+                model: str = typer.Option(None, "--model", help="Set the first server's model (adds a server if there is none)."),
+                url: str = typer.Option(None, "--url", help="Set the first server's URL (default http://localhost:11434, Ollama)."),
+                as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """Show the local servers, in the order tried, with the models each has (or set the first)."""
+    import dataclasses
+    import json
+
+    from .local import DEFAULT_URL, PRESETS, Server, kind, missing, models, on_this_mac
+
+    if ctx.invoked_subcommand:
         return
-    typer.echo(f"local model: {cfg.guard_local_model or 'not set'} at {cfg.guard_local_url}")
-    if have is None:
-        typer.echo("  nothing answers there: start Ollama (`ollama serve`, or open the Ollama app)")
-    elif not have:
-        typer.echo("  no models there yet: `ollama pull qwen3:8b`, for example")
-    else:
-        typer.echo("  models there: " + ", ".join(have))
-        if cfg.guard_local_model and cfg.guard_local_model not in have:
-            typer.echo(f"  {cfg.guard_local_model} is not one of them: `ollama pull {cfg.guard_local_model}`")
+    cfg = _config()
     if model is not None or url:
-        typer.echo("Running proxies switch on their next request.", err=True)
+        if url and not on_this_mac(url):
+            typer.echo("keepmum guard local: --url must be on this Mac (http://localhost:…)", err=True)
+            raise typer.Exit(2)
+        servers = list(cfg.guard_local_servers) or [Server(DEFAULT_URL)]
+        first = servers[0]
+        servers[0] = dataclasses.replace(first, url=(url or first.url).rstrip("/"), model=first.model if model is None else model)
+        _save_servers(cfg, servers, "keepmum guard local" + (f" --model {model}" if model is not None else "")
+                      + (f" --url {url}" if url else ""))
+        cfg = _config()
+    rows = []
+    for server in cfg.guard_local_servers:
+        have = models(server.url)
+        name = kind(server.url) if have is not None else None
+        rows.append({"url": server.url, "model": server.model, "checks": list(server.checks), "api": server.api,
+                     "kind": name, "models": have, "problem": missing(server, have, name)})
+    if as_json:
+        typer.echo(json.dumps({"servers": rows, "presets": [{"id": k, "name": n, "url": u} for k, (n, u) in PRESETS.items()]}))
+        return
+    if not rows:
+        typer.echo("no local servers: `keepmum guard local add --model qwen3:8b` (Ollama), or --preset lmstudio, llamacpp, mlx")
+        return
+    for i, row in enumerate(rows, 1):
+        checks = "" if len(row["checks"]) == 2 else f", {row['checks'][0]} only"
+        api = "" if row["api"] == "auto" else f", api {row['api']}"
+        typer.echo(f"{i}. {row['model'] or '(no model)'} at {row['url']}{' (' + row['kind'] + ')' if row['kind'] else ''}"
+                   f"{checks}{api}")
+        if row["models"] is None:
+            typer.echo("   nothing answers there" + (": open the Ollama app, or `ollama serve`" if row["url"] == DEFAULT_URL else ""))
+        else:
+            typer.echo("   models there: " + (", ".join(row["models"]) or "none yet"))
+            if row["problem"]:
+                typer.echo(f"   {row['problem']}")
+    if len(rows) > 1:
+        typer.echo("A flagged request goes to the first that answers, for its check.")
+
+
+@local_app.command("add")
+def guard_local_add(model: str = typer.Option("", "--model", help="The model there that answers flagged requests."),
+                    url: str = typer.Option(None, "--url", help="The server, on this Mac (default: the preset's, else Ollama's)."),
+                    preset: str = typer.Option(None, "--preset", help="ollama, lmstudio, llamacpp or mlx: their usual URL."),
+                    check: list[str] = typer.Option(None, "--check", help="Only for this check: injection or harm (repeat for both; default both)."),
+                    api: str = typer.Option("auto", "--api", help="auto (the agent's own API if the server speaks it, else Chat Completions), native or chat."),
+                    first: bool = typer.Option(False, "--first", help="Try it before the others.")) -> None:
+    """Add a local server, tried after the others (or first)."""
+    from .local import APIS, CHECKS, DEFAULT_URL, PRESETS, Server, on_this_mac
+
+    if preset and preset not in PRESETS:
+        typer.echo(f"keepmum guard local add: --preset {preset}: use {', '.join(PRESETS)}", err=True)
+        raise typer.Exit(2)
+    url = (url or (PRESETS[preset][1] if preset else DEFAULT_URL)).rstrip("/")
+    if not on_this_mac(url):
+        typer.echo("keepmum guard local add: --url must be on this Mac (http://localhost:…): a flagged request carries real values", err=True)
+        raise typer.Exit(2)
+    if api not in APIS:
+        typer.echo(f"keepmum guard local add: --api {api}: use {', '.join(APIS)}", err=True)
+        raise typer.Exit(2)
+    cfg = _config()
+    server = Server(url, model, _checks_option(check) or CHECKS, api)
+    servers = [server, *cfg.guard_local_servers] if first else [*cfg.guard_local_servers, server]
+    _save_servers(cfg, servers, f"keepmum guard local add --url {url}" + (f" --model {model}" if model else ""))
+    typer.echo(f"local server {servers.index(server) + 1}: {model or '(no model yet)'} at {url}", err=True)
+
+
+@local_app.command("set")
+def guard_local_set(number: int = typer.Argument(..., help="The server's number in `keepmum guard local`."),
+                    model: str = typer.Option(None, "--model", help="Its model."),
+                    url: str = typer.Option(None, "--url", help="Its URL, on this Mac."),
+                    check: list[str] = typer.Option(None, "--check", help="Only for this check (repeat for both)."),
+                    api: str = typer.Option(None, "--api", help="auto, native or chat.")) -> None:
+    """Change one local server."""
+    import dataclasses
+
+    from .local import APIS, on_this_mac
+
+    cfg = _config()
+    server = _server_at(cfg, number)
+    if url and not on_this_mac(url):
+        typer.echo("keepmum guard local set: --url must be on this Mac (http://localhost:…)", err=True)
+        raise typer.Exit(2)
+    if api is not None and api not in APIS:
+        typer.echo(f"keepmum guard local set: --api {api}: use {', '.join(APIS)}", err=True)
+        raise typer.Exit(2)
+    changed = dataclasses.replace(server, model=server.model if model is None else model,
+                                  url=(url or server.url).rstrip("/"), checks=_checks_option(check) or server.checks,
+                                  api=api or server.api)
+    servers = list(cfg.guard_local_servers)
+    servers[number - 1] = changed
+    _save_servers(cfg, servers, f"keepmum guard local set {number}")
+
+
+@local_app.command("move")
+def guard_local_move(number: int = typer.Argument(..., help="The server's number."),
+                     to: int = typer.Argument(..., help="Its new place: 1 is tried first.")) -> None:
+    """Change the order the local servers are tried in."""
+    cfg = _config()
+    server = _server_at(cfg, number)
+    servers = list(cfg.guard_local_servers)
+    servers.pop(number - 1)
+    servers.insert(max(0, min(to, len(servers) + 1) - 1), server)
+    _save_servers(cfg, servers, f"keepmum guard local move {number} {to}")
+
+
+@local_app.command("remove")
+def guard_local_remove(number: int = typer.Argument(..., help="The server's number.")) -> None:
+    """Remove a local server. A check left in local mode with none refuses what it flags."""
+    cfg = _config()
+    _server_at(cfg, number)
+    servers = list(cfg.guard_local_servers)
+    servers.pop(number - 1)
+    _save_servers(cfg, servers, f"keepmum guard local remove {number}")
+    cfg = _config()
+    for check in ("injection", "harm"):
+        if getattr(cfg, f"guard_{check}") == "local" and _local_missing(cfg, check):
+            typer.echo(f"note: the {check} check is in local mode with no server that can answer: what it flags is refused",
+                       err=True)
 
 
 @guard_app.command("commands")

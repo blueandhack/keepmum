@@ -69,15 +69,32 @@ final class Engine {
         var harm: Harm
         /// nil from older engines.
         var commands: Commands?
-        /// Where local mode sends a flagged request (local.py); nil from older engines.
-        struct Local: Decodable, Equatable { var url: String; var model: String }
+        /// Where local mode sends a flagged request: the servers, in the order tried (local.py).
+        struct Local: Decodable, Equatable {
+            struct Server: Decodable, Equatable { var url: String; var model: String; var checks: [String]; var api: String }
+            var servers: [Server]
+        }
         var local: Local?
     }
 
-    /// `keepmum guard local --json`: the local server, its model, and the models it has (nil: it
-    /// did not answer).
-    struct LocalModels: Decodable, Equatable { var url: String; var model: String; var models: [String]? }
-    private(set) var localModels: LocalModels?
+    /// `keepmum guard local --json`: each local server, in the order tried, with what it is, the
+    /// models it has (nil: it did not answer) and why it cannot answer yet; and the usual servers'
+    /// URLs, for Add.
+    struct LocalServers: Decodable, Equatable {
+        struct Server: Decodable, Equatable {
+            var url: String
+            var model: String
+            var checks: [String]
+            var api: String
+            var kind: String?
+            var models: [String]?
+            var problem: String?
+        }
+        struct Preset: Decodable, Equatable, Identifiable { var id: String; var name: String; var url: String }
+        var servers: [Server]
+        var presets: [Preset]
+    }
+    private(set) var localServers: LocalServers?
 
     /// `keepmum rules builtin --json`: one built-in rule, its type, and whether it is on.
     struct BuiltinRule: Decodable, Equatable, Identifiable {
@@ -395,17 +412,40 @@ final class Engine {
         await act { try await self.check(["guard", check, mode] + (model.map { ["--model", $0] } ?? [])) }
     }
 
-    /// What the local server has, for the Local model picker. Asks it (on 127.0.0.1) each time.
-    func loadLocalModels() async {
+    /// The local servers and what each has, for Settings › Checks. Asks each (on this Mac) every time.
+    func loadLocalServers() async {
         guard let out = try? await run(["guard", "local", "--json"]), out.code == 0,
-              let m = try? JSONDecoder().decode(LocalModels.self, from: Data(out.stdout.utf8)) else { return }
-        localModels = m
+              let m = try? JSONDecoder().decode(LocalServers.self, from: Data(out.stdout.utf8)) else { return }
+        localServers = m
     }
 
-    /// The local model that answers flagged requests in local mode.
-    func setLocalModel(_ name: String) async {
-        await act { try await self.check(["guard", "local", "--model", name]) }
-        await loadLocalModels()
+    /// Adds a local server, last in the order: one of the usual ones, or a URL on this Mac. Its
+    /// model is chosen after, from what it has.
+    func addLocalServer(preset: String? = nil, url: String? = nil) async {
+        var args = ["guard", "local", "add"]
+        if let preset { args += ["--preset", preset] }
+        if let url { args += ["--url", url] }
+        await act { try await self.check(args) }
+        await loadLocalServers()
+    }
+
+    /// Changes local server `number` (1 is tried first): its model, or the checks it answers for.
+    func setLocalServer(_ number: Int, model: String? = nil, checks: [String]? = nil) async {
+        var args = ["guard", "local", "set", String(number)]
+        if let model { args += ["--model", model] }
+        for c in checks ?? [] { args += ["--check", c] }
+        await act { try await self.check(args) }
+        await loadLocalServers()
+    }
+
+    func moveLocalServer(_ number: Int, to: Int) async {
+        await act { try await self.check(["guard", "local", "move", String(number), String(to)]) }
+        await loadLocalServers()
+    }
+
+    func removeLocalServer(_ number: Int) async {
+        await act { try await self.check(["guard", "local", "remove", String(number)]) }
+        await loadLocalServers()
     }
 
     /// Turn a check off and delete its model.
@@ -670,8 +710,21 @@ final class Engine {
                                                                              "deleting your home folder or the system", "erasing a disk",
                                                                              "a fork bomb", "credential files sent over the network",
                                                                              "environment variables sent over the network"]),
-                                       local: .init(url: "http://localhost:11434", model: "qwen3:8b")))
-        e.localModels = .init(url: "http://localhost:11434", model: "qwen3:8b", models: ["gemma3:12b", "qwen3:8b"])
+                                       local: .init(servers: [
+                                           .init(url: "http://localhost:11434", model: "qwen3:8b", checks: ["injection", "harm"], api: "auto"),
+                                           .init(url: "http://localhost:1234", model: "qwen/qwen3-14b", checks: ["harm"], api: "auto"),
+                                           .init(url: "http://localhost:8080", model: "", checks: ["injection", "harm"], api: "auto")])))
+        e.localServers = .init(servers: [
+            .init(url: "http://localhost:11434", model: "qwen3:8b", checks: ["injection", "harm"], api: "auto", kind: "Ollama",
+                  models: ["gemma3:12b", "qwen3:8b"], problem: nil),
+            .init(url: "http://localhost:1234", model: "qwen/qwen3-14b", checks: ["harm"], api: "auto", kind: "LM Studio",
+                  models: ["qwen/qwen3-14b"], problem: nil),
+            .init(url: "http://localhost:8080", model: "", checks: ["injection", "harm"], api: "auto", kind: nil,
+                  models: nil, problem: "no model chosen yet")],
+            presets: [.init(id: "ollama", name: "Ollama", url: "http://localhost:11434"),
+                      .init(id: "lmstudio", name: "LM Studio", url: "http://localhost:1234"),
+                      .init(id: "llamacpp", name: "llama.cpp", url: "http://localhost:8080"),
+                      .init(id: "mlx", name: "MLX", url: "http://localhost:8080")])
         e.serviceStatus = .enabled
         if around {
             e.status?.protect = .init(settings: "~/.claude/settings.json", on: false, baseUrl: "http://127.0.0.1:3425")

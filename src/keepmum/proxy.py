@@ -51,8 +51,9 @@ from starlette.routing import Route
 
 from .gateway import ROUTE, api_of_route
 from .gemini import GeminiStreamRestorer, restore_gemini
-from .local import DEFAULT_URL as LOCAL_URL
+from .local import CHAT_PATH as LOCAL_CHAT_PATH
 from .local import PATHS as LOCAL_PATHS
+from .local import ChatStream, from_chat, to_chat
 from .local import LocalRoute
 from .local import prepare as prepare_local
 from .redact import Redactor
@@ -166,6 +167,19 @@ def wants_stream(t: Target, body, query: str) -> bool:
     return isinstance(body, dict) and bool(body.get("stream")) and t.path != "/v1/messages/count_tokens"
 
 
+def _error_text(raw: bytes, limit: int = 160) -> str:
+    """A local server's error, short: its message if it sent one in JSON, else the start of the body."""
+    try:
+        data = json.loads(raw)
+        err = data.get("error", data) if isinstance(data, dict) else data
+        text = err.get("message") if isinstance(err, dict) else err
+        text = text if isinstance(text, str) else json.dumps(err)
+    except ValueError:
+        text = raw.decode("utf-8", "replace")
+    text = " ".join(text.split())
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
 class Proxy:
     def __init__(self, redactor: Redactor, upstream: str = UPSTREAM, policy: dict[str, str] | None = None,
                  client: httpx.AsyncClient | None = None, stats: Stats | None = None, stats_token: str | None = None,
@@ -179,8 +193,12 @@ class Proxy:
         self.guards = [guards] if hasattr(guards, "check") else list(guards or [])
         # The check on the replies' shell commands (commands.CommandsCheck), or None.
         self.commands = commands
-        # Where local mode sends a flagged request: a callable giving (url, model), or None (local.py).
+        # Where local mode sends a flagged request: a callable giving a check's local.Server list, in
+        # the order tried, or None (local.py).
         self.local = local
+        # (server URL, API) pairs a server answered 404/405/501 for and then answered as Chat
+        # Completions: asked that way from then on, until keepmum restarts.
+        self._chat_only: set[tuple[str, str]] = set()
         self._background: set = set()
         self.upstream = upstream.rstrip("/")
         self.prefixed = {"/openai": openai_upstream.rstrip("/"), "/chatgpt": chatgpt_upstream.rstrip("/"),
@@ -529,47 +547,106 @@ class Proxy:
                          "`keepmum guard injection warn` to send such requests with a warning.")
 
     async def _answer_locally(self, request: Request, t: Target, body: dict, route: LocalRoute, origin) -> Response:
-        """Local mode: the flagged request goes to the local model, as the agent wrote it (real
-        values included: it stays on this Mac) but with the local model's name, no tools and a note
-        (local.py), and its answer goes back to the agent. Never the agent's API key."""
+        """Local mode: the flagged request goes to a model on this Mac, as the agent wrote it (real
+        values included: it stays on this Mac) but with that model's name, no tools and a note
+        (local.py), and its answer goes back to the agent. Never the agent's API key. The servers
+        for this check are tried in order; the first that answers with a 2xx gives the answer. A
+        server that does not speak the agent's API is asked in Chat Completions instead."""
         path = request.url.path
-        url, model = self.local() if callable(self.local) else (LOCAL_URL, "")
+        servers = self.local(route.check) if callable(self.local) else []
         refused = guard_summary(route.hits, "blocked")
-        if not model:
+        if not servers:
             self._record(path, "blocked", 403, origin=origin, guard=refused)
-            return api_error(403, "permission_error", f"the {route.check} check flagged this request for the local model, "
-                             "but none is set, so it was not sent. Set one with `keepmum guard local --model <name>`.")
-        data = prepare_local(body, t.api, model, route)
-        target = url.rstrip("/") + LOCAL_PATHS[t.api]
-        headers = {"content-type": "application/json"}
-        if t.api == "messages":
-            headers["anthropic-version"] = request.headers.get("anthropic-version", "2023-06-01")
-        payload = json.dumps(data, ensure_ascii=False).encode("utf-8", "replace")
+            return api_error(403, "permission_error", f"the {route.check} check flagged this request for a local model, "
+                             "but none is set for it, so it was not sent. Add one with "
+                             "`keepmum guard local add --model <name>`.")
+        stream = wants_stream(t, body, request.url.query)
         local_origin = (origin[0] if origin else None, "local")
-        try:
-            if wants_stream(t, body, request.url.query):
-                resp = await self.client.send(self.client.build_request("POST", target, headers=headers, content=payload),
-                                              stream=True)
-
-                async def stream():
+        failures: list[str] = []
+        for server in servers:
+            ways = (["chat"] if server.api == "chat" or (server.api == "auto" and (server.url, t.api) in self._chat_only)
+                    else ["native", "chat"] if server.api == "auto" else ["native"])
+            for way in ways:
+                if way == "native":
+                    data, target = prepare_local(body, t.api, server.model, route), server.url + LOCAL_PATHS[t.api]
+                else:
+                    data, target = to_chat(body, t.api, server.model, route), server.url + LOCAL_CHAT_PATH
+                headers = {"content-type": "application/json"}
+                if t.api == "messages" and way == "native":
+                    headers["anthropic-version"] = request.headers.get("anthropic-version", "2023-06-01")
+                payload = json.dumps(data, ensure_ascii=False).encode("utf-8", "replace")
+                try:
+                    resp = await self.client.send(self.client.build_request("POST", target, headers=headers, content=payload),
+                                                  stream=True)
+                except httpx.HTTPError as e:
+                    failures.append(f"{server.url} did not answer ({type(e).__name__})")
+                    break  # the next server
+                if not 200 <= resp.status_code < 300:
+                    try:  # some servers (mlx_lm.server: HTTP/1.0) close the connection mid-body
+                        detail = _error_text(await resp.aread())
+                    except httpx.HTTPError:
+                        detail = ""
+                    await resp.aclose()
+                    if way == "native" and len(ways) > 1 and resp.status_code in (404, 405, 501):
+                        continue  # perhaps it does not speak this API: ask in Chat Completions
+                    failures.append(f"{server.model} at {server.url}: HTTP {resp.status_code}" + (f" ({detail})" if detail else ""))
+                    break
+                content = None
+                if not stream:
                     try:
-                        async for chunk in resp.aiter_raw():
-                            yield chunk
+                        content = await resp.aread()
+                    except httpx.HTTPError as e:
+                        failures.append(f"{server.model} at {server.url}: the answer broke off ({type(e).__name__})")
+                        break
                     finally:
                         await resp.aclose()
-                        self._record(path, "local", resp.status_code, origin=local_origin, guard=guard_summary(route.hits, "local"))
-                        log.info("%s -> local model %s: %d (streamed)", path, model, resp.status_code)
+                if way == "chat" and len(ways) > 1:
+                    self._chat_only.add((server.url, t.api))
+                if failures:
+                    log.warning("%s: %s; answered by the next local server", path, "; ".join(failures))
+                return self._local_answer(resp, content, path, server, way, t.api, local_origin, route)
+        log.error("%s: no local server answered (%s); not sent anywhere else", path, "; ".join(failures))
+        self._record(path, "blocked", 502, origin=origin, guard=refused)
+        return api_error(502, "api_error", f"the {route.check} check sent this request to a local model, and none "
+                         f"answered: {'; '.join(failures)}. It was not sent anywhere else.")
 
-                return StreamingResponse(stream(), status_code=resp.status_code, headers=self._response_headers(resp))
-            resp = await self.client.post(target, headers=headers, content=payload)
-        except httpx.HTTPError as e:
-            log.error("%s: the local model at %s did not answer (%s)", path, url, type(e).__name__)
-            self._record(path, "blocked", 502, origin=origin, guard=refused)
-            return api_error(502, "api_error", f"the {route.check} check sent this request to the local model at {url}, "
-                             f"which did not answer ({type(e).__name__}). It was not sent anywhere else.")
-        self._record(path, "local", resp.status_code, origin=local_origin, guard=guard_summary(route.hits, "local"))
-        log.info("%s -> local model %s: %d", path, model, resp.status_code)
-        return Response(resp.content, status_code=resp.status_code, headers=self._response_headers(resp))
+    def _local_answer(self, resp: httpx.Response, content: bytes | None, path: str, server, way: str, api: str,
+                      origin, route: LocalRoute) -> Response:
+        """A local server's 2xx answer, passed back as it is or, from Chat Completions, in the
+        agent's API: `content` when read whole, else streamed from `resp`."""
+        hits = guard_summary(route.hits, "local")
+        how = "" if way == "native" else ", as Chat Completions"
+        headers = self._response_headers(resp)
+        if way == "chat":
+            headers = {k: v for k, v in headers.items() if k.lower() not in ("content-type", "content-length")}
+        if content is None:
+            translate = ChatStream(api, server.model) if way == "chat" else None
+
+            async def body():
+                try:
+                    async for chunk in resp.aiter_raw():
+                        yield translate.feed(chunk) if translate else chunk
+                except httpx.HTTPError as e:  # too late for another server: end what was sent
+                    log.warning("%s: the local model at %s broke off its answer (%s)", path, server.url, type(e).__name__)
+                finally:
+                    await resp.aclose()
+                    self._record(path, "local", resp.status_code, origin=origin, guard=hits)
+                    log.info("%s -> local model %s at %s%s: %d (streamed)", path, server.model, server.url, how, resp.status_code)
+                if translate:
+                    yield translate.end()
+
+            if translate:
+                headers["content-type"] = "text/event-stream"
+            return StreamingResponse(body(), status_code=resp.status_code, headers=headers)
+        if way == "chat":
+            try:
+                content = json.dumps(from_chat(json.loads(content), api, server.model), ensure_ascii=False).encode()
+            except (ValueError, AttributeError, TypeError, IndexError):
+                pass  # not JSON: passed back as it is
+            headers["content-type"] = "application/json"
+        self._record(path, "local", resp.status_code, origin=origin, guard=hits)
+        log.info("%s -> local model %s at %s%s: %d", path, server.model, server.url, how, resp.status_code)
+        return Response(content, status_code=resp.status_code, headers=headers)
 
     async def _check_later(self, guard, items, path: str, origin, kind: str = "clean", request: str | None = None) -> None:
         """Warn mode, after the request is sent: record new hits; a failure is logged and nothing more."""

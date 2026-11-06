@@ -37,8 +37,10 @@
     harm = "off"           # what the user typed, for harmful requests (harm.py): "warn" or "block"
     harm_model = "small"   # "small" (Content Safety Guard, 0.4 GB while in use), or Qwen3Guard "0.6b" (1.1 GB) or "4b" (4.9 GB)
     commands = "off"       # shell commands in the model's replies, against a few rules (commands.py): "warn" or "block"
-    local_url = "http://localhost:11434"   # injection or harm = "local": a flagged request goes to this Ollama (local.py)
-    local_model = ""       # the model there that answers it, such as "qwen3:8b"
+    # injection or harm = "local": a flagged request is answered by a model on this Mac (local.py),
+    # the first of these that answers; checks: only for those (default both); api: "auto", "native" or "chat"
+    local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
+                     { url = "http://localhost:1234", model = "qwen/qwen3-8b", checks = ["harm"] }]
 
     [log]
     level = "info"
@@ -65,7 +67,8 @@ _SCHEMA = {
     "rules": {"mask": list, "off": list},
     "log": {"level": str, "previews": bool, "context": bool},
     "audit": {"keep_days": int},
-    "guard": {"injection": str, "harm": str, "harm_model": str, "commands": str, "local_url": str, "local_model": str},
+    "guard": {"injection": str, "harm": str, "harm_model": str, "commands": str, "local_url": str, "local_model": str,
+              "local_servers": list},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
 _HOST = re.compile(r"(?i)(?:[a-z0-9_-]+\.)*[a-z0-9-]+\.[a-z]{2,63}|localhost|\d{1,3}(?:\.\d{1,3}){3}")
@@ -120,8 +123,8 @@ class Config:
     guard_harm: str = "off"
     guard_harm_model: str = "small"
     guard_commands: str = "off"
-    guard_local_url: str = "http://localhost:11434"
-    guard_local_model: str = ""
+    # local.Server entries, in the order tried. The older local_url and local_model are read as one.
+    guard_local_servers: list = field(default_factory=list)
     path: Path | None = None
 
 
@@ -247,10 +250,18 @@ def load(path: Path | None = None) -> Config:
             raise ConfigError(f"{path}: guard.{key} must be \"off\", \"warn\", \"block\" or \"local\"")
     if cfg.guard_commands not in ("off", "warn", "block"):
         raise ConfigError(f"{path}: guard.commands must be \"off\", \"warn\" or \"block\"")
-    cfg.guard_local_url = guard.get("local_url", cfg.guard_local_url)
-    cfg.guard_local_model = guard.get("local_model", cfg.guard_local_model)
-    if not cfg.guard_local_url.startswith(("http://localhost", "http://127.0.0.1", "http://[::1]")):
-        raise ConfigError(f"{path}: guard.local_url must be on this Mac (http://localhost:…): a flagged request carries real values")
+    from .local import DEFAULT_URL, parse_servers
+
+    # local_servers wins; before it there was one server, local_url and local_model (doctor says so).
+    servers = guard.get("local_servers")
+    if servers is None and ("local_url" in guard or "local_model" in guard):
+        servers, where = [{"url": guard.get("local_url", DEFAULT_URL), "model": guard.get("local_model", "")}], "guard.local_url"
+    else:
+        where = "guard.local_servers"
+    try:
+        cfg.guard_local_servers = parse_servers(servers or [], where)
+    except ValueError as e:
+        raise ConfigError(f"{path}: {str(e).replace('guard.local_url[1].url', 'guard.local_url').replace('guard.local_url[1].', 'guard.local_')}")
     # A harm check turned on before "small" existed, without a model set, keeps the default it had.
     cfg.guard_harm_model = guard.get("harm_model", "0.6b" if cfg.guard_harm != "off" else cfg.guard_harm_model)
     if cfg.guard_harm_model not in ("small", "0.6b", "4b"):

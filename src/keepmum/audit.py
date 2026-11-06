@@ -258,6 +258,9 @@ def config_state(cfg) -> dict:
         "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
         "guard": cfg.guard_injection, "harm": cfg.guard_harm, "harm_model": cfg.guard_harm_model,
         "commands": cfg.guard_commands,
+        "local_servers": [f"{x.model or '(no model)'} at {x.url}"
+                          + ("" if tuple(x.checks) == ("injection", "harm") else f" for {', '.join(x.checks)}")
+                          + ("" if x.api == "auto" else f" ({x.api})") for x in cfg.guard_local_servers],
     }
 
 
@@ -271,7 +274,7 @@ _SETTINGS = {
     "upstream": ("server.upstream", "any"), "gateways": ("gateways", "added"), "destinations": ("destinations", "added"), "previews": ("log.previews", None), "context": ("log.context", None),
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
-_ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model", "commands"}
+_ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers"}
 # Local is below block: a flagged request is answered (on this Mac) rather than refused.
 _GUARD_RANK = {"off": 0, "warn": 1, "local": 2, "block": 3}
 
@@ -297,6 +300,13 @@ def config_changes(old: dict, new: dict) -> list[dict]:
             # A check that does less than before: block to warn, or either to off.
             out.append({"setting": name, "from": old[key], "to": new.get(key),
                         "weakens": _GUARD_RANK.get(new.get(key), 0) < _GUARD_RANK.get(old[key], 0)})
+    a, b = old.get("local_servers"), new.get("local_servers")
+    if "local_servers" in old and a != b:
+        # Where local mode sends flagged requests: all on this Mac, so no change weakens. The order
+        # is the order tried, so a new order is a change too.
+        added, removed = [x for x in b or [] if x not in a], [x for x in a if x not in (b or [])]
+        out.append({"setting": "guard.local_servers", "added": added, "removed": removed, "weakens": False}
+                   if added or removed else {"setting": "guard.local_servers", "from": a, "to": b, "weakens": False})
     if "harm_model" in old and old["harm_model"] != new.get("harm_model"):
         out.append({"setting": "guard.harm_model", "from": old["harm_model"], "to": new.get("harm_model"),
                     "weakens": False})

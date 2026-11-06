@@ -159,7 +159,10 @@ keepmum guard injection warn         # check what tools return; log a possible i
 keepmum guard harm block             # check what you type; refuse a request the model flags
 keepmum guard harm warn --model 4b   # switch the harm check to Qwen3Guard 4B, the most accurate
 keepmum guard commands block         # check the shell commands in the model's replies; no download
-keepmum guard local --model qwen3:8b # the Ollama model that answers flagged requests in local mode
+keepmum guard local add --model qwen3:8b             # Ollama: the model that answers flagged requests in local mode
+keepmum guard local add --preset lmstudio --model qwen/qwen3-14b --check harm   # another server, for one check
+keepmum guard local                                  # the servers, in the order tried, and the models each has
+keepmum guard local move 2 1 / set 1 --model … / remove 2
 keepmum guard injection local        # a flagged request is answered by that model, never sent
 keepmum guard injection off          # stop a check; `keepmum guard remove injection|harm` also deletes its model
 keepmum guard                        # status of both
@@ -171,7 +174,9 @@ Both checks are off by default, and keepmum downloads their models only when you
 - **Harm** checks what you typed, without what agents add to your turn (Claude Code's system reminders, Codex's environment context and AGENTS.md). It never checks tool results, system prompts or the resent history.
 - **Commands** checks the other direction: the shell commands a model's reply asks your agent to run (Claude Code's Bash, Codex's shell tools, Gemini CLI's `run_shell_command`). Seven rules, no model: a download run as a script (`curl … | sh`), decoded text run as a script, deleting your home folder or the system, erasing a disk, a fork bomb, and credential files or environment variables sent over the network. In warn mode the agent gets the command as written and the hit is logged; in block mode it gets, in its place, a command that prints why keepmum refused it and fails, so the model can explain or ask you. It reads only what keepmum restores, so not in observe mode.
 
-**Local** (injection and harm) checks first, like block, and sends a flagged request to a model on your Mac instead of the provider: Ollama at `http://localhost:11434`, with the model `keepmum guard local --model` sets. The agent gets its answer, and later requests that still carry the flagged text go there too, until you rewind or `/clear`. The local model gets the request with its real values (it stays on your Mac) but never your API key, and no tools: a flagged request is the one most likely to carry instructions planted for the agent, and without tools the local model can only answer in text. A note in its instructions says why the turn came to it. Use a capable model (8B or larger): a small one may repeat a planted instruction as advice. Claude Code, Codex, pi and opencode can go local; Gemini CLI's API is one Ollama does not speak, so its flagged requests are refused. If no model is set or Ollama does not answer, flagged requests are refused, never sent.
+**Local** (injection and harm) checks first, like block, and sends a flagged request to a model on your Mac instead of the provider. The agent gets its answer, and later requests that still carry the flagged text go there too, until you rewind or `/clear`. The local model gets the request with its real values (it stays on your Mac) but never your API key, and no tools: a flagged request is the one most likely to carry instructions planted for the agent, and without tools the local model can only answer in text. A note in its instructions says why the turn came to it. Use a capable model (8B or larger): a small one may repeat a planted instruction as advice, or help with what the harm check flagged.
+
+Where it goes is a list of local servers (`keepmum guard local add`), each a URL on this Mac and a model there, for both checks or one (`--check harm`: a bigger model for harm, say). A flagged request goes to the first that answers for its check: one that is not running, lacks its model or answers with an error is passed over. If none answers, or none is set, the request is refused, never sent. Ollama (`--preset ollama`, the default), LM Studio (`lmstudio`) and llama.cpp's llama-server (`llamacpp`) speak the APIs Claude Code and Codex use, so the request goes as it is; a server that does not, such as `mlx_lm.server` (`mlx`), gets it as Chat Completions, earlier tool calls and results as text, and its answer goes back in the agent's API (`--api chat` asks that way from the start). Claude Code, Codex, pi and opencode can go local; Gemini CLI's API is one none of them speak, so its flagged requests are refused.
 
 **Warn** sends the request at once and runs the check afterwards, so it adds no delay. A hit is logged, counted in the stats feed and audited once, with the check, the tool (for injection), the score, the length and, for harm, the model's categories (Violent, Jailbreak, …), never the text. **Block** runs the check first. The agent gets an error that names the tool or the categories, and every retry that still carries the flagged text is refused too: rewind or `/clear` to drop it. If a check fails, block mode refuses the request and warn mode sends it.
 
@@ -284,8 +289,10 @@ injection = "off"      # check tool results for prompt injection: "warn" or "blo
 harm = "off"           # check what you type for harmful requests: "warn" or "block" (`keepmum guard setup harm` first)
 harm_model = "small"   # or Qwen3Guard "0.6b" or "4b"
 commands = "off"       # check the shell commands in the model's replies: "warn" or "block" (no setup)
-local_url = "http://localhost:11434"   # injection or harm = "local": where a flagged request goes (on this Mac only)
-local_model = ""       # the model there, such as "qwen3:8b" (`keepmum guard local`)
+# injection or harm = "local": a flagged request goes to the first of these that answers (on this Mac only);
+# checks: only for those (default both); api: "auto" (default), "native" or "chat" (`keepmum guard local`)
+local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
+                 { url = "http://localhost:1234", model = "qwen/qwen3-14b", checks = ["harm"] }]
 ```
 
 ## What keepmum stores, and where

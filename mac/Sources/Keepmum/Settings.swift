@@ -33,7 +33,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .setup: "The local model, the background service, and the coding agents keepmum protects"
         case .masking: "What is masked before a request leaves this Mac, and the projects left out"
         case .tools: "What each tool that reaches the network may receive, and where shell commands may send tokens"
-        case .checks: "Optional checks on what tools return, what you type, and the commands in replies"
+        case .checks: "Optional checks on what tools return, what you type, and the commands in replies, and the local models that answer what they flag"
         case .general: "Appearance, updates, the Logs page, and this app's connection to keepmum"
         case .doctor: "The same checks as keepmum doctor: this Mac, the model, keepmum's files"
         }
@@ -97,7 +97,8 @@ struct SettingsPage: View {
             return (AnyView(ToolsSection(store: store, engine: engine)),
                     engine.isBundled ? AnyView(ShellDestinationsSection(engine: engine)) : nil)
         case .checks:
-            return (AnyView(ChecksSection(engine: engine)), nil)
+            return (AnyView(ChecksSection(engine: engine)),
+                    engine.status?.guard?.local != nil ? AnyView(LocalServersSection(engine: engine)) : nil)
         case .general:
             return (AnyView(VStack(alignment: .leading, spacing: Space.xl) { display; UpdatesSection() }),
                     AnyView(VStack(alignment: .leading, spacing: Space.xl) {

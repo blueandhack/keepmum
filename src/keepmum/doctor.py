@@ -188,15 +188,29 @@ def _guard_checks(r, cfg) -> None:
         _check(r, FAIL if why else OK, f"injection check {cfg.guard_injection}: " + (why or
                f"Prompt Injection Guard Small, Apache-2.0; {GUARD_MEMORY['injection']} while in use"))
     if "local" in (cfg.guard_injection, cfg.guard_harm):
-        from .local import models
+        from .local import kind, missing, models, servers_for
 
-        have = models(cfg.guard_local_url)
-        why = ("no local model set (`keepmum guard local --model <name>`)" if not cfg.guard_local_model
-               else f"nothing answers at {cfg.guard_local_url} (open Ollama, or `ollama serve`)" if have is None
-               else f"{cfg.guard_local_url} has no {cfg.guard_local_model} (`ollama pull {cfg.guard_local_model}`)"
-               if cfg.guard_local_model not in have else None)
-        _check(r, FAIL if why else OK, "local mode: " + (why or f"flagged requests go to {cfg.guard_local_model} at "
-               f"{cfg.guard_local_url}, without tools") + ("; until then they are refused" if why else ""))
+        for check in ("injection", "harm"):
+            if getattr(cfg, f"guard_{check}") != "local":
+                continue
+            servers = servers_for(cfg.guard_local_servers, check)
+            if not servers:
+                _check(r, FAIL, f"local mode ({check}): no local server with a model for it "
+                       "(`keepmum guard local add --model <name>`); until then flagged requests are refused")
+                continue
+            ready = []
+            for i, server in enumerate(servers, 1):
+                have = models(server.url)
+                why = missing(server, have, kind(server.url) if have is not None else None)
+                if why is None:
+                    ready.append(server)
+                _check(r, OK if why is None else WARN, f"local mode ({check}), {i} of {len(servers)}: "
+                       + (why or f"{server.model} at {server.url}, without tools"))
+            if not ready:
+                _check(r, FAIL, f"local mode ({check}): none of its local servers can answer; until one can, flagged "
+                       "requests are refused")
+        if guard_keys_both(cfg.path):
+            _check(r, WARN, "config: [guard] has local_servers and the older local_url/local_model: only local_servers is used")
     if cfg.guard_commands != "off":
         from .commands import RULES, SENDS
 
@@ -227,3 +241,14 @@ def _tool_warnings(policy: dict) -> list[str]:
             out.append(f"{s['label']}: its tools changed ({', '.join(s['changed'])}), so it gets placeholders only; "
                        f"`keepmum tools trust {s['label']}` once you have checked them")
     return out
+
+
+def guard_keys_both(path) -> bool:
+    """[guard] has local_servers and the older local_url or local_model, which it overrides."""
+    import tomllib
+
+    try:
+        guard = tomllib.loads(path.read_text()).get("guard", {}) if path else {}
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    return "local_servers" in guard and ("local_url" in guard or "local_model" in guard)
