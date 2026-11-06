@@ -76,7 +76,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
         info["detector"] = pipeline.name
         info["checks"] = {"injection": new.guard_injection, "harm": new.guard_harm, "harm_model": new.guard_harm_model,
                           "commands": new.guard_commands}
-        harm_model.want(new.guard_harm_model)
+        harm_model.want(new.guard_harm_model, new.guard_harm_sensitivity)
+        injection.threshold = new.guard_injection_threshold
         proxy.policy = new.restore
         proxy.gateways = {**new.gateways, **(gateways or {})}
         proxy.destinations = new.destinations
@@ -89,8 +90,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     from .harm import HarmModel
 
     # Models load on their first check and unload when idle; modes follow the config file.
-    injection = Guard(lambda: observe.config.guard_injection, name="injection")
-    harm_model = HarmModel(cfg.guard_harm_model)
+    injection = Guard(lambda: observe.config.guard_injection, threshold=cfg.guard_injection_threshold, name="injection")
+    harm_model = HarmModel(cfg.guard_harm_model, cfg.guard_harm_sensitivity)
     harm = Guard(lambda: observe.config.guard_harm, harm_model, threshold=harm_model.threshold, name="harm",
                  min_chars=8)
     harm_model.guard = harm

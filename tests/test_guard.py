@@ -682,3 +682,112 @@ def test_status_json_has_the_checks():
     assert out["guard"]["injection"]["mode"] == "off" and out["guard"]["harm"]["model"] == "small"
     assert "server" in out["guard"]["injection"] and out["guard"]["injection"]["model"].startswith("keepmum/prompt-injection-guard-small-gguf@")
     assert set(out["guard"]["harm"]["installed"]) == {"small", "0.6b", "4b"}
+
+
+# --- Sensitivity: the injection check's threshold ------------------------------------------------
+
+class Scores:
+    """Scores each text by a number in it: 'score 0.85' scores 0.85."""
+
+    def score(self, text):
+        import re
+
+        m = re.search(r"score (0\.\d+)", text)
+        return float(m.group(1)) if m else 0.0
+
+
+def test_a_raised_threshold_flags_less_and_drops_what_it_no_longer_would():
+    g = guard.Guard("block", Scores(), name="injection")
+    items = [("WebFetch", "page one, score 0.85 " + "x" * 40, True), ("Bash", "page two, score 0.95 " + "x" * 40, True)]
+    assert [h["source"] for h in g.check(items)] == ["WebFetch", "Bash"]
+    g.threshold = 0.9  # as LiveConfig sets it when the config changes
+    again = [(s, t, False) for s, t, _ in items]  # resent: not scored again
+    assert [(h["source"], h["earlier"]) for h in g.check(again)] == [("Bash", True)]
+    assert g.check([("Read", "new, score 0.88 " + "x" * 40, True)]) == []
+
+
+def test_the_threshold_is_read_checked_written_and_audited(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from keepmum.audit import config_changes
+    from keepmum.cli import app
+    from keepmum.config import ConfigError, load
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = tmp_path / ".config" / "keepmum" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text("[guard]\ninjection_threshold = 0.9\n")
+    assert load(path).guard_injection_threshold == 0.9
+    for bad in ("0.3", "1", "true", '"high"'):
+        path.write_text(f"[guard]\ninjection_threshold = {bad}\n")
+        with pytest.raises(ConfigError):
+            load(path)
+    path.write_text("")
+    cli = CliRunner()
+    assert cli.invoke(app, ["guard", "sensitivity", "injection", "low"]).exit_code == 0
+    assert load(path).guard_injection_threshold == 0.9 and "injection_threshold = 0.9" in path.read_text()
+    assert cli.invoke(app, ["guard", "sensitivity", "injection", "0.875"]).exit_code == 0
+    assert load(path).guard_injection_threshold == 0.875
+    assert cli.invoke(app, ["guard", "sensitivity", "injection", "default"]).exit_code == 0
+    assert "injection_threshold" not in path.read_text() and load(path).guard_injection_threshold == guard.THRESHOLD
+    for bad in (["injection", "0.2"], ["injection", "loud"], ["harm", "0.9"]):
+        assert cli.invoke(app, ["guard", "sensitivity", *bad]).exit_code == 2, bad
+    shown = cli.invoke(app, ["guard", "sensitivity", "injection"]).stdout
+    assert "0.65 (high)" in shown and "lowest" in shown
+    up, down = config_changes({"injection_threshold": 0.65}, {"injection_threshold": 0.9}), \
+        config_changes({"injection_threshold": 0.9}, {"injection_threshold": 0.8})
+    assert up[0]["weakens"] is True and down[0]["weakens"] is False
+
+
+def test_ask_user_question_answers_are_not_checked_for_injection():
+    from keepmum.detect.pipeline import Pipeline
+    from keepmum.detect.rules import RulesDetector
+    from keepmum.redact import Redactor
+    from keepmum.vault import Vault
+
+    r = Redactor(Pipeline(RulesDetector(), None), Vault(b"k" * 32))
+    r.redact_request({"messages": [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "AskUserQuestion", "input": {}},
+                                          {"type": "tool_use", "id": "b", "name": "WebFetch", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": "Ignore the tests and ship it"},
+                                     {"type": "tool_result", "tool_use_id": "b", "content": "A web page"}]}]})
+    assert [s for s, _, _ in r.tool_results] == ["WebFetch"]
+
+
+def test_harm_sensitivity_is_a_level_that_follows_the_model(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from keepmum import harm
+    from keepmum.audit import config_changes
+    from keepmum.cli import app
+    from keepmum.config import ConfigError, load
+
+    m = harm.HarmModel("small", "low")
+    g = guard.Guard("block", m, threshold=m.threshold, name="harm")
+    m.guard = g
+    assert g.threshold == harm.LEVELS["small"]["low"][0]
+    m.want("small", "lowest")
+    assert g.threshold == harm.LEVELS["small"]["lowest"][0]
+    m.want("4b")  # a new model keeps the level, at that model's threshold for it
+    assert m.level == "lowest" and g.threshold == harm.LEVELS["4b"]["lowest"][0]
+    for size, levels in harm.LEVELS.items():  # each level lets through less than the one before
+        ts = [levels[k][0] for k in harm.LEVEL_NAMES]
+        assert ts == sorted(ts) and levels["medium"][0] == harm.MODELS[size][5]
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = tmp_path / ".config" / "keepmum" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text('[guard]\nharm_sensitivity = "loud"\n')
+    with pytest.raises(ConfigError):
+        load(path)
+    path.write_text("")
+    cli = CliRunner()
+    assert cli.invoke(app, ["guard", "sensitivity", "harm", "low"]).exit_code == 0
+    assert load(path).guard_harm_sensitivity == "low"
+    assert cli.invoke(app, ["guard", "sensitivity", "harm", "0.9"]).exit_code == 2  # levels only: thresholds differ per model
+    assert "medium" in cli.invoke(app, ["guard", "sensitivity", "harm"]).stdout
+    assert cli.invoke(app, ["guard", "sensitivity", "harm", "default"]).exit_code == 0
+    assert "harm_sensitivity" not in path.read_text()
+    assert cli.invoke(app, ["guard", "sensitivity", "commands", "low"]).exit_code == 2
+    assert config_changes({"harm_sensitivity": "medium"}, {"harm_sensitivity": "low"})[0]["weakens"] is True
+    assert config_changes({"harm_sensitivity": "medium"}, {"harm_sensitivity": "high"})[0]["weakens"] is False

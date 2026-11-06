@@ -59,9 +59,42 @@ struct ChecksSection: View {
                 .disabled(!engine.isBundled || engine.busy)
             }
         }
+        if c.installed, let levels = c.levels, let threshold = c.threshold {
+            sensitivity(c, levels: levels, threshold: threshold)
+        }
         if c.installed {
             modelLine("Prompt Injection Guard Small by Horizon Labs · Apache-2.0 · 0.4 GB while in use", remove: "injection")
         }
+    }
+
+    private static let levelOrder = [("high", "High"), ("medium", "Medium"), ("low", "Low"), ("lowest", "Lowest")]
+
+    /// How readily the injection check flags: four levels from the benchmark, or a custom number
+    /// set with `keepmum guard sensitivity injection`.
+    @ViewBuilder private func sensitivity(_ c: Engine.Checks.Injection, levels: [String: Engine.Checks.Injection.Level],
+                                          threshold: Double) -> some View {
+        let current = levels.first { abs($0.value.threshold - threshold) < 0.0005 }?.key
+        let options = Self.levelOrder + (current == nil ? [("custom", "Custom")] : [])
+        FormRow(title: "Sensitivity", detail: sensitivityDetail(levels: levels, current: current, threshold: threshold,
+                                                                isDefault: abs(threshold - (c.defaultThreshold ?? 0.65)) < 0.0005)) {
+            modePicker(current ?? "custom", options: options) { level in
+                if level != "custom" { await engine.setInjectionThreshold(level) }
+            }
+        }
+    }
+
+    private func sensitivityDetail(levels: [String: Engine.Checks.Injection.Level], current: String?, threshold: Double,
+                                   isDefault: Bool) -> String {
+        let pct = { (x: Double) in x == 0 ? "none" : x < 0.01 ? "<1%" : "\(Int((x * 100).rounded()))%" }
+        let score = String(format: "%.2f", threshold)
+        guard let current, let l = levels[current] else {
+            return "Custom: flags a tool result scoring \(score) or more (keepmum guard sensitivity injection). Lower is stricter."
+        }
+        let which = current == "high" ? "High (the default)" : current.capitalized
+        let catches = "On keepmum's test set: catches \(pct(l.caught)) of injections, and flags \(pct(l.ordinary)) of ordinary pages and \(pct(l.security)) of security code and writing."
+        let advice = current == "high" ? " Working on security code? Medium or Low raises fewer false alarms." :
+                     current == "lowest" ? " Misses more injections: subtle ones score lower." : ""
+        return "\(which): flags a tool result scoring \(score) or more. \(catches)\(advice)"
     }
 
     private func injectionDetail(_ mode: String) -> String {
@@ -110,6 +143,12 @@ struct ChecksSection: View {
                 .disabled(!engine.isBundled || engine.busy || downloading)
             }
         }
+        if have, let levels = c.levels, let level = c.sensitivity, levels[level] != nil {
+            Hairline()
+            FormRow(title: "Sensitivity", detail: harmSensitivityDetail(levels, level, model: c.model)) {
+                modePicker(level, options: Self.levelOrder) { await engine.setHarmSensitivity($0) }
+            }
+        }
         if c.installed.values.contains(true) {
             modelLine("Content Safety Guard by Horizon Labs (Small), Qwen3Guard-Gen by the Qwen team (0.6B, 4B) · Apache-2.0 · downloaded: "
                       + Self.sizes.filter { c.installed[$0.0] == true }.map(\.1).joined(separator: ", "), remove: "harm")
@@ -136,6 +175,16 @@ struct ChecksSection: View {
         }
     }
 
+    private func harmSensitivityDetail(_ levels: [String: Engine.Checks.Harm.Level], _ level: String, model: String) -> String {
+        guard let l = levels[level] else { return "" }
+        let pct = { (x: Double) in x == 0 ? "none" : x < 0.01 ? "<1%" : "\(Int((x * 100).rounded()))%" }
+        let name = Self.sizes.first { $0.0 == model }?.1 ?? model
+        let which = level == "medium" ? "Medium (the default)" : level.capitalized
+        let advice = level == "high" ? " Flags one safe prompt in ten." :
+                     level == "lowest" || level == "low" ? " Misses more: about half of harmful prompts at Lowest." : ""
+        return "\(which) on \(name): on keepmum's test set, catches \(pct(l.caught)) of harmful prompts, and flags \(pct(l.safe)) of safe ones and \(pct(l.coding)) of coding prompts that only sound harmful.\(advice) The level carries over if you change the model."
+    }
+
     private func harmDetail(_ mode: String) -> String {
         switch mode {
         case "local": "What you type is checked before each request is sent; a flagged request is answered by your local model instead"
@@ -149,7 +198,7 @@ struct ChecksSection: View {
     private static let downloadSize = ["small": "164 MB", "0.6b": "805 MB", "4b": "4.7 GB"]
 
     private func sizeDetail(_ c: Engine.Checks.Harm) -> String {
-        let note = "Small: 66% of harmful prompts caught, 0.4 GB while in use, the fastest · 0.6B: 76%, 1.1 GB · 4B: 82%, 4.9 GB, a little slower"
+        let note = "At Medium sensitivity, Small: 66% of harmful prompts caught, 0.4 GB while in use, the fastest · 0.6B: 76%, 1.1 GB · 4B: 82%, 4.9 GB, a little slower"
         if c.model == "4b" && memoryGB < 32 {
             return "The 4B takes 4.9 GB while in use, a lot for this Mac's \(Int(memoryGB.rounded())) GB. " + note
         }

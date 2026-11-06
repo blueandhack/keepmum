@@ -44,6 +44,11 @@ def preview(value: str) -> str:
     return f"{value[0]}…{value[-1]}" if len(value) >= PREVIEW_MIN else "•••"
 
 
+# Tool results the injection check skips: they hold what the user chose or typed, not what a tool
+# fetched (Claude Code's AskUserQuestion returns the user's answers).
+NOT_FETCHED = frozenset({"AskUserQuestion"})
+
+
 # Characters of text kept on each side of a masked value for the Logs page's context.
 CONTEXT = 80
 
@@ -188,7 +193,7 @@ class Redactor:
         if not text:
             return text
         spans, seen = self._spans(text)
-        if self._in_result:
+        if self._in_result and self._tool not in NOT_FETCHED:
             self.tool_results.append((self._tool, text, not seen))
             if self.context:
                 self.shown[text] = as_types(text, spans)

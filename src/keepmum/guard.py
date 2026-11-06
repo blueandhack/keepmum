@@ -57,6 +57,12 @@ FILES = {
 LEGACY = ("shield-small-s15e",)
 MODES = ("off", "warn", "block", "local")  # local: local.py
 THRESHOLD = 0.65
+# Sensitivity levels for the app and `keepmum guard sensitivity injection`: the threshold, and on the benchmark's
+# 408 documents (bench/results/GUARD.md, the Q8_0 in keepmum's windows) the share of 144 injected
+# documents caught, and of 115 ordinary and 101 security documents (writing and code that quotes
+# attacks) flagged.
+LEVELS = {"high": (0.65, 0.993, 0.017, 0.069), "medium": (0.8, 0.972, 0.0, 0.05),
+          "low": (0.9, 0.938, 0.0, 0.04), "lowest": (0.98, 0.882, 0.0, 0.01)}
 WINDOW, OVERLAP, MAX_WINDOWS, TAIL_WINDOWS = 2048, 256, 16, 4
 BOS, EOS = 2, 1  # <bos>, <eos>
 BATCH = 1  # windows per request to llama-server: one at a time is the fastest here, and the smallest
@@ -294,6 +300,8 @@ class Guard:
             key = _key(text)
             with self._lock:
                 seen = self._flagged.get(key)
+            if seen is not None and seen["score"] < self.threshold:
+                seen = None  # flagged under a lower threshold than now: no longer a hit
             if seen is not None:
                 if earlier:
                     hits.append({**seen, "source": source, "earlier": True, "at": at})

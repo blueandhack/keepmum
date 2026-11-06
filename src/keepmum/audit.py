@@ -256,7 +256,8 @@ def config_state(cfg) -> dict:
         "gateways": sorted(f"{name} = {url}" for name, url in cfg.gateways.items()),
         "destinations": sorted(f"{rule} = {h}" for rule, hosts in cfg.destinations.items() for h in hosts),
         "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
-        "guard": cfg.guard_injection, "harm": cfg.guard_harm, "harm_model": cfg.guard_harm_model,
+        "guard": cfg.guard_injection, "injection_threshold": cfg.guard_injection_threshold, "harm": cfg.guard_harm,
+        "harm_sensitivity": cfg.guard_harm_sensitivity, "harm_model": cfg.guard_harm_model,
         "commands": cfg.guard_commands,
         "local_servers": [f"{x.model or '(no model)'} at {x.url}"
                           + ("" if tuple(x.checks) == ("injection", "harm") else f" for {', '.join(x.checks)}")
@@ -274,7 +275,8 @@ _SETTINGS = {
     "upstream": ("server.upstream", "any"), "gateways": ("gateways", "added"), "destinations": ("destinations", "added"), "previews": ("log.previews", None), "context": ("log.context", None),
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
-_ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers"}
+_ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers",
+                "injection_threshold", "harm_sensitivity"}
 # Local is below block: a flagged request is answered (on this Mac) rather than refused.
 _GUARD_RANK = {"off": 0, "warn": 1, "local": 2, "block": 3}
 
@@ -307,6 +309,15 @@ def config_changes(old: dict, new: dict) -> list[dict]:
         added, removed = [x for x in b or [] if x not in a], [x for x in a if x not in (b or [])]
         out.append({"setting": "guard.local_servers", "added": added, "removed": removed, "weakens": False}
                    if added or removed else {"setting": "guard.local_servers", "from": a, "to": b, "weakens": False})
+    if "injection_threshold" in old and old["injection_threshold"] != new.get("injection_threshold"):
+        # A higher threshold flags less: fewer false alarms, and fewer injections caught.
+        out.append({"setting": "guard.injection_threshold", "from": old["injection_threshold"],
+                    "to": new.get("injection_threshold"),
+                    "weakens": (new.get("injection_threshold") or 0) > old["injection_threshold"]})
+    if "harm_sensitivity" in old and old["harm_sensitivity"] != new.get("harm_sensitivity"):
+        rank = {"lowest": 0, "low": 1, "medium": 2, "high": 3}
+        out.append({"setting": "guard.harm_sensitivity", "from": old["harm_sensitivity"], "to": new.get("harm_sensitivity"),
+                    "weakens": rank.get(new.get("harm_sensitivity"), 2) < rank.get(old["harm_sensitivity"], 2)})
     if "harm_model" in old and old["harm_model"] != new.get("harm_model"):
         out.append({"setting": "guard.harm_model", "from": old["harm_model"], "to": new.get("harm_model"),
                     "weakens": False})

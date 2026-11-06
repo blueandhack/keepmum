@@ -51,6 +51,20 @@ MODELS = {
            4_693_671_488, 0.981),
 }
 SIZES = tuple(MODELS)
+# Sensitivity, per size: level -> (threshold, and on the benchmark's 862 harmful and 994 safe prompts,
+# 44 of them coding prompts that sound harmful: the share of harmful caught, of safe flagged, of
+# coding flagged). Each level flags about the same share of safe prompts on every size (10%, 5%, 3%,
+# 2%), so a level carries over when the model changes; "medium" is each size's own threshold above.
+LEVELS = {
+    "small": {"high": (0.59, 0.784, 0.099, 0.136), "medium": (0.82, 0.662, 0.047, 0.068),
+              "low": (0.89, 0.586, 0.031, 0.045), "lowest": (0.955, 0.479, 0.02, 0.0)},
+    "0.6b": {"high": (0.87, 0.853, 0.101, 0.068), "medium": (0.97, 0.761, 0.047, 0.023),
+             "low": (0.992, 0.632, 0.029, 0.023), "lowest": (0.996, 0.555, 0.02, 0.023)},
+    "4b": {"high": (0.84, 0.922, 0.101, 0.045), "medium": (0.981, 0.82, 0.047, 0.0),
+           "low": (0.992, 0.768, 0.031, 0.0), "lowest": (0.998, 0.563, 0.019, 0.0)},
+}
+LEVEL_NAMES = ("high", "medium", "low", "lowest")
+DEFAULT_LEVEL = "medium"
 DEFAULT = "small"
 LICENCE = "Apache-2.0"
 NAMES = {"small": "Content Safety Guard Small by Horizon Labs", "0.6b": "Qwen3Guard-Gen 0.6B", "4b": "Qwen3Guard-Gen 4B"}
@@ -282,12 +296,13 @@ def _model(size: str):
 
 
 class HarmModel:
-    """The harm check's model at the configured size: `want()` switches when the setting changes,
-    stopping the old server and moving its guard to the new size's threshold."""
+    """The harm check's model at the configured size and sensitivity: `want()` switches when the
+    settings change, stopping the old server and moving its guard to the new threshold."""
 
-    def __init__(self, size: str = DEFAULT):
+    def __init__(self, size: str = DEFAULT, level: str = DEFAULT_LEVEL):
         self._model = _model(size)
-        self.guard = None  # the guard.Guard using this model, whose threshold follows the size
+        self.level = level if level in LEVEL_NAMES else DEFAULT_LEVEL
+        self.guard = None  # the guard.Guard using this model, whose threshold follows size and level
 
     @property
     def size(self) -> str:
@@ -295,20 +310,23 @@ class HarmModel:
 
     @property
     def threshold(self) -> float:
-        return self._model.threshold
+        return LEVELS[self._model.size][self.level][0]
 
     @property
     def label(self) -> str:
         return NAMES[self._model.size]
 
-    def want(self, size: str) -> None:
-        if size == self._model.size or size not in MODELS:
-            return
-        old, self._model = self._model, _model(size)
+    def want(self, size: str, level: str | None = None) -> None:
+        if level in LEVEL_NAMES:
+            self.level = level
+        old = None
+        if size != self._model.size and size in MODELS:
+            old, self._model = self._model, _model(size)
         if self.guard is not None:
-            self.guard.threshold = self._model.threshold
-        with old._lock:
-            old.unload()
+            self.guard.threshold = self.threshold
+        if old is not None:
+            with old._lock:
+                old.unload()
 
     def score(self, text: str) -> float:
         return self._model.score(text)

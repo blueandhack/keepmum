@@ -475,14 +475,19 @@ def _guard_status() -> dict:
     return {
         "injection": {"mode": cfg.guard_injection, "installed": guard.installed(),
                       "server": server, "model": f"{guard.REPO}@{guard.REVISION}", "source": f"{guard.SOURCE}@{guard.RELEASE}",
-                      "licence": guard.LICENCE, "threshold": guard.THRESHOLD},
+                      "licence": guard.LICENCE, "threshold": cfg.guard_injection_threshold, "default_threshold": guard.THRESHOLD,
+                      "levels": {k: {"threshold": t, "caught": c, "ordinary": o, "security": s}
+                                 for k, (t, c, o, s) in guard.LEVELS.items()}},
         "commands": {"mode": cfg.guard_commands, "rules": [label for _, label, _ in RULES + SENDS]},
         "local": {"servers": [{"url": x.url, "model": x.model, "checks": list(x.checks), "api": x.api}
                               for x in cfg.guard_local_servers]},
         "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
                  "installed": {size: harm.installed(size) for size in harm.SIZES},
                  "server": server, "licence": harm.LICENCE,
-                 "threshold": harm.MODELS[cfg.guard_harm_model][5]},
+                 "threshold": harm.LEVELS[cfg.guard_harm_model][cfg.guard_harm_sensitivity][0],
+                 "sensitivity": cfg.guard_harm_sensitivity,
+                 "levels": {k: {"threshold": t, "caught": c, "safe": f, "coding": d}
+                            for k, (t, c, f, d) in harm.LEVELS[cfg.guard_harm_model].items()}},
     }
 
 
@@ -802,6 +807,71 @@ def guard_local_remove(number: int = typer.Argument(..., help="The server's numb
         if getattr(cfg, f"guard_{check}") == "local" and _local_missing(cfg, check):
             typer.echo(f"note: the {check} check is in local mode with no server that can answer: what it flags is refused",
                        err=True)
+
+
+@guard_app.command("sensitivity")
+def guard_sensitivity(check: str = typer.Argument(..., help="injection or harm"),
+                      value: str = typer.Argument(None, help="high, medium, low, lowest or default; for injection also a number 0.5-0.999.")) -> None:
+    """How readily a check flags. Lower: fewer false alarms, and fewer real ones caught. No value: show the levels."""
+    from . import guard, harm
+    from .config import ConfigError
+
+    if check not in ("injection", "harm"):
+        typer.echo("keepmum guard sensitivity: injection or harm (the commands check is rules, with nothing to tune)", err=True)
+        raise typer.Exit(2)
+    cfg = _config()
+    if check == "harm":
+        levels = harm.LEVELS[cfg.guard_harm_model]
+        if value is None:
+            typer.echo(f"harm sensitivity: {cfg.guard_harm_sensitivity} ({harm.NAMES[cfg.guard_harm_model]}, threshold "
+                       f"{levels[cfg.guard_harm_sensitivity][0]})")
+            typer.echo("On the benchmark (bench/results/HARM.md): harmful caught / safe flagged / coding prompts flagged")
+            for name, (t, c, f, d) in levels.items():
+                typer.echo(f"  {name:<7} {t:<6} {c:.0%} / {f:.0%} / {d:.0%}" + ("  (default)" if name == harm.DEFAULT_LEVEL else ""))
+            return
+        level = harm.DEFAULT_LEVEL if value == "default" else value
+        if level not in harm.LEVEL_NAMES:
+            typer.echo(f"keepmum guard sensitivity harm: {value!r}: use {', '.join(harm.LEVEL_NAMES)} or default "
+                       "(the harm check's thresholds differ per model, so it takes a level, not a number)", err=True)
+            raise typer.Exit(2)
+        try:
+            _update_config(cfg.path, "guard", "harm_sensitivity", None if level == harm.DEFAULT_LEVEL else level,
+                           f"keepmum guard sensitivity harm {value}")
+        except (ConfigError, OSError) as e:
+            typer.echo(f"keepmum guard sensitivity: {e}", err=True)
+            raise typer.Exit(1)
+        t, c, f, _ = levels[level]
+        typer.echo(f"harm sensitivity: {level} (threshold {t} on {harm.NAMES[cfg.guard_harm_model]}: about {c:.0%} of "
+                   f"harmful prompts caught, {f:.0%} of safe ones flagged)", err=True)
+        typer.echo("Running proxies switch on their next request.", err=True)
+        return
+    if value is None:
+        level = next((k for k, v in guard.LEVELS.items() if v[0] == cfg.guard_injection_threshold), None)
+        typer.echo(f"injection threshold: {cfg.guard_injection_threshold}" + (f" ({level})" if level else " (custom)"))
+        typer.echo("On the benchmark (bench/results/GUARD.md): caught of injected / flagged of ordinary, security documents")
+        for name, (t, c, o, s) in guard.LEVELS.items():
+            typer.echo(f"  {name:<7} {t:<5} {c:.0%} / {o:.0%}, {s:.0%}" + ("  (default)" if t == guard.THRESHOLD else ""))
+        return
+    if value in guard.LEVELS or value == "default":
+        number = guard.THRESHOLD if value == "default" else guard.LEVELS[value][0]
+    else:
+        try:
+            number = round(float(value), 3)
+        except ValueError:
+            typer.echo(f"keepmum guard sensitivity: {value!r}: use {', '.join(guard.LEVELS)}, default, or a number", err=True)
+            raise typer.Exit(2)
+    if not 0.5 <= number <= 0.999:
+        typer.echo("keepmum guard sensitivity: the threshold must be 0.5-0.999 (0.65 is the default)", err=True)
+        raise typer.Exit(2)
+    try:
+        _update_config(cfg.path, "guard", "injection_threshold", None if number == guard.THRESHOLD else number,
+                       f"keepmum guard sensitivity injection {value}")
+    except (ConfigError, OSError) as e:
+        typer.echo(f"keepmum guard sensitivity: {e}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"injection threshold: {number}" + (" (more is let through: fewer false alarms, fewer injections caught)"
+                                                   if number > cfg.guard_injection_threshold else ""), err=True)
+    typer.echo("Running proxies switch on their next request.", err=True)
 
 
 @guard_app.command("commands")

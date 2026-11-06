@@ -159,6 +159,8 @@ keepmum guard injection warn         # check what tools return; log a possible i
 keepmum guard harm block             # check what you type; refuse a request the model flags
 keepmum guard harm warn --model 4b   # switch the harm check to Qwen3Guard 4B, the most accurate
 keepmum guard commands block         # check the shell commands in the model's replies; no download
+keepmum guard sensitivity injection low          # fewer false alarms: high (0.65, the default), medium, low, lowest, or a number
+keepmum guard sensitivity harm low               # the harm check: high, medium (the default), low or lowest
 keepmum guard local add --model qwen3:8b             # Ollama: the model that answers flagged requests in local mode
 keepmum guard local add --preset lmstudio --model qwen/qwen3-14b --check harm   # another server, for one check
 keepmum guard local                                  # the servers, in the order tried, and the models each has
@@ -179,6 +181,28 @@ Both checks are off by default, and keepmum downloads their models only when you
 Where it goes is a list of local servers (`keepmum guard local add`), each a URL on this Mac and a model there, for both checks or one (`--check harm`: a bigger model for harm, say). A flagged request goes to the first that answers for its check: one that is not running, lacks its model or answers with an error is passed over. If none answers, or none is set, the request is refused, never sent. Ollama (`--preset ollama`, the default), LM Studio (`lmstudio`) and llama.cpp's llama-server (`llamacpp`) speak the APIs Claude Code and Codex use, so the request goes as it is; a server that does not, such as `mlx_lm.server` (`mlx`), gets it as Chat Completions, earlier tool calls and results as text, and its answer goes back in the agent's API (`--api chat` asks that way from the start). Claude Code, Codex, pi and opencode can go local; Gemini CLI's API is one none of them speak, so its flagged requests are refused.
 
 **Warn** sends the request at once and runs the check afterwards, so it adds no delay. A hit is logged, counted in the stats feed and audited once, with the check, the tool (for injection), the score, the length and, for harm, the model's categories (Violent, Jailbreak, …), never the text. With `[log] context` on, the Mac app's Logs page also shows, in memory only, what was flagged and what the user had typed, every masked value in them shown as its type. **Block** runs the check first. The agent gets an error that names the tool or the categories, and every retry that still carries the flagged text is refused too: rewind or `/clear` to drop it. If a check fails, block mode refuses the request and warn mode sends it.
+
+**Sensitivity.** The injection check flags a tool result scoring 0.65 or more. If it flags too much, typically when you work on security code or read pages written for agents, raise the threshold (`keepmum guard sensitivity injection medium|low|lowest|<number>`, or Settings › Checks › Sensitivity). On keepmum's test set (`bench/results/GUARD.md`: 144 injected, 115 ordinary and 101 security documents):
+
+| Level | Threshold | Injections caught | Ordinary documents flagged | Security documents flagged |
+|---|---|---|---|---|
+| High (default) | 0.65 | 99% | 2% | 7% |
+| Medium | 0.80 | 97% | 0% | 5% |
+| Low | 0.90 | 94% | 0% | 4% |
+| Lowest | 0.98 | 88% | 0% | 1% |
+
+The harm check has the same four levels (`keepmum guard sensitivity harm …`, `[guard] harm_sensitivity`), with Medium as its default. Its models score on different scales, so it takes a level, not a number: each level flags about the same share of safe prompts on every model, and carries over when you change the model. On keepmum's harm test set (`bench/results/HARM.md`: 862 harmful and 994 safe prompts, 44 of them coding prompts that only sound harmful), harmful prompts caught / safe prompts flagged:
+
+| Level | Small | 0.6B | 4B |
+|---|---|---|---|
+| High | 78% / 10% | 85% / 10% | 92% / 10% |
+| Medium (default) | 66% / 5% | 76% / 5% | 82% / 5% |
+| Low | 59% / 3% | 63% / 3% | 77% / 3% |
+| Lowest | 48% / 2% | 56% / 2% | 56% / 2% |
+
+Below Medium the harm check gives up real catches fast: for fewer false alarms at little cost, a bigger model at Low (4B) beats a smaller one at Medium.
+
+A text flagged under a lower threshold stops counting once its score is under the new one. Raising the threshold is audited as weakening protection. Results of Claude Code's AskUserQuestion, which hold your own answers, are not checked.
 
 | Check | Model | Licence | Benchmark | Memory while in use | Time |
 | --- | --- | --- | --- | --- | --- |

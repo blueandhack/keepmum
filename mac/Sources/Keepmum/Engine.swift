@@ -50,6 +50,12 @@ final class Engine {
             /// llama-server's path (both checks run in it); nil when it is not found.
             var server: String?
             var licence: String
+            /// The score at which it flags, keepmum's default, and the sensitivity levels with what
+            /// each caught and flagged on the benchmark (nil from older engines).
+            var threshold: Double?
+            var defaultThreshold: Double?
+            struct Level: Decodable, Equatable { var threshold: Double; var caught: Double; var ordinary: Double; var security: Double }
+            var levels: [String: Level]?
         }
         struct Harm: Decodable, Equatable {
             var mode: String
@@ -59,6 +65,11 @@ final class Engine {
             /// llama-server's path; nil when it is not found.
             var server: String?
             var licence: String
+            /// high, medium, low or lowest, and each level on this model: its threshold and what it
+            /// caught and flagged on the benchmark (nil from older engines).
+            var sensitivity: String?
+            struct Level: Decodable, Equatable { var threshold: Double; var caught: Double; var safe: Double; var coding: Double }
+            var levels: [String: Level]?
         }
         /// The commands check: rules on the shell commands in replies, no model.
         struct Commands: Decodable, Equatable {
@@ -408,6 +419,16 @@ final class Engine {
 
     /// A check's mode: off, warn or block; for harm, also its model size. Running proxies switch on
     /// their next request.
+    /// The injection check's sensitivity: a level (high, medium, low, lowest) or a number.
+    func setInjectionThreshold(_ value: String) async {
+        await act { try await self.check(["guard", "sensitivity", "injection", value]) }
+    }
+
+    /// The harm check's sensitivity: high, medium, low or lowest, on whichever model it uses.
+    func setHarmSensitivity(_ level: String) async {
+        await act { try await self.check(["guard", "sensitivity", "harm", level]) }
+    }
+
     func setCheck(_ check: String, mode: String, model: String? = nil) async {
         await act { try await self.check(["guard", check, mode] + (model.map { ["--model", $0] } ?? [])) }
     }
@@ -703,9 +724,19 @@ final class Engine {
                                     "pi": .init(installed: true, on: false, other: .many(["openai"]), otherUrl: "https://llm.corp.example/v1")],
                           destinations: ["gitlab-token": ["gitlab.corp.example"]], previews: true, context: true, keepDays: 90,
                           guard: .init(injection: .init(mode: "warn", installed: true,
-                                                        server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0"),
+                                                        server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0",
+                                                        threshold: 0.8, defaultThreshold: 0.65,
+                                                        levels: ["high": .init(threshold: 0.65, caught: 0.993, ordinary: 0.017, security: 0.069),
+                                                                 "medium": .init(threshold: 0.8, caught: 0.972, ordinary: 0, security: 0.05),
+                                                                 "low": .init(threshold: 0.9, caught: 0.938, ordinary: 0, security: 0.04),
+                                                                 "lowest": .init(threshold: 0.98, caught: 0.882, ordinary: 0, security: 0.01)]),
                                        harm: .init(mode: "block", model: "small", installed: ["small": true, "0.6b": false, "4b": false],
-                                                   server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0"),
+                                                   server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0",
+                                                   sensitivity: "medium",
+                                                   levels: ["high": .init(threshold: 0.59, caught: 0.784, safe: 0.099, coding: 0.136),
+                                                            "medium": .init(threshold: 0.82, caught: 0.662, safe: 0.047, coding: 0.068),
+                                                            "low": .init(threshold: 0.89, caught: 0.586, safe: 0.031, coding: 0.045),
+                                                            "lowest": .init(threshold: 0.955, caught: 0.479, safe: 0.02, coding: 0)]),
                                        commands: .init(mode: "warn", rules: ["a download run as a script", "decoded text run as a script",
                                                                              "deleting your home folder or the system", "erasing a disk",
                                                                              "a fork bomb", "credential files sent over the network",

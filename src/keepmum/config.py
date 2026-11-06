@@ -36,6 +36,8 @@
     injection = "off"      # tool results, for planted instructions (guard.py): "warn" logs and sends; "block" refuses
     harm = "off"           # what the user typed, for harmful requests (harm.py): "warn" or "block"
     harm_model = "small"   # "small" (Content Safety Guard, 0.4 GB while in use), or Qwen3Guard "0.6b" (1.1 GB) or "4b" (4.9 GB)
+    injection_threshold = 0.65  # the injection check's score to flag (0.5-0.999): higher, fewer false alarms and fewer catches
+    harm_sensitivity = "medium"  # "high", "medium", "low" or "lowest": lower, fewer false alarms and fewer catches
     commands = "off"       # shell commands in the model's replies, against a few rules (commands.py): "warn" or "block"
     # injection or harm = "local": a flagged request is answered by a model on this Mac (local.py),
     # the first of these that answers; checks: only for those (default both); api: "auto", "native" or "chat"
@@ -67,7 +69,7 @@ _SCHEMA = {
     "rules": {"mask": list, "off": list},
     "log": {"level": str, "previews": bool, "context": bool},
     "audit": {"keep_days": int},
-    "guard": {"injection": str, "harm": str, "harm_model": str, "commands": str, "local_url": str, "local_model": str,
+    "guard": {"injection": str, "injection_threshold": float, "harm": str, "harm_model": str, "harm_sensitivity": str, "commands": str, "local_url": str, "local_model": str,
               "local_servers": list},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
@@ -120,7 +122,9 @@ class Config:
     log_context: bool = True
     audit_keep_days: int = 90
     guard_injection: str = "off"
+    guard_injection_threshold: float = 0.65
     guard_harm: str = "off"
+    guard_harm_sensitivity: str = "medium"
     guard_harm_model: str = "small"
     guard_commands: str = "off"
     # local.Server entries, in the order tried. The older local_url and local_model are read as one.
@@ -151,6 +155,8 @@ def load(path: Path | None = None) -> Config:
             want = _SCHEMA[section].get(key)
             if want is None:
                 raise ConfigError(f"{path}: unknown key {section}.{key}")
+            if want is float and isinstance(value, int) and not isinstance(value, bool):
+                value = values[key] = float(value)
             if not isinstance(value, want) or (want is int and isinstance(value, bool)):
                 raise ConfigError(f"{path}: {section}.{key} must be {want.__name__}")
     server, detect, allow, log, rules, audit, guard = (raw.get(k, {}) for k in ("server", "detect", "allowlist", "log",
@@ -248,6 +254,12 @@ def load(path: Path | None = None) -> Config:
     for key, value in (("injection", cfg.guard_injection), ("harm", cfg.guard_harm)):
         if value not in ("off", "warn", "block", "local"):
             raise ConfigError(f"{path}: guard.{key} must be \"off\", \"warn\", \"block\" or \"local\"")
+    cfg.guard_injection_threshold = guard.get("injection_threshold", cfg.guard_injection_threshold)
+    if not 0.5 <= cfg.guard_injection_threshold <= 0.999:
+        raise ConfigError(f"{path}: guard.injection_threshold must be 0.5-0.999 (0.65 is the default)")
+    cfg.guard_harm_sensitivity = guard.get("harm_sensitivity", cfg.guard_harm_sensitivity)
+    if cfg.guard_harm_sensitivity not in ("high", "medium", "low", "lowest"):
+        raise ConfigError(f"{path}: guard.harm_sensitivity must be \"high\", \"medium\", \"low\" or \"lowest\"")
     if cfg.guard_commands not in ("off", "warn", "block"):
         raise ConfigError(f"{path}: guard.commands must be \"off\", \"warn\" or \"block\"")
     from .local import DEFAULT_URL, parse_servers
@@ -276,6 +288,8 @@ def toml_value(value) -> str:
         return "true" if value else "false"
     if isinstance(value, int):
         return str(value)
+    if isinstance(value, float):
+        return repr(value)
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, dict):
