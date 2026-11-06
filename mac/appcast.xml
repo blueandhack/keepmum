@@ -7,6 +7,63 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a4</title>
+      <pubDate>Fri, 06 Nov 2026 09:03:03 GMT</pubDate>
+      <sparkle:version>10004</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a4</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a4</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The fourth alpha of keepmum can answer flagged requests with a model on your Mac instead of the cloud, lets you tune how sensitive the optional checks are, and shows what a check flagged on the Logs page.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a4.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2 or 0.1.0a3:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a4.dmg.sha256`
+
+## What's new
+
+- **Local mode for the injection and harm checks.** Besides Off, Warn and Block, each check can be set to **Local**. A request it flags then goes to a model on your Mac instead of the cloud provider, and your agent gets that model's answer.
+  - The local model gets the request with its real values, which never leave your Mac. It never gets your API key, and it gets no tools, so it can only answer in text.
+  - Later requests that still carry the flagged text stay local too, until you rewind or `/clear`.
+  - Works with Claude Code and Codex. Gemini CLI's flagged requests are refused, as in Block.
+- **Several local servers.** Ollama, LM Studio, llama.cpp's llama-server, MLX or another server on your Mac, each with its own model, for both checks or just one. A flagged request goes to the first server that answers; if none does, it is refused, never sent. Ollama, LM Studio and llama.cpp take the agent's request as it is. Other servers get it as Chat Completions, and the answer goes back in the agent's own format. Settings › Checks › Local servers, or `keepmum guard local add`.
+- **Sensitivity for the checks.** If a check flags too much, turn it down: Settings › Checks › Sensitivity, or `keepmum guard sensitivity injection|harm &lt;level&gt;`. Each level shows what it caught and flagged on keepmum's test sets.
+  - **Prompt injection:** High (the default), Medium, Low or Lowest, or a number of your own. Medium catches 97% of the test injections instead of 99%, and flags 5% of security code instead of 7%.
+  - **Harmful requests:** High, Medium (the default), Low or Lowest. Lower levels miss more harmful requests; see the README for each model's numbers.
+- **Check details on the Logs page.** Click a check's hit to see:
+  - what happened and what to do next
+  - the score against the threshold, the check's mode and model
+  - where the request was going, and which local model answered
+  - what was flagged and what you had asked, with every masked value shown as its type, like `‹EMAIL›`
+
+  The text is kept in memory only, never in the audit log or on disk, and only while **Text around values** is on (Settings › General › Logs page). The Outcome column now says Refused, Local, Replaced or Warned.
+- **Settings in panes.** Setup, Masking, Tools, Checks, General and Check this Mac, each on its own pane, in two columns on a wide window.
+- **A new installer window.** The DMG shows where to drag Keepmum, and the mounted disk carries Keepmum's icon.
+
+## Fixes
+
+- File names such as `guard-20261104-231405.md` are no longer taken for secrets. The model and the entropy check flagged some, which filled the Logs page with masked names that were never sensitive. A key whose format keepmum knows is still masked, even inside a file name.
+- Claude Code's AskUserQuestion results, which hold your own answers, are no longer checked for prompt injection.
+- Settings › Tools now shows progress on Trust again and Keep these, and an error if one fails, instead of doing nothing visible.
+
+## Known limitations
+
+- Local mode is only as good as your local model. A small one may repeat a planted instruction as advice, or help with what the harm check flagged. Use a capable model (8B or larger).
+- Lower sensitivity means fewer false alarms and fewer real catches; the harm check gives up catches quickly below Medium.
+- Shell commands still receive real values (so `git push` works), and your agent's local transcripts hold real values: keepmum protects what leaves your Mac, not what is stored on it.
+
+Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/keepmum/issues).</description>
+      <enclosure url="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a4/Keepmum-0.1.0a4.dmg" length="34562222" type="application/octet-stream" sparkle:edSignature="gCuzuezWqyqvjo+vLMUegySxnJ96BxQMGvCnW9aao5SwEQ/g4Veu3UMAfyrEHEnDQWW/AU6dkodF6Yk8r6OlCw=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a3</title>
       <pubDate>Thu, 05 Nov 2026 18:49:19 GMT</pubDate>
       <sparkle:version>10003</sparkle:version>
@@ -92,6 +149,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: OuCfjOqlGKNvzgEVCvpWevqAeWy9i7jhOuQuSoF3LNJHIOwMgrDw8+2z2/2FpaqLLxPhYF2jvMVccmj8aOHWDQ==
-length: 7512
+edSignature: Sy1JSyQn9q0IqHCuyzxTEEaEtV6I6twBAQlReHvdm8DJqw8Osm1lGcLzhFKQniU5Ss8hixodBKe26e0zOSZMAQ==
+length: 12885
 -->
