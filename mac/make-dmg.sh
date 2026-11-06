@@ -17,3 +17,15 @@ rm -f "$DMG"
 uv run --project "$ROOT" --frozen --group release dmgbuild -s dmg-settings.py \
   -D app="$APP" -D background="$work/background.tiff" -D icon="$APP/Contents/Resources/Keepmum.icns" \
   "$VOLUME" "$DMG"
+
+# The app in the DMG must still pass the strict signature check: Sparkle checks an update's
+# signature, and Finder metadata on the bundle (a DMG setting) is enough to break it.
+mnt=$(mktemp -d)
+hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mnt" "$DMG"
+ok=0
+codesign --verify --deep --strict "$mnt/$(basename "$APP")" || ok=1
+hdiutil detach -quiet "$mnt"
+if [ $ok -ne 0 ]; then
+  echo "make-dmg.sh: the app in $DMG fails codesign --verify --strict" >&2
+  exit 1
+fi

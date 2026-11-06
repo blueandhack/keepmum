@@ -11,7 +11,8 @@ format = "UDZO"
 filesystem = "APFS"
 files = [app]
 symlinks = {"Applications": "/Applications"}
-hide_extensions = [appname]
+# No hide_extensions: it writes Finder information onto the app bundle, which breaks the strict
+# check of its code signature (codesign --verify --strict: "Finder information ... not allowed").
 icon = defines["icon"]  # noqa: F821
 background = defines["background"]  # noqa: F821
 
