@@ -19,11 +19,14 @@ A menu-bar app that sets keepmum up, runs it in the background and shows what it
   - **Check this Mac:** `keepmum doctor`.
 - **Menu bar:** the key numbers, which agents are protected, and a shortcut to the dashboard. A dot on the icon and a line in the panel point at a new tool server, at one whose tools changed, or at an agent that skips keepmum because another gateway's app pointed it back at that gateway (**Protect** fixes it). Activity marks tool calls that kept placeholders, with why.
 
-![Overview, light](docs/overview-light.png)
+![Overview, light: requests out and replies back, with what was masked, blocked and flagged by a check](docs/overview-light.png)
 ![Overview, dark](docs/overview-dark.png)
-![Detection: per type, who found it, and your rules](docs/detection-light.png)
-![Settings: setup, one switch per coding agent, mode and exclusions](docs/settings-light.png)
 ![Activity: every request, filterable](docs/activity-light.png)
+![Logs: what the checks flagged, and every masked value, searchable](docs/logs-light.png)
+![Detection: per type, who found it, and your rules](docs/detection-light.png)
+![Audit: whether the log is intact, its head, and every change that turned protection down](docs/audit-light.png)
+![Settings › Setup: the local model, the background service, and one switch per coding agent](docs/settings-light.png)
+![Settings › Checks: each check off, warn, block or local, its sensitivity, and the local servers](docs/checks-light.png)
 
 **Privacy.** The app reads keepmum's local feeds (`/_keepmum/stats`, `/_keepmum/flows`, `/_keepmum/history`, `/_keepmum/findings`, `/_keepmum/tools`), which carry counts, types, tool names and timestamps, never a placeholder or a whole value. The Logs feed (`/_keepmum/findings`) also carries the first and last character of each masked value of 8 or more characters, and up to 80 characters of text on each side of it with every masked value and placeholder shown as its type; it lives in keepmum's memory only, and `[log] previews = false` and `[log] context = false` in keepmum's config turn those off and forget what was kept. It finds the proxy through `~/.config/keepmum/runtime.json` (written by `keepmum claude` and `keepmum serve`; port 7788 otherwise). It authenticates with the token in `~/.config/keepmum/stats-token` (mode 0600). It talks only to 127.0.0.1 and sends no telemetry. The one exception is update checks (Settings › General › Updates), which keepmum asks about on the first launch and does only if you say yes: each one downloads the update feed from github.com, so GitHub sees your IP address and keepmum's version, and nothing else is sent.
 
