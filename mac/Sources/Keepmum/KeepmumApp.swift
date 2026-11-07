@@ -89,6 +89,13 @@ struct MenuPanel: View {
             }
             .padding(.vertical, Space.s + Space.xxs)
             .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
+            if engine.isBundled {
+                ServiceRow(engine: engine)
+                if let error = engine.error {
+                    Text(error).font(.km(.caption)).foregroundStyle(Theme.blocked)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             ProtectionRow(engine: engine) {
                 engine.settingsRequested = .setup
                 DashboardWindow.show(openWindow)
@@ -133,9 +140,12 @@ struct MenuPanel: View {
                 .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
                 .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
             }
-            if case .offline(let reason) = store.connection {
-                Text("\(reason.sentence). \(engine.isBundled ? "Start the background service in Settings." : "Run keepmum claude to start.")")
+            // With the bundled engine, the service row above says what to do; this is for when it
+            // runs and still cannot be reached, or for the command line.
+            if case .offline(let reason) = store.connection, !engine.isBundled || engine.serviceRunning {
+                Text("\(reason.sentence).\(engine.isBundled ? "" : " Run keepmum claude to start.")")
                     .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: Space.s) {
                 PillButton(title: "Open dashboard", icon: "macwindow", prominent: true) {

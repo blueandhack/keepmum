@@ -194,18 +194,89 @@ func hostPort(_ url: String) -> String {
 }
 
 /// The menu bar's one-line answer to "is Claude Code protected right now?"
+/// The background service in the menu bar panel: what it is doing, with Start, Stop or Restart, so
+/// keepmum can be brought back without opening Settings. Stop turns protection off first, as it
+/// does in Settings, so no agent is left pointed at a proxy that is gone.
+struct ServiceRow: View {
+    var engine: Engine
+
+    var body: some View {
+        HStack(spacing: Space.s + Space.xxs) {
+            Group {
+                if engine.serviceChange != nil {
+                    Spinner(size: 12).foregroundStyle(Theme.textSecondary)
+                } else {
+                    Circle().fill(dot).frame(width: 8, height: 8)
+                }
+            }
+            .frame(width: 14)
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                Text("Background service").font(.km(.callout).weight(.medium)).foregroundStyle(Theme.text)
+                Text(state).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: Space.s)
+            controls
+        }
+        .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
+        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
+    }
+
+    @ViewBuilder private var controls: some View {
+        if engine.serviceChange != nil {
+            EmptyView()  // nothing to do but wait
+        } else if engine.serviceStatus == .requiresApproval {
+            PillButton(title: "Allow…") { engine.openLoginItems() }
+        } else if engine.serviceRunning {
+            HStack(spacing: Space.xxs) {
+                IconButton(symbol: "arrow.clockwise", help: "Restart the background service") {
+                    Task { await engine.restartService() }
+                }
+                PillButton(title: "Stop") { Task { await engine.stopService() } }
+                    .help("Turns protection off first, so no agent loses its connection")
+            }
+            .disabled(engine.busy)
+        } else if engine.serviceStatus == .enabled {
+            // Registered, but not answering: a restart is what brings it back.
+            PillButton(title: "Restart", icon: "arrow.clockwise", prominent: true) { Task { await engine.restartService() } }
+                .disabled(engine.busy)
+        } else {
+            PillButton(title: "Start", icon: "play.fill", prominent: engine.canScan) { Task { await engine.startService() } }
+                .disabled(!engine.canScan || engine.busy)
+        }
+    }
+
+    private var state: String {
+        switch engine.serviceChange {
+        case .starting: return engine.modelOn && engine.hasModel ? "Loading the model…" : "Starting…"
+        case .stopping: return engine.anyProtected ? "Turning protection off, then stopping" : "Stopping…"
+        case nil: break
+        }
+        switch engine.serviceStatus {
+        case .requiresApproval: return "Allow it in Login Items"
+        case .enabled where !engine.serviceRunning: return "Not answering"
+        default:
+            if engine.serviceRunning { return "Running, port \(engine.status?.port ?? 7788)" }
+            return engine.canScan ? "Stopped" : "Needs the model: Settings › Setup"
+        }
+    }
+
+    private var dot: Color {
+        if engine.serviceRunning { return Theme.restored }
+        if engine.serviceStatus == .enabled || engine.serviceStatus == .requiresApproval { return Theme.warning }
+        return Theme.neutral
+    }
+}
+
 struct ProtectionRow: View {
     var engine: Engine
     var openSetup: () -> Void
 
     var body: some View {
+        // The service starting or stopping is the service row's to show, just above this one.
         HStack(spacing: Space.s + Space.xxs) {
-            if engine.serviceChange == .starting {
-                Spinner(size: 16).foregroundStyle(Theme.textSecondary).frame(width: 20)
-            } else {
-                Image(systemName: engine.anyProtected ? (engine.serviceRunning ? "checkmark.shield.fill" : "exclamationmark.shield.fill") : "shield")
-                    .font(.km(.title).weight(.regular)).foregroundStyle(color)
-            }
+            Image(systemName: engine.anyProtected ? (engine.serviceRunning ? "checkmark.shield.fill" : "exclamationmark.shield.fill") : "shield")
+                .font(.km(.title).weight(.regular)).foregroundStyle(color)
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(title).font(.km(.body).weight(.medium)).foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
@@ -232,15 +303,17 @@ struct ProtectionRow: View {
 
     private var title: String {
         let names = protectedNames
-        if engine.serviceChange == .starting { return "keepmum is starting" }
         if names.isEmpty { return "No coding agent is protected" }
+        if engine.serviceChange == .starting {
+            return names.count == 1 ? "\(names[0]) is waiting" : "\(names.count) agents are waiting"
+        }
         if !engine.serviceRunning { return "keepmum is not running" }
         return names.count == 1 ? "\(names[0]) is protected" : "\(names.count) agents are protected"
     }
 
     private var subtitle: String {
         let names = protectedNames
-        if engine.serviceChange == .starting { return "Loading the model; this takes a few seconds" }
+        if !names.isEmpty && engine.serviceChange == .starting { return "They connect as soon as keepmum answers" }
         if !names.isEmpty && !engine.serviceRunning { return "They cannot connect until keepmum restarts" }
         if names.count > 1 { return names.joined(separator: ", ") }
         if names.count == 1 { return "Every session goes through keepmum" }
@@ -249,6 +322,8 @@ struct ProtectionRow: View {
     }
 
     private var color: Color {
+        // Starting is not a fault: the agents wait, and the service row shows the progress.
+        if engine.anyProtected && engine.serviceChange == .starting { return Theme.textSecondary }
         if engine.anyProtected { return engine.serviceRunning ? Theme.restored : Theme.blocked }
         return Theme.textSecondary
     }
