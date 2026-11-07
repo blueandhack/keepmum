@@ -256,7 +256,7 @@ struct UpdatesSection: View {
 
     var body: some View {
         FormSection(title: "Updates",
-                    footer: "A check downloads keepmum's update list from github.com, so GitHub sees your IP address and keepmum's version; nothing else is sent. Updates are notarized by Apple and signed by keepmum, and both are verified before one is installed.") {
+                    footer: "A check downloads keepmum's update list from keepmum.app, which sees your IP address and keepmum's version and counts checks per day, keeping no addresses; nothing else is sent. Updates are notarized by Apple and signed by keepmum, and both are verified before one is installed.") {
             FormRow(title: "keepmum \(Updates.version)", detail: lastChecked) {
                 PillButton(title: "Check now", icon: "arrow.triangle.2.circlepath") { updates.checkNow() }
                     .disabled(!updates.isConfigured || !updates.canCheck)

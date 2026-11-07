@@ -30,7 +30,9 @@ fi
 SHORT_VERSION=$((10#$MAJOR)).$((10#$MINOR)).$((10#$PATCH))
 BUILD_NUMBER=$((MAJOR * 1000000 + MINOR * 10000 + PATCH * 100 + PRE))
 SPARKLE_PUBLIC_KEY=${SPARKLE_PUBLIC_KEY:-$(cat sparkle-public-key 2>/dev/null || true)}
-SPARKLE_FEED_URL=${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/blueandhack/keepmum/main/mac/appcast.xml}
+# keepmum.app serves the feed from mac/appcast.xml unchanged and counts checks per day and version
+# (worker/): the version is in the URL for that. Nothing else about a check is kept.
+SPARKLE_FEED_URL=${SPARKLE_FEED_URL:-https://keepmum.app/appcast.xml?v=$VERSION}
 APP=${APP_OUT:-build/Keepmum.app}
 
 CONFIG=${SWIFT_CONFIG:-release}

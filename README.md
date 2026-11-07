@@ -339,7 +339,7 @@ local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
 | The Logs page: per masked value its type, rule and length, and the first and last character of values of 8 or more characters | Process memory only (the last 2,000), cleared on exit; `[log] previews = false` keeps types and rules only |
 | The Logs page's context: up to 80 characters each side of a masked value, with every masked value and placeholder in it shown as its type (`‹SECRET›`), as the provider received it | Process memory only, with the findings; `[log] context = false` turns it off and forgets what was kept |
 
-keepmum makes no network calls except the request it forwards, `keepmum setup`'s one model download, and `keepmum guard setup`'s downloads if you run them. There is no telemetry. The Mac app can check for updates; it asks on its first launch and checks only if you say yes (Settings › General › Updates). Each check downloads the update feed from github.com, so GitHub sees your IP address and keepmum's version.
+keepmum makes no network calls except the request it forwards, `keepmum setup`'s one model download, and `keepmum guard setup`'s downloads if you run them. There is no telemetry. The Mac app can check for updates; it asks on its first launch and checks only if you say yes (Settings › General › Updates). Each check downloads the update feed from keepmum.app (served through Cloudflare), which sees your IP address and keepmum's version; checks are counted per day and version, and no addresses are kept (`worker/`).
 
 ## Mac app
 

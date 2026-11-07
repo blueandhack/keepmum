@@ -2,13 +2,14 @@ import AppKit
 import Observation
 import Sparkle
 
-/// App updates with Sparkle: a signed feed on GitHub (SUFeedURL, SURequireSignedFeed) lists each
+/// App updates with Sparkle: a signed feed at keepmum.app (SUFeedURL, SURequireSignedFeed) lists each
 /// release's notarized DMG with its EdDSA signature (SUPublicEDKey), checked before it is unpacked.
 ///
 /// Nothing is checked until the user says so. On the first launch keepmum asks, once, whether to
 /// check automatically (once a day); Settings › General › Updates changes it, and "Check now" always works.
 /// Sparkle's own permission prompt is off, and it sends no system profile. A check is one request
-/// for the feed: GitHub sees the IP address and keepmum's version in the user agent.
+/// for the feed: Cloudflare, which serves keepmum.app, sees the IP address and keepmum's version,
+/// and keepmum.app counts checks per day and version (worker/), keeping no addresses.
 ///
 /// keepmum runs in the menu bar, so a scheduled check that finds an update does not interrupt: the
 /// menu shows it (`available`, Sparkle's gentle reminders), and Install opens Sparkle's window.
@@ -89,8 +90,9 @@ final class Updates: NSObject {
         alert.messageText = "Check for keepmum updates automatically?"
         alert.informativeText = """
             keepmum can look for a new version once a day and tell you when one is ready to install. \
-            Each check downloads keepmum's update list from github.com, so GitHub sees your IP address and \
-            keepmum's version. Nothing else is sent: no usage data, no system details.
+            Each check downloads keepmum's update list from keepmum.app, which sees your IP address and \
+            keepmum's version and counts checks per day, keeping no addresses. Nothing else is sent: no \
+            usage data, no system details.
 
             You can change this, or check now, in Settings › General › Updates.
             """
