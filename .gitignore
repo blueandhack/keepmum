@@ -29,5 +29,6 @@ mac/build/
 mac/.sparkle/
 sparkle-private-key*
 
-# Cloudflare's CLI (wrangler) account cache
+# Cloudflare's CLI (wrangler) account cache, and its local state for worker/
 .cloudflare/
+.wrangler/

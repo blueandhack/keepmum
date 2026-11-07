@@ -1,0 +1,18 @@
+# keepmum.app/appcast.xml and keepmum.app/download, counted (src/index.js). The rest of
+# keepmum.app is the GitHub Pages site and does not go through this Worker.
+name = "keepmum-counts"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = false
+# The trailing * lets a query string through (the app's ?v=); the Worker checks the exact path and
+# hands anything else to the site.
+routes = [
+  { pattern = "keepmum.app/appcast.xml*", zone_name = "keepmum.app" },
+  { pattern = "keepmum.app/download*", zone_name = "keepmum.app" },
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "keepmum-counts"
+# From `npx wrangler d1 create keepmum-counts` (worker/README.md).
+database_id = "3b38a92e-4fe0-45e4-b256-3612572d27cc"
