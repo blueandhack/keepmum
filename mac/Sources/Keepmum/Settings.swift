@@ -46,6 +46,7 @@ struct SettingsPage: View {
     @Binding var appearance: Appearance
     @Binding var pane: SettingsPane
     @AppStorage(DashboardWindow.dockKey) private var showInDock = true
+    @AppStorage(FlowPulseStyle.key) private var flowStyle: FlowPulseStyle = .comet
     @Environment(\.isSnapshot) private var isSnapshot
 
     /// A column's width when two fit side by side; under two of these, the pane is one column.
@@ -117,6 +118,10 @@ struct SettingsPage: View {
         FormSection(title: "Display") {
             FormRow(title: "Appearance") {
                 Segmented(options: Appearance.allCases.map { ($0, $0.title) }, selection: $appearance)
+            }
+            Hairline()
+            FormRow(title: "Live flow", detail: "How each request moves across the dashboard's Live flow: a dot, or a dot with a tail") {
+                Segmented(options: FlowPulseStyle.allCases.map { ($0, $0.title) }, selection: $flowStyle)
             }
             Hairline()
             FormRow(title: "Show in Dock", detail: "While the dashboard is open, so you can switch back to it; keepmum always stays in the menu bar") {

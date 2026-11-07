@@ -292,11 +292,18 @@ enum Snapshotter {
         store.injectFlows(SampleFeed.flows(window: 3600))
         store.injectTools(ToolServer.samples)
         store.pulses = (0..<9).map { k in
-            let kinds: [Pulse.Kind] = [.out("masked"), .out("clean"), .back(restored: true), .out("blocked"), .back(restored: false)]
+            let kinds: [Pulse.Kind] = [.out("masked"), .out("clean"), .back(restored: true, result: "masked"), .out("blocked"),
+                                       .back(restored: false, result: "clean")]
             let client = ["claude-code", "codex", "pi"][k % 3]
+            // A reply sets off once its request has landed, so its born is that much earlier.
+            let reply = if case .back = kinds[k % kinds.count] { 2.0 } else { 0.0 }
             return Pulse(kind: kinds[k % kinds.count], client: client, provider: client == "codex" ? "openai" : "anthropic",
-                         born: now.addingTimeInterval(-Double(k) * 0.23))
+                         born: now.addingTimeInterval(-Double(k) * 0.12 - reply))
         }
+        // Requests out at a provider, waiting on its reply.
+        store.injectOpen([("masked", "claude-code", 9.0), ("clean", "claude-code", 6.0), ("clean", "codex", 4.0)].map { kind, client, age in
+            Pulse(kind: .out(kind), client: client, provider: client == "codex" ? "openai" : "anthropic", born: now.addingTimeInterval(-age))
+        })
         for page in Page.allCases {
             for dark in [false, true] {
                 render(window(store, page), to: "\(dir)/\(page.rawValue)-\(dark ? "dark" : "light").png", dark: dark)

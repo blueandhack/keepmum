@@ -100,6 +100,8 @@ struct Snapshot: Decodable, Sendable {
         var tools: [ToolCall]? = nil
         /// What an optional check flagged on this request: blocked it, or warned after it was sent.
         var `guard`: [Check]? = nil
+        /// Its number in the live feed's requests out at a provider, while the engine is running.
+        var flight: Int? = nil
         var id: String { "\(ts):\(path):\(outcome):\(status)" }
 
         /// One check's hit, as an event carries it: never the text.
@@ -240,16 +242,33 @@ enum Connection: Equatable {
     case connecting, live, offline(String), sample
 }
 
-/// A short-lived visual event for the flow diagram.
 /// One request on the flow diagram: out from its client to its result (clean, masked,
 /// observed, blocked, failed) and provider, or a reply back, with or without restored values.
+/// A reply has its request's born and result: the diagram starts it once that request has landed.
 struct Pulse: Identifiable, Sendable {
-    enum Kind: Sendable { case out(String), back(restored: Bool) }
+    enum Kind: Sendable { case out(String), back(restored: Bool, result: String) }
     let id = UUID()
     let kind: Kind
     let client: String
     let provider: String
     let born: Date
+    /// A reply seen arriving: it sets off no earlier than this, however long ago its request left.
+    var leaves: Date? = nil
+    /// When it last moves: what the store keeps it by.
+    var since: Date { max(born, leaves ?? born) }
+}
+
+/// `GET /_keepmum/live`: requests out at a provider now, and the events since the last poll.
+struct LiveFeed: Decodable, Sendable {
+    struct Flight: Decodable, Sendable {
+        var id: Int
+        var client: String?
+        var provider: String?
+        /// clean, masked or observed: the result band it went out on.
+        var kind: String
+    }
+    var inflight: [Flight]
+    var recent: [Snapshot.Event]
 }
 
 /// `GET /_keepmum/flows`: totals over a time window for the two flow diagrams. Counts only.
@@ -277,6 +296,9 @@ final class StatsStore {
     var sampleMode = false {
         didSet {
             if sampleMode { sample = SampleFeed() }
+            pulses = []
+            open = [:]
+            primed = false
             Task { await refreshFlows() }
         }
     }
@@ -285,6 +307,15 @@ final class StatsStore {
     private var task: Task<Void, Never>?
     private let home = FileManager.default.homeDirectoryForCurrentUser
     private var lastEventTs: Double = 0
+    /// Requests out at a provider now, by their number in the live feed: the pulse that took each
+    /// there. The flow diagram shows them waiting at the provider until the reply comes back.
+    private(set) var open: [Int: Pulse] = [:]
+    /// The live feed is being polled and answers: new events come from it, not the stats feed.
+    private var following = false
+    /// Events have been seen once: from then on, new ones are drawn.
+    private var primed = false
+    /// How often the live feed is polled while the Live flow is on screen.
+    static let livePoll: TimeInterval = 0.25
     var configuredPort = 7788
     private(set) var port = 7788
 
@@ -310,6 +341,7 @@ final class StatsStore {
 
     /// For the snapshot renderer, which draws without waiting for a refresh.
     func injectFlows(_ f: Flows) { flows = f }
+    func injectOpen(_ pulses: [Pulse]) { open = Dictionary(uniqueKeysWithValues: pulses.enumerated().map { ($0, $1) }) }
 
     func refreshFlows() async {
         if sampleMode {
@@ -490,24 +522,108 @@ final class StatsStore {
     }
 
     private func apply(_ new: Snapshot, connection: Connection) {
+        // While the live feed answers, it alone draws requests; this feed only has the counts.
+        if connection == .sample || !following {
+            ingest(new.recent, inflight: nil, over: 1)
+        }
+        snapshot = new
+        self.connection = connection
+    }
+
+    // MARK: Live flow: requests drawn as they leave, wait at the provider, and come back.
+
+    /// Polls the live feed while the Live flow is on screen (the view's task), so requests are
+    /// drawn as they happen. An engine without the feed leaves the stats feed to draw them, after
+    /// the fact, as before.
+    func followLive() async {
+        while !Task.isCancelled {
+            if !sampleMode {
+                switch await pollLive(after: lastEventTs) {
+                case .some(let feed):
+                    following = true
+                    ingest(feed.recent, inflight: feed.inflight, over: Self.livePoll)
+                case .none:
+                    following = false
+                    open = [:]
+                }
+            }
+            try? await Task.sleep(for: .seconds(Self.livePoll))
+        }
+        following = false
+        open = [:]
+    }
+
+    private func pollLive(after: Double) async -> LiveFeed? {
+        guard let token = try? String(contentsOf: home.appending(path: ".config/keepmum/stats-token"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty,
+            let url = URL(string: "http://127.0.0.1:\(port)/_keepmum/live?after=\(after)")
+        else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 2
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try? decoder.decode(LiveFeed.self, from: data)
+    }
+
+    /// New events and departures as pulses. `inflight`: the requests out at a provider now, from
+    /// the live feed; nil from a feed that only has events, which are then drawn after the fact,
+    /// out and back. Pulses that start in one poll are spread across `over` seconds.
+    private func ingest(_ events: [Snapshot.Event], inflight: [LiveFeed.Flight]?, over interval: TimeInterval) {
         let now = Date()
-        for event in new.recent where event.ts > lastEventTs {
-            if event.scanMs == nil && (event.outcome == "forwarded" || event.outcome == "observed") { continue }  // bodyless check
-            if event.kind == .flagged { continue }  // a check's note on a request already drawn
+        if !primed {
+            // The first events this app sees happened before it looked: they are not drawn as if live.
+            primed = true
+            lastEventTs = max(lastEventTs, events.last?.ts ?? 0)
+        }
+        let fresh = events.filter { event in
+            event.ts > lastEventTs
+                && !(event.scanMs == nil && (event.outcome == "forwarded" || event.outcome == "observed"))  // bodyless check
+                && event.kind != .flagged  // a check's note on a request already drawn
+        }
+        let departing = (inflight ?? []).filter { open[$0.id] == nil }
+        let replayed = fresh.filter { event in event.flight.map { open[$0] == nil } ?? true }
+        let count = departing.count + replayed.count
+        var next = 0
+        func born() -> Date {
+            defer { next += 1 }
+            return now.addingTimeInterval(Double(next) / Double(max(count, 1)) * interval)
+        }
+        for f in departing {
+            let pulse = Pulse(kind: .out(f.kind), client: f.client ?? "claude-code", provider: f.provider ?? "anthropic", born: born())
+            pulses.append(pulse)
+            open[f.id] = pulse
+        }
+        for event in fresh {
             let client = event.client ?? "claude-code", provider = event.provider ?? "anthropic"
             let result = event.outcome == "upstream_error" ? "failed"
                 : event.kind == .blocked && !event.checks.isEmpty ? "refused" : event.kind.rawValue
-            pulses.append(Pulse(kind: .out(result), client: client, provider: provider, born: now))
-            if !["blocked", "refused", "failed", "local"].contains(result) {
-                pulses.append(Pulse(kind: .back(restored: event.restored.values.reduce(0, +) > 0), client: client,
-                                    provider: provider, born: now.addingTimeInterval(FlowGeometry.replyDelay)))
+            let restored = event.restored.values.reduce(0, +) > 0
+            if let n = event.flight, let out = open.removeValue(forKey: n) {
+                // Seen leaving: the reply sets off now, or once the request has landed if it is
+                // still on its way. A failed request has no reply; it just stops waiting.
+                if case .out(let went) = out.kind, !FlowGeometry.unsent.contains(result) {
+                    pulses.append(Pulse(kind: .back(restored: restored, result: went), client: out.client,
+                                        provider: out.provider, born: out.born, leaves: now))
+                }
+                continue
+            }
+            let start = born()
+            pulses.append(Pulse(kind: .out(result), client: client, provider: provider, born: start))
+            if !FlowGeometry.unsent.contains(result) {
+                pulses.append(Pulse(kind: .back(restored: restored, result: result), client: client, provider: provider, born: start))
             }
         }
-        lastEventTs = max(lastEventTs, new.recent.last?.ts ?? 0)
-        pulses.removeAll { now.timeIntervalSince($0.born) > FlowGeometry.lifetime }
-        if pulses.count > 60 { pulses.removeFirst(pulses.count - 60) }
-        snapshot = new
-        self.connection = connection
+        lastEventTs = max(lastEventTs, events.last?.ts ?? 0)
+        if let inflight {
+            // Out of flight without an event this poll saw (the engine dropped it): stop waiting.
+            let still = Set(inflight.map(\.id))
+            open = open.filter { still.contains($0.key) }
+        }
+        pulses.removeAll { now.timeIntervalSince($0.since) > FlowGeometry.horizon }
+        if pulses.count > 120 { pulses.removeFirst(pulses.count - 120) }
     }
 }
 

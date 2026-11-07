@@ -1,9 +1,41 @@
 import SwiftUI
 
 enum FlowGeometry {
-    /// How long a pulse takes to cross a diagram, and how long after a request its reply sets off.
-    static let lifetime: TimeInterval = 2.4
-    static let replyDelay: TimeInterval = 1.2
+    /// Points per second along every band, so a pulse keeps one speed from bar to bar.
+    static let speed: CGFloat = 520
+    /// The pause at the provider between a request landing and its reply setting off.
+    static let turnaround: TimeInterval = 0.25
+    /// How long a pulse is kept: a poll's stagger, a request, the turnaround, its reply, and its ring.
+    static let horizon: TimeInterval = 6
+    /// Results that never reach a provider, so no reply comes back.
+    static let unsent: Set<String> = ["blocked", "refused", "failed", "local"]
+
+    /// How long a route of this length takes, kept within bounds for very short and very long ones.
+    static func duration(_ length: CGFloat) -> TimeInterval { min(max(Double(length / speed), 0.9), 1.8) }
+
+    /// Progress along a route at time fraction u: slower at both ends, never stopped
+    /// (0.4 of the average speed there, 1.6 midway).
+    static func ease(_ u: Double) -> Double { u - easing * sin(2 * .pi * u) / (2 * .pi) }
+    /// The speed at u, from 0.25 at the ends to 1 midway: how long the comet's tail is.
+    static func pace(_ u: Double) -> Double { (1 - easing * cos(2 * .pi * u)) / (1 + easing) }
+    /// The time fraction at which progress reaches x: when a pulse passes a bar.
+    static func uneased(_ x: Double) -> Double {
+        var lo = 0.0, hi = 1.0
+        for _ in 0..<22 {
+            let m = (lo + hi) / 2
+            if ease(m) < x { lo = m } else { hi = m }
+        }
+        return (lo + hi) / 2
+    }
+    private static let easing = 0.6
+}
+
+/// How a request is drawn on the live flow: a dot, or a dot with a tail. Settings › General › Display.
+enum FlowPulseStyle: String, CaseIterable, Identifiable {
+    case dot, comet
+    static let key = "flowPulseStyle"
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
 }
 
 /// The live flow as two Sankey diagrams on shared columns.
@@ -11,19 +43,26 @@ enum FlowGeometry {
 ///   Requests out:   clients ─▶ keepmum scans ─▶ clean / masked / observed / blocked ┆─▶ providers
 ///   Replies back:   clients ◀─ keepmum restores (values put back / nothing to) ◀─┆── providers
 ///
-/// Band width is the number of requests in the window. Each live request sends a dot along its
-/// route: the dot takes each band's color, so it visibly changes at keepmum.
+/// Band width is the number of requests in the window. A request sets off as it leaves this Mac,
+/// waits at its provider (a breathing dot) for as long as the provider takes, and its reply sets
+/// off when the reply arrives. With an engine that has no live feed, requests are drawn after the
+/// fact instead: out, then back. A pulse takes each band's color, so it visibly changes at
+/// keepmum; as a comet, its tail shows the change too.
 struct FlowBandsView: View {
     var flows: Flows
     var pulses: [Pulse]
+    /// Requests out at a provider now: the pulses that took them there.
+    var open: [Pulse] = []
     var live: Bool
     /// The pointer, while it is over the diagram: what is under it is highlighted.
     @State var hover: CGPoint?
+    @AppStorage(FlowPulseStyle.key) private var style: FlowPulseStyle = .comet
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: !live || pulses.isEmpty)) { tl in
+        // Requests that only wait at a provider breathe slowly: a low frame rate is enough for them.
+        TimelineView(.animation(minimumInterval: pulses.isEmpty ? 1 / 20 : 1 / 60, paused: !live || (pulses.isEmpty && open.isEmpty))) { tl in
             Canvas { context, size in
-                FlowBands(flows: flows, size: size).draw(&context, now: tl.date, pulses: pulses, hover: hover)
+                FlowBands(flows: flows, size: size, open: open).draw(&context, now: tl.date, pulses: pulses, style: style, hover: hover)
             }
         }
         .onContinuousHover { phase in
@@ -63,6 +102,46 @@ struct BandLayout {
         var t: CGFloat = 0     // thickness
         var y0: CGFloat = 0    // top of the band at its source
         var y1: CGFloat = 0    // top of the band at its target
+        var x0: CGFloat = 0    // the band's ends: the side of each bar that faces the other
+        var x1: CGFloat = 0
+        /// Distance along the centre line at evenly spaced Bézier steps, from 0 to the length.
+        var lengths: [CGFloat] = []
+
+        var length: CGFloat { lengths.last ?? 0 }
+
+        /// A point on the centre line by Bézier parameter, f from 0 (source) to 1 (target).
+        func point(_ f: CGFloat) -> CGPoint {
+            let xm = (x0 + x1) / 2, a = y0 + t / 2, b = y1 + t / 2
+            let u = 1 - f
+            let x = u * u * u * x0 + 3 * u * u * f * xm + 3 * u * f * f * xm + f * f * f * x1
+            let y = u * u * u * a + 3 * u * u * f * a + 3 * u * f * f * b + f * f * f * b
+            return CGPoint(x: x, y: y)
+        }
+
+        /// The point `d` along the centre line by distance: the same speed on every part of the curve.
+        func point(at d: CGFloat) -> CGPoint {
+            let n = lengths.count - 1
+            guard n > 0, d > 0 else { return point(0) }
+            guard d < length else { return point(1) }
+            var lo = 0, hi = n
+            while hi - lo > 1 {
+                let m = (lo + hi) / 2
+                if lengths[m] <= d { lo = m } else { hi = m }
+            }
+            let span = lengths[hi] - lengths[lo]
+            return point((CGFloat(lo) + (span > 0 ? (d - lengths[lo]) / span : 0)) / CGFloat(n))
+        }
+
+        mutating func measure(steps n: Int = 32) {
+            var total: CGFloat = 0, last = point(0)
+            lengths = [0]
+            for k in 1...n {
+                let p = point(CGFloat(k) / CGFloat(n))
+                total += hypot(p.x - last.x, p.y - last.y)
+                lengths.append(total)
+                last = p
+            }
+        }
     }
 
     var nodes: [String: Node] = [:]
@@ -114,18 +193,17 @@ struct BandLayout {
                 y += links[i].t
             }
         }
+        for i in links.indices {
+            let s = nodes[links[i].from]!.rect, d = nodes[links[i].to]!.rect
+            (links[i].x0, links[i].x1) = d.minX > s.minX ? (s.maxX, d.minX) : (s.minX, d.maxX)
+            links[i].measure()
+        }
         self.nodes = nodes
         self.links = links
     }
 
-    /// Band ends: the side of each bar that faces the other.
-    func ends(_ l: Link) -> (CGFloat, CGFloat) {
-        let s = nodes[l.from]!.rect, d = nodes[l.to]!.rect
-        return d.minX > s.minX ? (s.maxX, d.minX) : (s.minX, d.maxX)
-    }
-
     func band(_ l: Link) -> Path {
-        let (x0, x1) = ends(l)
+        let x0 = l.x0, x1 = l.x1
         let xm = (x0 + x1) / 2
         var p = Path()
         p.move(to: CGPoint(x: x0, y: l.y0))
@@ -136,17 +214,35 @@ struct BandLayout {
         return p
     }
 
-    /// A point on a band's centre line, f from 0 (source) to 1 (target).
-    func point(_ l: Link, _ f: CGFloat) -> CGPoint {
-        let (x0, x1) = ends(l)
-        let xm = (x0 + x1) / 2, a = l.y0 + l.t / 2, b = l.y1 + l.t / 2
-        let u = 1 - f
-        let x = u * u * u * x0 + 3 * u * u * f * xm + 3 * u * f * f * xm + f * f * f * x1
-        let y = u * u * u * a + 3 * u * u * f * a + 3 * u * f * f * b + f * f * f * b
-        return CGPoint(x: x, y: y)
+    func link(_ from: String, _ to: String) -> Link? { links.first { $0.from == from && $0.to == to } }
+}
+
+/// A pulse's way across one diagram: its bands end to end, measured by length.
+struct FlowRoute {
+    let layout: BandLayout
+    let links: [BandLayout.Link]
+    /// How far along the route each band begins.
+    let starts: [CGFloat]
+    let length: CGFloat
+
+    init(layout: BandLayout, links: [BandLayout.Link]) {
+        self.layout = layout
+        self.links = links
+        var starts: [CGFloat] = [], d: CGFloat = 0
+        for l in links {
+            starts.append(d)
+            d += l.length
+        }
+        self.starts = starts
+        length = d
     }
 
-    func link(_ from: String, _ to: String) -> Link? { links.first { $0.from == from && $0.to == to } }
+    /// The point `s` along the route, and the band it is on.
+    func at(_ s: CGFloat) -> (point: CGPoint, link: BandLayout.Link) {
+        let s = min(max(s, 0), length)
+        let i = starts.lastIndex { $0 <= s } ?? 0
+        return (links[i].point(at: s - starts[i]), links[i])
+    }
 }
 
 // MARK: - The two diagrams
@@ -154,6 +250,7 @@ struct BandLayout {
 private struct FlowBands {
     let flows: Flows
     let size: CGSize
+    let open: [Pulse]
     let out: BandLayout
     let back: BandLayout
     let xs: [CGFloat]
@@ -163,9 +260,10 @@ private struct FlowBands {
     /// (failed upstream, blocked by keepmum, refused by a check).
     static let results = ["clean", "masked", "observed", "flagged", "failed", "blocked", "refused", "local"]
 
-    init(flows: Flows, size: CGSize) {
+    init(flows: Flows, size: CGSize, open: [Pulse] = []) {
         self.flows = flows
         self.size = size
+        self.open = open
         let left: CGFloat = 132, right: CGFloat = size.width - 132
         let span = right - left
         xs = [left, left + span * 0.30, left + span * 0.58, right]
@@ -337,7 +435,7 @@ private struct FlowBands {
         return ["keepmum": "keepmum", "restored": "Real values put back", "plain": "Nothing to put back"][id] ?? id
     }
 
-    func draw(_ ctx: inout GraphicsContext, now: Date, pulses: [Pulse], hover: CGPoint? = nil) {
+    func draw(_ ctx: inout GraphicsContext, now: Date, pulses: [Pulse], style: FlowPulseStyle = .comet, hover: CGPoint? = nil) {
         if flows.clients.isEmpty {
             ctx.draw(Text("No requests in this window yet").font(.km(.body)).foregroundStyle(Theme.textSecondary),
                      at: CGPoint(x: size.width / 2, y: size.height / 2))
@@ -366,7 +464,8 @@ private struct FlowBands {
         }
         headers(&ctx)
         labels(&ctx)
-        drawPulses(&ctx, now: now, pulses: pulses)
+        drawWaiting(&ctx, now: now)
+        drawPulses(&ctx, now: now, pulses: pulses, style: style)
         if let label = focus.label { tooltip(&ctx, label, at: focus.at) }
     }
 
@@ -434,7 +533,9 @@ private struct FlowBands {
         }
         for (id, n) in out.nodes where id.hasPrefix("p:") {
             let p = String(id.dropFirst(2))
-            rightOut.append((n.rect, pname[p] ?? p, "\(sum(flows.out.filter { $0.provider == p }.map(\.n)).compact) sent", Theme.text, false))
+            let waiting = open.filter { $0.provider == p }.count
+            rightOut.append((n.rect, pname[p] ?? p, "\(sum(flows.out.filter { $0.provider == p }.map(\.n)).compact) sent"
+                             + (waiting > 0 ? " · \(waiting) open" : ""), Theme.text, false))
         }
         for (id, n) in back.nodes where id.hasPrefix("p:") {
             let p = String(id.dropFirst(2))
@@ -484,24 +585,119 @@ private struct FlowBands {
         ctx.draw(t, at: CGPoint(x: box.midX, y: box.midY))
     }
 
-    private func drawPulses(_ ctx: inout GraphicsContext, now: Date, pulses: [Pulse]) {
+    /// The bands a pulse crosses, end to end; nil when one of them has no traffic in the window.
+    private func route(_ kind: Pulse.Kind, client: String, provider: String) -> FlowRoute? {
+        let (layout, keys): (BandLayout, [(String, String)]) = switch kind {
+        case .out(let r):
+            (out, [("c:" + client, "keepmum"), ("keepmum", "r:" + r)] + (FlowGeometry.unsent.contains(r) ? [] : [("r:" + r, "p:" + provider)]))
+        case .back(let restored, _):
+            (back, [("p:" + provider, restored ? "restored" : "plain"), (restored ? "restored" : "plain", "c:" + client)])
+        }
+        let links = keys.compactMap { layout.link($0.0, $0.1) }
+        guard links.count == keys.count, !links.isEmpty else { return nil }
+        return FlowRoute(layout: layout, links: links)
+    }
+
+    private func drawPulses(_ ctx: inout GraphicsContext, now: Date, pulses: [Pulse], style: FlowPulseStyle) {
         for pulse in pulses {
-            let age = now.timeIntervalSince(pulse.born)
-            guard age >= 0, age < FlowGeometry.lifetime else { continue }
-            let (layout, route): (BandLayout, [(String, String)]) = switch pulse.kind {
+            guard let route = route(pulse.kind, client: pulse.client, provider: pulse.provider) else { continue }
+            let duration = FlowGeometry.duration(route.length)
+            var start = pulse.born
+            var stopped = false
+            switch pulse.kind {
             case .out(let r):
-                (out, [("c:" + pulse.client, "keepmum"), ("keepmum", "r:" + r)] + (["blocked", "refused", "failed", "local"].contains(r) ? [] : [("r:" + r, "p:" + pulse.provider)]))
-            case .back(let restored):
-                (back, [("p:" + pulse.provider, restored ? "restored" : "plain"), (restored ? "restored" : "plain", "c:" + pulse.client)])
+                stopped = r == "blocked" || r == "refused"
+            case .back(_, let result):
+                // A reply shares its request's born and sets off once that request has reached the provider.
+                let request = self.route(.out(result), client: pulse.client, provider: pulse.provider)?.length ?? route.length
+                start = start.addingTimeInterval(FlowGeometry.duration(request) + FlowGeometry.turnaround)
+                // A reply seen arriving sets off then, however long its request waited at the provider.
+                if let leaves = pulse.leaves { start = max(start, leaves) }
             }
-            let links = route.compactMap { layout.link($0.0, $0.1) }
-            guard links.count == route.count, !links.isEmpty else { continue }
-            let progress = CGFloat(age / FlowGeometry.lifetime) * CGFloat(links.count)
-            let i = min(Int(progress), links.count - 1)
-            let p = layout.point(links[i], min(progress - CGFloat(i), 1))
-            let fade = min(1, (FlowGeometry.lifetime - age) / 0.3)
-            ctx.fill(Path(ellipseIn: CGRect(x: p.x - 7, y: p.y - 7, width: 14, height: 14)), with: .color(links[i].color.opacity(0.18 * fade)))
-            ctx.fill(Path(ellipseIn: CGRect(x: p.x - 3.5, y: p.y - 3.5, width: 7, height: 7)), with: .color(links[i].color.opacity(fade)))
+            let elapsed = now.timeIntervalSince(start), u = elapsed / duration
+            guard u >= 0 else { continue }
+            ticks(&ctx, route, u: u, duration: duration, stopped: stopped)
+            guard u < 1 else { continue }
+            let s = CGFloat(FlowGeometry.ease(u)) * route.length
+            let (p, link) = route.at(s)
+            // In over its first tenth of a second; it shrinks into the bar it lands on.
+            let alpha = min(1, elapsed / 0.12) * min(1, (1 - u) / 0.04)
+            let size: CGFloat = u > 0.9 ? 0.55 + 0.45 * CGFloat((1 - u) / 0.1) : 1
+            if style == .comet { tail(&ctx, route, at: s, u: u, alpha: alpha, size: size) }
+            let halo = (style == .comet ? 8 : 7) * size, dot = 3.5 * size
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - halo, y: p.y - halo, width: 2 * halo, height: 2 * halo)),
+                     with: .color(link.color.opacity(0.18 * alpha)))
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - dot, y: p.y - dot, width: 2 * dot, height: 2 * dot)),
+                     with: .color(link.color.opacity(alpha)))
+        }
+    }
+
+    /// Requests out at a provider now: once each has landed, a dot breathes at the provider's end of
+    /// its band until the reply comes back, the later ones queued along the band behind it.
+    private func drawWaiting(_ ctx: inout GraphicsContext, now: Date) {
+        var queued: [String: Int] = [:]
+        for pulse in open.sorted(by: { $0.born < $1.born }) {
+            guard let route = route(pulse.kind, client: pulse.client, provider: pulse.provider),
+                  let last = route.links.last else { continue }
+            let age = now.timeIntervalSince(pulse.born) - FlowGeometry.duration(route.length)
+            guard age >= 0 else { continue }  // still on its way: the pulse itself is drawn
+            let key = last.from + "→" + last.to
+            let i = queued[key, default: 0]
+            queued[key] = i + 1
+            guard i < 6 else { continue }
+            let end = last.point(1), p = CGPoint(x: end.x - 6 - CGFloat(i) * 9, y: end.y)
+            let breath = 0.5 - 0.5 * cos(2 * .pi * age / 1.6), a = min(1, age / 0.2)
+            let halo = 5 + 3 * CGFloat(breath)
+            // A clean request's band is the neutral grey, which a dot on it would vanish into.
+            let color = if case .out("clean") = pulse.kind { Theme.textSecondary } else { last.color }
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - halo, y: p.y - halo, width: 2 * halo, height: 2 * halo)),
+                     with: .color(color.opacity(0.22 * a)))
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6)),
+                     with: .color(color.opacity((0.55 + 0.45 * breath) * a)))
+        }
+    }
+
+    /// The comet's tail: longer while the pulse is fast, in the color of each band it lies on, so a
+    /// masked request's tail turns from its client's color to masked blue at keepmum.
+    private func tail(_ ctx: inout GraphicsContext, _ route: FlowRoute, at s: CGFloat, u: Double, alpha: Double, size: CGFloat) {
+        let length = (14 + 64 * CGFloat(FlowGeometry.pace(u))) * size, steps = 12
+        var (last, on) = route.at(s)
+        for j in 1...steps {
+            let d = s - length * CGFloat(j) / CGFloat(steps)
+            guard d >= 0 else { break }
+            let (p, link) = route.at(d)
+            // A band can leave a bar higher or lower than the one before it arrives: the tail breaks
+            // at the bar and carries on from the earlier band's end, rather than streak across it.
+            if link.from != on.from || link.to != on.to {
+                last = link.point(1)
+                on = link
+            }
+            let q = 1 - CGFloat(j - 1) / CGFloat(steps)
+            var piece = Path()
+            piece.move(to: last)
+            piece.addLine(to: p)
+            ctx.stroke(piece, with: .color(link.color.opacity(alpha * pow(Double(q), 1.3) * 0.95)),
+                       style: StrokeStyle(lineWidth: 0.6 + 5.4 * q * size, lineCap: .round))
+            last = p
+        }
+    }
+
+    /// Each bar a pulse passes flashes; a ring spreads where it lands, red where a request was stopped.
+    private func ticks(_ ctx: inout GraphicsContext, _ route: FlowRoute, u: Double, duration: TimeInterval, stopped: Bool) {
+        let flash = 0.45, ring = 0.6
+        for k in route.links.indices.dropFirst() {
+            let age = (u - FlowGeometry.uneased(Double(route.starts[k] / route.length))) * duration
+            guard age >= 0, age < flash, let bar = route.layout.nodes[route.links[k].from]?.rect else { continue }
+            let q = CGFloat(age / flash), e = 2 + 5 * q
+            ctx.fill(Path(roundedRect: bar.insetBy(dx: -e, dy: -e), cornerRadius: 3 + e),
+                     with: .color(route.links[k].color.opacity(0.28 * Double(1 - q))))
+        }
+        let age = (u - 1) * duration
+        guard age >= 0, age < ring, let last = route.links.last, let node = route.layout.nodes[last.to] else { return }
+        let q = CGFloat(age / ring), end = last.point(1), color = stopped ? Theme.blocked : node.color
+        for r in stopped ? [4 + 14 * q.squareRoot(), 2 + 7 * q.squareRoot()] : [4 + 14 * q.squareRoot()] {
+            ctx.stroke(Path(ellipseIn: CGRect(x: end.x - r, y: end.y - r, width: 2 * r, height: 2 * r)),
+                       with: .color(color.opacity(0.75 * Double(1 - q))), lineWidth: 1.6)
         }
     }
 }

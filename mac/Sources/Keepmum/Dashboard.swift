@@ -201,7 +201,9 @@ struct OverviewPage: View {
                 Segmented(options: [(3600.0, "Last hour"), (86400.0, "24 hours"), (604800.0, "7 days")],
                           selection: Binding(get: { store.flowWindow }, set: { store.flowWindow = $0 }))
             } content: {
-                FlowBandsView(flows: store.flows, pulses: store.pulses, live: store.connection == .live || store.connection == .sample)
+                FlowBandsView(flows: store.flows, pulses: store.pulses, open: Array(store.open.values),
+                              live: store.connection == .live || store.connection == .sample)
+                    .task { await store.followLive() }
                     .frame(minHeight: 320, maxHeight: .infinity)
             }
         }
