@@ -193,13 +193,14 @@ The user experience is one command, `keepmum claude` or `keepmum codex`, or the 
 | `keepmum tools [allow\|set\|trust]` | MCP servers and web tools seen, and which real values each may receive. |
 | `keepmum guard [setup\|injection\|harm\|commands\|local\|remove]` | The optional checks: prompt injection in tool results, harmful requests in what you type, risky shell commands in replies; off, warn, block, or local (a flagged request answered by a model on this Mac). |
 | `keepmum destinations [add\|remove]` | Hosts a shell command may send a rule's tokens to, besides its issuer's own. Adding needs `--yes`. |
+| `keepmum extensions [keep\|remove]` | Plugins, marketplaces, hooks, MCP servers, skills and global instruction files in the agents' settings; what other apps added since you last looked, kept or taken out (one entry, after a backup). |
 | `keepmum log previews\|context on\|off` | What the app's Logs page may show about masked values (memory only). |
 | `keepmum exclude` / `keepmum include` | Lets one project's Claude Code skip keepmum. |
 | `keepmum status` | Setup, protection and settings as JSON, for the Mac app. |
 | `keepmum audit list\|verify\|head\|export\|keep` | The tamper-evident audit log: requests, protection changes, starts and stops. |
 | `keepmum scan <file or ->` | Prints findings with values masked; exits 1 if anything is found. Usable as a pre-commit hook. |
 | `keepmum setup` | Downloads the Privacy Filter model once and checks its pinned SHA-256. |
-| `keepmum doctor [--json]` | Checks macOS version, Apple silicon, pf-serve and the model (with a canary), the install salt, protection, routes around the proxy, port free. |
+| `keepmum doctor [--json]` | Checks macOS version, Apple silicon, pf-serve and the model (with a canary), the install salt, protection, routes around the proxy, what was added to the agents' settings since you last looked, port free. |
 | `keepmum selftest` | Sends a synthetic canary secret through the proxy to a local mock upstream and fails unless it arrives redacted. |
 
 **Config** (`~/.config/keepmum/config.toml`, all optional; unknown keys and bad values are errors)
@@ -384,6 +385,7 @@ The one test that must never fail: a canary secret sent through keepmum never ap
 | Missed secret (false negative) | Layered detection; redact-when-in-doubt merge; recall target in Phase 0 |
 | Over-redaction breaks Claude's work | Allowlist; hard-negative tests; restore in edits so files stay correct |
 | Prompt injection asks Claude to send a placeholder somewhere, and restore leaks it | Per-tool restore policy: web tools keep placeholders; an MCP server gets only its own values and the types you allow; never a secret, never more than 5 values a call. A server can still pass what it gets on (a mail server sending a message), so allow types only for servers you trust |
+| Another app adds a plugin, hook, MCP server or skill to an agent, or trusts its own hook (Postman, Oct 2026) | `extensions.py` keeps what the agents had at keepmum's first run; anything new is reported (menu bar, `doctor`, at `keepmum claude`/`codex`/`gemini` start) until kept or removed; removal edits one entry after a backup and checks the file reads the same otherwise. Detection after the fact, not prevention |
 | An MCP server changes its tool descriptions after it was trusted, or another server takes its name | Each tool's definition is hashed; a change pauses the server (placeholders only) until `keepmum tools trust` |
 | Secrets inside images or PDFs | Out of scope for v1; documented in README |
 | A client opens a WebSocket keepmum cannot scan | Refused; Codex falls back to HTTPS, and `keepmum protect` turns Codex's WebSockets off |

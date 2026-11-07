@@ -40,7 +40,7 @@
     <p>keepmum runs on your Mac. Your prompts, code, files and secrets never reach the keepmum project. The project keeps counts (how many downloads, update checks and updates there are each day) and nothing about who: no IP addresses, no accounts, no identifiers. You can opt out of even the counts.</p>
 
     <h2>On your Mac</h2>
-    <p>The keepmum proxy and the Mac app work locally. The values keepmum masks, its logs, its history and the Mac app’s pages stay on your Mac; the app talks only to the proxy on <code>127.0.0.1</code>, apart from update checks and the model downloads you start. Nothing is sent when the app opens or while you use it: no usage data, no crash reports, no analytics.</p>
+    <p>The keepmum proxy and the Mac app work locally. The values keepmum masks, its logs, its history and the Mac app’s pages stay on your Mac; the app talks only to the proxy on <code>127.0.0.1</code>, apart from update checks and the model downloads you start. Nothing is sent when the app opens or while you use it: no usage data, no crash reports, no analytics. To notice what other apps add to your coding agents, keepmum reads their settings on your Mac and remembers names and hashes, never the settings themselves.</p>
 
     <h2>What your AI provider receives</h2>
     <p>keepmum forwards your coding agent’s requests to the provider you already use (Anthropic, OpenAI, Google, or a gateway you set up), with the secrets and personal data it detects replaced by placeholders, and puts the real values back in the answer. What the provider receives is covered by its own privacy policy. Detection can miss things; the <a href="/#limits">limitations</a> say where.</p>
