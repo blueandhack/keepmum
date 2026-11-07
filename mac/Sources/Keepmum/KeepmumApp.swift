@@ -130,6 +130,21 @@ struct MenuPanel: View {
                 .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
                 .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
             }
+            if let added = engine.status?.extensions?.new, let first = added.first {
+                // Another app added a plugin, hook or MCP server to a coding agent (Settings › Extensions).
+                HStack(spacing: Space.s) {
+                    Image(systemName: "puzzlepiece.extension").foregroundStyle(Theme.warning)
+                    Text(added.count == 1 ? "\(first.agent) changed: \(first.name)" : "\(added.count) added to your agents")
+                        .font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: Space.s)
+                    PillButton(title: "Review") {
+                        engine.settingsRequested = .extensions
+                        DashboardWindow.show(openWindow)
+                    }
+                }
+                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
+                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
+            }
             if let version = Updates.shared.available {
                 HStack(spacing: Space.s) {
                     Image(systemName: "arrow.down.circle").foregroundStyle(Theme.accent)

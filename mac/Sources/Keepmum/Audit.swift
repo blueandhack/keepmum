@@ -182,6 +182,8 @@ struct AuditPage: View {
         case "start": "Started"
         case "stop": "Stopped"
         case "pruned": "Retention"
+        case "extension_removed": "Extension removed"
+        case "extensions_kept": "Extensions kept"
         default: event.capitalized
         }
     }
@@ -195,6 +197,7 @@ struct AuditPage: View {
         case "start": "play.circle"
         case "stop": "stop.circle"
         case "pruned": "scissors"
+        case "extension_removed", "extensions_kept": "puzzlepiece.extension"
         default: "circle"
         }
     }

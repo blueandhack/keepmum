@@ -3,7 +3,7 @@ import SwiftUI
 /// Settings, one pane at a time: a list of panes beside the content. A pane with two groups of
 /// sections lays them side by side when the window is wide enough, and one under the other when not.
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case setup, masking, tools, checks, general, doctor
+    case setup, masking, tools, checks, extensions, general, doctor
     var id: String { rawValue }
 
     var title: String {
@@ -12,6 +12,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .masking: "Masking"
         case .tools: "Tools"
         case .checks: "Checks"
+        case .extensions: "Extensions"
         case .general: "General"
         case .doctor: "Check this Mac"
         }
@@ -23,6 +24,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .masking: "eye.slash"
         case .tools: "network"
         case .checks: "checkmark.shield"
+        case .extensions: "puzzlepiece.extension"
         case .general: "slider.horizontal.3"
         case .doctor: "stethoscope"
         }
@@ -34,6 +36,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .masking: "What is masked before a request leaves this Mac, and the projects left out"
         case .tools: "What each tool that reaches the network may receive, and where shell commands may send tokens"
         case .checks: "Optional checks on what tools return, what you type, and the commands in replies, and the local models that answer what they flag"
+        case .extensions: "The plugins, hooks and MCP servers in your coding agents' settings, and what other apps added"
         case .general: "Appearance, updates, the Logs page, and this app's connection to keepmum"
         case .doctor: "The same checks as keepmum doctor: this Mac, the model, keepmum's files"
         }
@@ -100,6 +103,8 @@ struct SettingsPage: View {
         case .checks:
             return (AnyView(ChecksSection(engine: engine)),
                     engine.status?.guard?.local != nil ? AnyView(LocalServersSection(engine: engine)) : nil)
+        case .extensions:
+            return (AnyView(ExtensionsSection(engine: engine)), nil)
         case .general:
             return (AnyView(VStack(alignment: .leading, spacing: Space.xl) { display; UpdatesSection() }),
                     AnyView(VStack(alignment: .leading, spacing: Space.xl) {
@@ -194,6 +199,9 @@ private struct SettingsRail: View {
             guard let g = engine.status?.guard else { return nil }
             let on = [g.injection.mode, g.harm.mode, g.commands?.mode ?? "off"].filter { $0 != "off" }.count
             return on == 0 ? nil : ("\(on) on", Theme.textSecondary)
+        case .extensions:
+            let new = engine.status?.extensions?.new.count ?? 0
+            return new == 0 ? nil : ("\(new)", Theme.warning)
         case .general:
             return Updates.shared.available == nil ? nil : ("Update", Theme.accent)
         case .doctor:

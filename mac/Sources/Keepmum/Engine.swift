@@ -40,6 +40,41 @@ final class Engine {
         var keepDays: Int?
         /// The optional checks (`keepmum guard --json`); nil from older engines.
         var `guard`: Checks?
+        /// What other apps added to the coding agents' settings since you last looked; nil from older engines.
+        var extensions: Extensions? = nil
+    }
+
+    /// A plugin, plugin marketplace, hook or MCP server in a coding agent's settings (`keepmum extensions`).
+    struct Extension: Decodable, Equatable, Identifiable {
+        var id: String
+        var agent: String
+        var kind: String
+        var name: String
+        /// What it runs or where it connects; for a Claude Code plugin, its hooks and MCP servers.
+        var detail: String
+        var file: String
+        /// It runs at every session start or prompt, where its output reaches the model as instructions.
+        var addsContext: Bool
+        var removable: Bool
+        /// How to remove it with the agent itself, when keepmum does not edit that file.
+        var how: String
+        var new: Bool?
+    }
+
+    /// In `keepmum status`: what is new, for the menu bar.
+    struct Extensions: Decodable, Equatable {
+        var watching: Bool
+        var new: [Extension]
+        var count: Int?
+    }
+
+    /// `keepmum extensions --json`: every item, and what went away since you last looked.
+    struct ExtensionList: Decodable, Equatable {
+        struct Gone: Decodable, Equatable { var agent: String; var kind: String; var name: String }
+        var items: [Extension]
+        var watching: Bool
+        var gone: [Gone]
+        var problems: [String]
     }
 
     /// `keepmum guard --json`: each optional check's mode and whether its model is set up.
@@ -503,6 +538,55 @@ final class Engine {
         await act { try await self.check(["rules", "remove", kind, String(index)]) }
     }
 
+    // MARK: Extensions (`keepmum extensions`): what other apps added to the coding agents
+
+    private(set) var extensionList: ExtensionList?
+
+    func loadExtensions() async {
+        if previewing {
+            extensionList = .init(items: Self.sampleExtensions, watching: true, gone: [], problems: [])
+            return
+        }
+        guard let out = try? await run(["extensions", "--json"]), out.code == 0 else { return }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        if let list = try? decoder.decode(ExtensionList.self, from: Data(out.stdout.utf8)) { extensionList = list }
+    }
+
+    /// Mark items as yours; none: every new one.
+    func keepExtensions(_ ids: [String] = []) async {
+        await act { try await self.check(["extensions", "keep"] + ids) }
+        await loadExtensions()
+    }
+
+    /// Take one item out of its agent's settings, after a backup (`keepmum extensions remove`).
+    func removeExtension(_ id: String) async {
+        await act { try await self.check(["extensions", "remove", id]) }
+        await loadExtensions()
+    }
+
+    /// For snapshots: an ordinary setup, and what the Postman app added to Codex and Claude Code in October 2026.
+    static let sampleExtensions: [Extension] = [
+        .init(id: "a1", agent: "Codex", kind: "trusted hook", name: "postman@postman",
+              detail: "postman@postman:hooks/codex-hooks.json:session_start:0:0", file: "~/.codex/config.toml",
+              addsContext: true, removable: true, how: "", new: true),
+        .init(id: "a2", agent: "Codex", kind: "plugin", name: "postman@postman", detail: "", file: "~/.codex/config.toml",
+              addsContext: false, removable: true, how: "", new: true),
+        .init(id: "a3", agent: "Codex", kind: "MCP server", name: "postman", detail: "https://mcp.postman.com/mcp",
+              file: "~/.codex/config.toml", addsContext: false, removable: true, how: "", new: true),
+        .init(id: "a4", agent: "Claude Code", kind: "plugin", name: "postman@claude-plugins-official",
+              detail: "hooks: SessionStart; MCP: postman", file: "~/.claude/settings.json",
+              addsContext: true, removable: true, how: "", new: true),
+        .init(id: "b1", agent: "Claude Code", kind: "plugin", name: "frontend-design@claude-plugins-official", detail: "",
+              file: "~/.claude/settings.json", addsContext: false, removable: true, how: "", new: false),
+        .init(id: "b2", agent: "Claude Code", kind: "hook", name: "Stop", detail: "afplay /System/Library/Sounds/Glass.aiff",
+              file: "~/.claude/settings.json", addsContext: false, removable: true, how: "", new: false),
+        .init(id: "b3", agent: "Codex", kind: "plugin", name: "github@openai-curated", detail: "", file: "~/.codex/config.toml",
+              addsContext: false, removable: true, how: "", new: false),
+        .init(id: "b4", agent: "Gemini CLI", kind: "extension", name: "code-review", detail: "", file: "~/.gemini/extensions/code-review",
+              addsContext: false, removable: false, how: "gemini extensions uninstall code-review", new: false),
+    ]
+
     // MARK: Tools (`keepmum tools`): what each network tool may receive
 
     /// setting: placeholders, own, contacts or default. A public tool (web search) given more needs `confirmed`.
@@ -756,6 +840,8 @@ final class Engine {
                       .init(id: "lmstudio", name: "LM Studio", url: "http://localhost:1234"),
                       .init(id: "llamacpp", name: "llama.cpp", url: "http://localhost:8080"),
                       .init(id: "mlx", name: "MLX", url: "http://localhost:8080")])
+        e.status?.extensions = .init(watching: true, new: sampleExtensions.filter { $0.new == true }, count: sampleExtensions.count)
+        e.extensionList = .init(items: sampleExtensions, watching: true, gone: [], problems: [])
         e.serviceStatus = .enabled
         if around {
             e.status?.protect = .init(settings: "~/.claude/settings.json", on: false, baseUrl: "http://127.0.0.1:3425")
