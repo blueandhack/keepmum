@@ -298,10 +298,18 @@ class Proxy:
         if path == "/_keepmum/health":
             return JSONResponse({"ok": True})
         if path in ("/_keepmum/stats", "/_keepmum/history", "/_keepmum/flows", "/_keepmum/findings",
-                    "/_keepmum/tools") and request.method == "GET":
+                    "/_keepmum/tools", "/_keepmum/live") and request.method == "GET":
             given = request.headers.get("authorization", "").removeprefix("Bearer ")
             if not self.stats_token or not hmac.compare_digest(given, self.stats_token):
                 return api_error(401, "authentication_error", "missing or wrong stats token")
+        if path == "/_keepmum/live" and request.method == "GET":
+            # The dashboard's fast poll while its Live flow is on screen: requests out at a provider
+            # now (client, provider, kind) and the events since `after`. Small, so it can poll often.
+            try:
+                after = float(request.query_params.get("after", 0))
+            except ValueError:
+                return api_error(400, "invalid_request_error", "after must be a number")
+            return JSONResponse(self.stats.live(after))
         if path == "/_keepmum/flows" and request.method == "GET":
             try:
                 window = max(60.0, min(float(request.query_params.get("window", 3600)), 30 * 86400))
@@ -379,14 +387,15 @@ class Proxy:
 
             payload = zstandard.ZstdCompressor().compress(payload)
             headers.append(("content-encoding", "zstd"))
+        flight = self.stats.depart(origin, "masked" if new else "clean")
         try:
             if wants_stream(t, masked, request.url.query):
                 return await self._stream(url, headers, payload, path, t, scan_ms, counts, new, origin=origin, found=found,
-                                          texts=texts)
+                                          texts=texts, flight=flight)
             resp = await self.client.post(url, headers=headers, content=payload)
         except httpx.HTTPError as e:
             log.error("upstream error on %s: %s", path, type(e).__name__)
-            self._record(path, "upstream_error", 502, scan_ms, counts, new=new, origin=origin, found=found)
+            self._record(path, "upstream_error", 502, scan_ms, counts, new=new, origin=origin, found=found, flight=flight)
             return api_error(502, "api_error", f"upstream request failed ({type(e).__name__})")
         restored = Counter()
         content = resp.content
@@ -399,7 +408,8 @@ class Proxy:
             except ValueError:
                 pass  # not JSON: pass it through as it came
         self._warn_unresolved(path, restored)
-        self._record(path, "forwarded", resp.status_code, scan_ms, counts, restored, new=new, origin=origin, found=found)
+        self._record(path, "forwarded", resp.status_code, scan_ms, counts, restored, new=new, origin=origin, found=found,
+                     flight=flight)
         log.info("%s -> %d redacted=%s restored=%s scan=%.0fms", path, resp.status_code, dict(counts), dict(restored), scan_ms)
         return Response(content, status_code=resp.status_code, headers=self._response_headers(resp))
 
@@ -418,15 +428,17 @@ class Proxy:
             log.warning("observe %s: not scanned (%s)", path, type(e).__name__)
         url = self._url(request, t)
         headers = self._headers(request, keep_encoding=True)
+        # Only a scanned body is drawn on the dashboard's flow; a bodyless or unreadable one is not.
+        flight = self.stats.depart(origin, "observed") if scan_ms is not None else None
         try:
             if wants_stream(t, body, request.url.query):
                 return await self._stream(url, headers, raw, path, t, scan_ms, counts, new, outcome="observed", origin=origin,
-                                          found=found)
+                                          found=found, flight=flight)
             resp = await self.client.post(url, headers=headers, content=raw)
         except httpx.HTTPError as e:
-            self._record(path, "upstream_error", 502, scan_ms, counts, new=new, origin=origin, found=found)
+            self._record(path, "upstream_error", 502, scan_ms, counts, new=new, origin=origin, found=found, flight=flight)
             return api_error(502, "api_error", f"upstream request failed ({type(e).__name__})")
-        self._record(path, "observed", resp.status_code, scan_ms, counts, new=new, origin=origin, found=found)
+        self._record(path, "observed", resp.status_code, scan_ms, counts, new=new, origin=origin, found=found, flight=flight)
         log.info("%s -> %d (observe: sent unmasked) would mask=%s", path, resp.status_code, dict(counts))
         return Response(resp.content, status_code=resp.status_code, headers=self._response_headers(resp))
 
@@ -438,7 +450,7 @@ class Proxy:
 
     def _record(self, path: str, outcome: str, status: int, scan_ms: float | None = None, counts: Counter | None = None,
                 restored: Counter | None = None, new: int = 0, origin: tuple[str, str] | None = None,
-                found: Counter | None = None, guard: list[dict] | None = None) -> None:
+                found: Counter | None = None, guard: list[dict] | None = None, flight: int | None = None) -> None:
         """Count a request for the stats feed, and add it to the audit log. Bodyless checks that
         carried no content (a GET of /v1/models) are counted but not audited."""
         tools = take_tools(restored) if restored else []
@@ -446,7 +458,8 @@ class Proxy:
         if in_urls:
             log.warning("%s: %d placeholder(s) inside web addresses in the reply kept: a client that shows the "
                         "reply could otherwise send the real value there", path, sum(in_urls.values()))
-        self.stats.record(path, outcome, status, scan_ms, counts, restored, new=new, origin=origin, tools=tools, guard=guard)
+        self.stats.record(path, outcome, status, scan_ms, counts, restored, new=new, origin=origin, tools=tools, guard=guard,
+                          flight=flight)
         if self.audit is None or (scan_ms is None and outcome in ("forwarded", "observed")):
             return
         from .restore import UNRESOLVED
@@ -763,7 +776,7 @@ class Proxy:
         return self.policy.with_review(review)
 
     async def _stream(self, url, headers, payload, path, t: Target, scan_ms, counts, new=0, outcome="forwarded",
-                      origin=None, found=None, texts: dict | None = None) -> Response:
+                      origin=None, found=None, texts: dict | None = None, flight: int | None = None) -> Response:
         req = self.client.build_request("POST", url, headers=headers, content=payload)
         resp = await self.client.send(req, stream=True)
         restored = Counter()
@@ -788,7 +801,8 @@ class Proxy:
             finally:
                 await resp.aclose()
                 self._warn_unresolved(path, restored)
-                self._record(path, outcome, resp.status_code, scan_ms, counts, restored, new=new, origin=origin, found=found)
+                self._record(path, outcome, resp.status_code, scan_ms, counts, restored, new=new, origin=origin, found=found,
+                             flight=flight)
                 log.info("%s -> %d (stream) redacted=%s restored=%s scan=%.0fms", path, resp.status_code,
                          dict(counts), dict(restored), scan_ms)
 

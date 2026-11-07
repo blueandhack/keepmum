@@ -264,3 +264,82 @@ def test_flows_follow_each_client_out_and_back():
     back = {(b["client"], b["restored"]): (b["n"], b["values"]) for b in f["back"]}
     assert back[("claude-code", True)][0] == 1 and back[("claude-code", True)][1] >= 1 and back[("pi", False)] == (1, 0)
     assert f["providers"] == [{"id": "up", "name": "up", "replies": 2}]
+
+
+def _held_upstream(gate, reply):
+    """An upstream that answers only once `gate` is set: a request stays out at the provider."""
+    async def handler(request):
+        await gate.wait()
+        return reply(request)
+    return httpx.MockTransport(handler)
+
+
+async def _wait_for_flight(client, auth):
+    for _ in range(200):
+        live = (await client.get("/_keepmum/live", headers=auth)).json()
+        if live["inflight"]:
+            return live
+        await anyio.sleep(0.005)
+    raise AssertionError("the request never showed as out at the provider")
+
+
+def test_live_feed_shows_a_request_while_the_provider_answers():
+    canary = selftest.make_canary()
+    auth = {"authorization": "Bearer t"}
+    message = {"id": "msg_1", "type": "message", "role": "assistant", "content": [{"type": "text", "text": "ok"}]}
+
+    async def go():
+        gate = anyio.Event()
+        _, client = make(transport=_held_upstream(gate, lambda r: httpx.Response(200, json=message)))
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(lambda: client.post("/v1/messages", json=body_with(canary)))
+            during = await _wait_for_flight(client, auth)
+            gate.set()
+        after = (await client.get("/_keepmum/live", headers=auth)).json()
+        since = (await client.get("/_keepmum/live", params={"after": after["recent"][-1]["ts"]}, headers=auth)).json()
+        refused = await client.get("/_keepmum/live")
+        return during, after, since, refused
+
+    during, after, since, refused = anyio.run(go)
+    [flight] = during["inflight"]
+    assert flight["kind"] == "masked" and flight["client"] and flight["provider"]
+    assert canary not in json.dumps(during) and during["recent"] == []
+    # The reply is done: out of flight, and its event carries the flight's number.
+    assert after["inflight"] == [] and after["recent"][-1]["flight"] == flight["id"]
+    assert after["recent"][-1]["outcome"] == "forwarded"
+    assert since["recent"] == []  # only events newer than `after`
+    assert refused.status_code == 401
+
+
+def test_a_streamed_reply_stays_in_flight_until_its_last_chunk():
+    auth = {"authorization": "Bearer t"}
+    sse = 'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+
+    async def go():
+        gate = anyio.Event()
+        transport = _held_upstream(gate, lambda r: httpx.Response(200, stream=httpx.ByteStream(sse.encode()),
+                                                                headers={"content-type": "text/event-stream"}))
+        _, client = make(transport=transport)
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(lambda: client.post("/v1/messages", json={**body_with("nothing secret"), "stream": True}))
+            during = await _wait_for_flight(client, auth)
+            gate.set()
+        after = (await client.get("/_keepmum/live", headers=auth)).json()
+        return during, after
+
+    during, after = anyio.run(go)
+    [flight] = during["inflight"]
+    assert flight["kind"] == "clean"
+    assert after["inflight"] == [] and after["recent"][-1]["flight"] == flight["id"]
+
+
+def test_flight_numbers_stay_out_of_the_history_file(tmp_path):
+    from keepmum.stats import History, Stats
+
+    hist = History(tmp_path / "history.jsonl")
+    stats = Stats(history=hist)
+    n = stats.depart(("claude-code", "anthropic"), "clean")
+    assert [f["id"] for f in stats.live()["inflight"]] == [n]
+    stats.record("/v1/messages", "forwarded", 200, scan_ms=1.0, origin=("claude-code", "anthropic"), flight=n)
+    assert stats.live()["inflight"] == [] and stats.live()["recent"][-1]["flight"] == n
+    assert "flight" not in hist.events()[-1]

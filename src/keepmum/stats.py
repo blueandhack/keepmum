@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 HISTORY_KEEP = 20_000  # events kept when the file is compacted
+FLIGHT_STALE = 30 * 60  # seconds before a request still out at a provider is assumed lost
 
 
 def token_file() -> Path:
@@ -271,11 +272,34 @@ class Stats:
         self.check_texts: dict[int, dict] = {}
         self._check_seq = 0
         self.guarded = Counter()  # requests with a hit, by action: warned, blocked
+        # Requests on their way to a provider, by flight number, until their reply is done: the
+        # dashboard draws them waiting there. Client, provider and kind; never content.
+        self.inflight: dict[int, dict] = {}
+        self._flight = 0
+
+    def depart(self, origin: tuple[str, str] | None, kind: str) -> int:
+        """A scanned request is leaving for its provider: its number, which `record` closes."""
+        with self._lock:
+            self._flight += 1
+            client, provider = origin or (None, None)
+            self.inflight[self._flight] = {"id": self._flight, "ts": round(time.time(), 6), "client": client,
+                                           "provider": provider, "kind": kind}
+            return self._flight
+
+    def live(self, after: float = 0.0) -> dict:
+        """The dashboard's fast poll: requests out at a provider now, and events newer than `after`."""
+        with self._lock:
+            now = time.time()
+            # A request that never recorded (a crash between leaving and its reply) stops being drawn.
+            for n in [n for n, f in self.inflight.items() if now - f["ts"] > FLIGHT_STALE]:
+                del self.inflight[n]
+            return {"now": round(now, 6), "inflight": list(self.inflight.values()),
+                    "recent": [e for e in self.events if e["ts"] > after]}
 
     def record(self, path: str, outcome: str, status: int, scan_ms: float | None = None,
                redacted: Counter | None = None, restored: Counter | None = None, new: int = 0,
                origin: tuple[str, str] | None = None, tools: list[dict] | None = None,
-               guard: list[dict] | None = None) -> None:
+               guard: list[dict] | None = None, flight: int | None = None) -> None:
         from .restore import UNRESOLVED
 
         restored = Counter(restored or {})
@@ -310,9 +334,14 @@ class Stats:
                 event["tools"] = tools
             if guard:  # a check's hits: check, action, source, score, categories, never the text
                 event["guard"] = guard
+            kept = event
+            if flight is not None:  # its reply is done: no longer out at the provider
+                self.inflight.pop(flight, None)
+                # Flight numbers start over with each run, so the history file does not get them.
+                event = {**event, "flight": flight}
             self.events.append(event)
         if self.history:
-            self.history.append(event)
+            self.history.append(kept)
 
     def record_findings(self, found: list[dict], outcome: str = "masked", origin: tuple[str, str] | None = None) -> None:
         ts = round(time.time(), 6)
