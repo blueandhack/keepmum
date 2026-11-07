@@ -4,12 +4,26 @@ name = "keepmum-counts"
 main = "src/index.js"
 compatibility_date = "2025-09-01"
 workers_dev = false
+# No __name() wrappers from the bundler: the dashboard's browser code is sent as written (dashboard.js).
+keep_names = false
 # The trailing * lets a query string through (the app's ?v=); the Worker checks the exact path and
 # hands anything else to the site.
 routes = [
   { pattern = "keepmum.app/appcast.xml*", zone_name = "keepmum.app" },
   { pattern = "keepmum.app/download*", zone_name = "keepmum.app" },
+  { pattern = "keepmum.app/update/*", zone_name = "keepmum.app" },
+  { pattern = "keepmum.app/stats*", zone_name = "keepmum.app" },
 ]
+
+# GitHub's download count of each release, noted every six hours.
+[triggers]
+crons = ["17 */6 * * *"]
+
+# /stats: the Cloudflare Access application in front of it (worker/README.md, "Dashboard"). Empty:
+# the dashboard refuses everyone.
+[vars]
+ACCESS_TEAM_DOMAIN = ""
+ACCESS_AUD = ""
 
 [[d1_databases]]
 binding = "DB"
