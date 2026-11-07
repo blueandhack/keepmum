@@ -256,7 +256,7 @@ struct UpdatesSection: View {
 
     var body: some View {
         FormSection(title: "Updates",
-                    footer: "A check downloads keepmum's update list from keepmum.app, which sees your IP address and keepmum's version and counts checks and updates per day, keeping no addresses; nothing else is sent. Updates are notarized by Apple and signed by keepmum, and both are verified before one is installed.") {
+                    footer: "A check downloads keepmum's update list from keepmum.app, which sees your IP address and keepmum's version and, unless Count this Mac is off, counts checks and updates per day, keeping no addresses; nothing else is sent. keepmum.app/privacy has the details. Updates are notarized by Apple and signed by keepmum, and both are verified before one is installed.") {
             FormRow(title: "keepmum \(Updates.version)", detail: lastChecked) {
                 PillButton(title: "Check now", icon: "arrow.triangle.2.circlepath") { updates.checkNow() }
                     .disabled(!updates.isConfigured || !updates.canCheck)
@@ -272,6 +272,12 @@ struct UpdatesSection: View {
                         detail: "A new version downloads in the background and installs when keepmum quits") {
                     Switch(isOn: updates.automaticallyDownloads, enabled: updates.automaticallyChecks) { updates.setAutomaticallyDownloads($0) }
                         .accessibilityLabel("Download and install updates automatically")
+                }
+                Hairline()
+                FormRow(title: "Count this Mac",
+                        detail: "Adds this Mac's update checks and updates to keepmum's daily totals: a number per day and version, never who. Off, updates work the same, uncounted") {
+                    Switch(isOn: updates.counted) { updates.setCounted($0) }
+                        .accessibilityLabel("Count this Mac in keepmum's daily totals")
                 }
             }
         }

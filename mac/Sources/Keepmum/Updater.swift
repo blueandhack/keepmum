@@ -32,6 +32,11 @@ final class Updates: NSObject {
     @ObservationIgnored private var started = false
 
     static let promptedKey = "updatesPrompted"
+    static let countedKey = "updatesCounted"
+    /// This Mac's update checks and update downloads are in keepmum.app's daily totals (Settings ›
+    /// General › Updates › Count this Mac). Off: every request says Keepmum-Count: off, and
+    /// keepmum.app counts none of them (worker/). Updates work the same either way.
+    private(set) var counted = UserDefaults.standard.object(forKey: countedKey) as? Bool ?? true
     /// The full version (0.1.0a2), not Apple's numeric one.
     static let version = Bundle.main.object(forInfoDictionaryKey: "KeepmumVersion") as? String
         ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
@@ -63,6 +68,7 @@ final class Updates: NSObject {
                 MainActor.assumeIsolated { self?.automaticallyDownloads = u.automaticallyDownloadsUpdates }
             },
         ]
+        applyCounting()
         if !UserDefaults.standard.bool(forKey: Self.promptedKey) {
             updater.automaticallyChecksForUpdates = askToCheckAutomatically()
             UserDefaults.standard.set(true, forKey: Self.promptedKey)
@@ -73,6 +79,17 @@ final class Updates: NSObject {
     func setAutomaticallyChecks(_ on: Bool) {
         controller?.updater.automaticallyChecksForUpdates = on
         if !on { controller?.updater.automaticallyDownloadsUpdates = false }
+    }
+
+    func setCounted(_ on: Bool) {
+        counted = on
+        UserDefaults.standard.set(on, forKey: Self.countedKey)
+        applyCounting()
+    }
+
+    /// Sparkle sends these headers with the feed check, release notes and update downloads.
+    private func applyCounting() {
+        controller?.updater.httpHeaders = counted ? [:] : ["Keepmum-Count": "off"]
     }
 
     func setAutomaticallyDownloads(_ on: Bool) {
@@ -92,8 +109,8 @@ final class Updates: NSObject {
         alert.informativeText = """
             keepmum can look for a new version once a day and tell you when one is ready to install. \
             Each check downloads keepmum's update list from keepmum.app, which sees your IP address and \
-            keepmum's version and counts checks and updates per day, keeping no addresses. Nothing else is sent: no \
-            usage data, no system details.
+            keepmum's version and counts checks and updates per day, keeping no addresses (Count this Mac, \
+            in Settings, turns that off). Nothing else is sent: no usage data, no system details.
 
             You can change this, or check now, in Settings › General › Updates.
             """
