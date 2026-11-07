@@ -22,8 +22,8 @@ crons = ["17 */6 * * *"]
 # /stats: the Cloudflare Access application in front of it (worker/README.md, "Dashboard"). Empty:
 # the dashboard refuses everyone.
 [vars]
-ACCESS_TEAM_DOMAIN = ""
-ACCESS_AUD = ""
+ACCESS_TEAM_DOMAIN = "blueandhack.cloudflareaccess.com"
+ACCESS_AUD = "3100cf44ed30789ea4d0396f6584445bddff4baa22061d79d2bbc8ebe6a18ff9"
 
 [[d1_databases]]
 binding = "DB"
