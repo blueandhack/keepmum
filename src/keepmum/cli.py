@@ -100,6 +100,22 @@ def _proxy_or_exit(pii, rules_only, upstream, who, gateways=None):  # who: "serv
         raise typer.Exit(2)
 
 
+def _extension_news() -> None:
+    """Start watching the agents' extensions, and say in one line if anything was added since you
+    last looked (a Postman-style install). Never stops a start: a problem here is skipped."""
+    try:
+        from . import extensions as ext
+
+        ext.ensure_baseline()
+        new = [r for r in ext.check()["items"] if r["new"]]
+    except Exception:
+        return
+    if new:
+        names = ", ".join(f"{r['agent']} {r['kind']} {r['name']}" for r in new[:3]) + (" and more" if len(new) > 3 else "")
+        typer.echo(f"keepmum: {len(new)} new in your coding agents' settings since you last looked ({names}): "
+                   "`keepmum extensions`", err=True)
+
+
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def claude(ctx: typer.Context) -> None:
     """Start Claude Code with every request scanned. Arguments go to `claude` unchanged."""
@@ -118,6 +134,7 @@ def claude(ctx: typer.Context) -> None:
     if risks:
         typer.echo("keepmum: refusing to start, Claude Code could bypass the proxy:\n  " + "\n  ".join(risks), err=True)
         raise typer.Exit(2)
+    _extension_news()
     if protected(cfg):
         # Claude Code's settings send it to the keepmum service whatever we set, so use that.
         port = shared_serve_port(cfg)
@@ -158,6 +175,7 @@ def codex(ctx: typer.Context) -> None:
     from .protect import ProtectError
 
     cfg = _config()
+    _extension_news()
     try:
         # In front of the provider Codex's config selects, when that is another gateway.
         provider, extra = codex_run_provider(cfg.port, cfg.gateways)
@@ -200,6 +218,7 @@ def gemini(ctx: typer.Context) -> None:
         typer.echo("keepmum gemini: `gemini` is not on PATH (npm install -g @google/gemini-cli)", err=True)
         raise typer.Exit(2)
     cfg = _config()
+    _extension_news()
     env = dict(os.environ)
     upstreams = gemini_upstreams(env, cfg.port)
     # The service forwards to Google; an address set here (another gateway) needs a proxy of its own.
@@ -233,6 +252,12 @@ def serve(
     from .launch import BackgroundServer, log_to_file
 
     cfg, proxy = _proxy_or_exit(pii, rules_only, upstream, "serve")
+    try:  # watch the agents' extensions from the first start (extensions.py)
+        from . import extensions
+
+        extensions.ensure_baseline()
+    except Exception:
+        pass
     if log_file:
         log_to_file(cfg.log_level)
     else:
@@ -1404,6 +1429,17 @@ def include(path: Path = typer.Argument(None, help="A folder in the project (def
                "going straight to the API until it restarts.", err=True)
 
 
+def _extensions_status() -> dict:
+    """For the menu bar: what was added to the agents' settings since you last looked. Read-only."""
+    try:
+        from . import extensions as ext
+
+        r = ext.check()
+    except Exception as e:
+        return {"watching": False, "new": [], "error": type(e).__name__}
+    return {"watching": r["watching"], "new": [i for i in r["items"] if i["new"]], "count": len(r["items"])}
+
+
 @app.command()
 def status(as_json: bool = typer.Option(True, "--json/--text", help="Print JSON (for the Mac app).")) -> None:
     """Setup and service state in one place: model, pf-serve, protection, running proxy."""
@@ -1428,7 +1464,7 @@ def status(as_json: bool = typer.Option(True, "--json/--text", help="Print JSON 
            "observe": cfg.observe, "model_on": cfg.model, "clients": clients, "pii": cfg.pii, "pass": cfg.pass_types, "rules": _rules_json(cfg),
            "excluded": excluded_projects(), "gateways": cfg.gateways, "destinations": cfg.destinations,
            "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
-           "guard": _guard_status()}
+           "guard": _guard_status(), "extensions": _extensions_status()}
     typer.echo(json.dumps(out) if as_json else "\n".join(f"{k}: {v}" for k, v in out.items()))
 
 
@@ -1438,6 +1474,80 @@ def doctor(as_json: bool = typer.Option(False, "--json", help="Print JSON (for t
     from .doctor import run
 
     raise typer.Exit(run(as_json))
+
+
+extensions_app = typer.Typer(help="Plugins, plugin marketplaces, hooks and MCP servers in your coding agents' settings, "
+                                  "and what other apps added since you last looked.")
+app.add_typer(extensions_app, name="extensions")
+
+
+def _extension_line(r: dict) -> str:
+    flags = [f for f, on in (("new", r["new"]), ("adds instructions to every session", r["adds_context"])) if on]
+    detail = f"  {r['detail']}" if r["detail"] else ""
+    return f"  {r['id']}  {r['kind']}: {r['name']}{detail}" + (f"  [{'; '.join(flags)}]" if flags else "")
+
+
+@extensions_app.callback(invoke_without_command=True)
+def extensions_list(ctx: typer.Context, as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """What each coding agent has, with what is new since you last looked marked."""
+    if ctx.invoked_subcommand:
+        return
+    import json
+
+    from . import extensions as ext
+
+    if ext.ensure_baseline() and not as_json:
+        typer.echo("keepmum is watching your coding agents' extensions from now on; what they have now is yours.", err=True)
+    result = ext.check()
+    if as_json:
+        typer.echo(json.dumps(result))
+        return
+    agents: dict[str, list[dict]] = {}
+    for r in result["items"]:
+        agents.setdefault(r["agent"], []).append(r)
+    for agent, rows in agents.items():
+        typer.echo(agent)
+        for r in sorted(rows, key=lambda r: (not r["new"], r["kind"], r["name"])):
+            typer.echo(_extension_line(r))
+    if not result["items"]:
+        typer.echo("no plugins, hooks or MCP servers in Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI or opencode")
+    for g in result["gone"]:
+        typer.echo(f"gone since you last looked: {g['agent']} {g['kind']} {g['name']}")
+    for p in result["problems"]:
+        typer.echo(f"not read: {p}", err=True)
+    if result["new"]:
+        typer.echo(f"{result['new']} new since you last looked: `keepmum extensions keep` if you added them, "
+                   "`keepmum extensions remove <id>` if not", err=True)
+
+
+@extensions_app.command("keep")
+def extensions_keep(ids: list[str] = typer.Argument(None, help="Items to keep; none: every new one.")) -> None:
+    """Mark new items as yours: keepmum stops pointing at them."""
+    from . import extensions as ext
+    from .audit import AuditLog, caller
+
+    ext.ensure_baseline()
+    n = ext.keep(ids or None)
+    if n:
+        AuditLog().append("extensions_kept", count=n, by=caller("keepmum extensions keep"))
+    typer.echo(f"kept {n}" if n else "nothing new to keep", err=True)
+
+
+@extensions_app.command("remove")
+def extensions_remove(item_id: str = typer.Argument(..., help="The item's id, from `keepmum extensions`.")) -> None:
+    """Take one item out of its agent's settings, after a backup; restart the agent afterwards."""
+    from . import extensions as ext
+    from .audit import AuditLog, caller
+
+    try:
+        item, backup = ext.remove(item_id)
+    except ext.ExtensionError as e:
+        typer.echo(f"keepmum extensions remove: {e}", err=True)
+        raise typer.Exit(1)
+    AuditLog().append("extension_removed", agent=item.agent, kind=item.kind, name=item.name, file=item.file,
+                      by=caller("keepmum extensions remove"))
+    typer.echo(f"removed {item.agent} {item.kind} {item.name} from {item.file} (backup: {backup}). "
+               f"Restart {item.agent} so it reads its settings again.", err=True)
 
 
 audit_app = typer.Typer(help="The audit log: what keepmum did with each request, and every change to its protection. "

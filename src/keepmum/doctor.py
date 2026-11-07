@@ -156,6 +156,7 @@ def checks() -> list[tuple[str, str]]:
             _check(r, OK, f"{names[client]} goes through keepmum" + via_phrase(st))
     if os.environ.get("ANTHROPIC_BASE_URL"):
         _check(r, WARN, "ANTHROPIC_BASE_URL is set: `keepmum claude` will use it as its upstream")
+    _extension_checks(r)
 
     with socket.socket() as s:
         free = s.connect_ex(("127.0.0.1", port)) != 0
@@ -224,6 +225,30 @@ def _guard_checks(r, cfg) -> None:
         _check(r, FAIL if why else WARN if heavy else OK, f"harm check {cfg.guard_harm}: " + (why or
                f"{harm.NAMES[size]}; {GUARD_MEMORY[size]} while in use" +
                (f", a lot for this Mac's {gb:.0f} GB: `keepmum guard harm {cfg.guard_harm} --model small`" if heavy else "")))
+
+
+def _extension_checks(r) -> None:
+    """Plugins, hooks and MCP servers added to the coding agents since you last looked (extensions.py)."""
+    from . import extensions as ext
+
+    try:
+        result = ext.check()
+    except Exception as e:
+        _check(r, WARN, f"agent extensions: could not read the agents' settings ({type(e).__name__})")
+        return
+    if not result["watching"]:
+        _check(r, OK, f"agent extensions: {len(result['items'])} in your agents' settings; keepmum starts watching "
+               "them the first time it runs (`keepmum extensions`)")
+        return
+    new = [i for i in result["items"] if i["new"]]
+    for i in new:
+        why = "; it adds instructions to every session" if i["adds_context"] else ""
+        _check(r, WARN, f"agent extensions: new {i['agent']} {i['kind']} {i['name']}{why}: "
+               f"`keepmum extensions keep` if you added it, `keepmum extensions remove {i['id']}` if not")
+    if not new:
+        _check(r, OK, f"agent extensions: {len(result['items'])} in your agents' settings, none new since you last looked")
+    for p in result["problems"]:
+        _check(r, WARN, f"agent extensions: {p}")
 
 
 def _tool_warnings(policy: dict) -> list[str]:

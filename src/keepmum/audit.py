@@ -17,6 +17,8 @@ What is recorded, and what never is:
   own patterns are recorded as keyed fingerprints, since they may be values themselves.
 - protect, exclude, include: an agent or a project taken out of keepmum's path, or put back.
 - start, stop: a keepmum proxy began or ended, so gaps in coverage show.
+- extension_removed, extensions_kept: a plugin, hook or MCP server taken out of a coding agent's
+  settings, or new ones marked as yours (extensions.py). Names and files, never settings.
 - pruned: entries older than `[audit] keep_days` were removed; the chain continues from them.
 
 What the chain cannot do on its own: someone who can write the file can also rewrite it from
@@ -481,6 +483,10 @@ def summary(entry: dict) -> str:
         return f"keepmum {entry.get('mode')} started (pid {entry.get('pid')}, {entry.get('detector')})"
     if e == "stop":
         return f"keepmum {entry.get('mode')} stopped (pid {entry.get('pid')})"
+    if e == "extension_removed":
+        return f"{entry.get('agent')} {entry.get('kind')} {entry.get('name')} removed from {entry.get('file')}"
+    if e == "extensions_kept":
+        return f"{entry.get('count')} new item(s) in coding agents' settings kept"
     if e == "tools":
         changed = entry.get("changed") or []
         return f"{entry.get('server')} trusted again" + (f" after its tools changed ({', '.join(changed)})" if changed else "")
