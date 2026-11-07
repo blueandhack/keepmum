@@ -28,3 +28,6 @@ mac/build/
 .idea/
 mac/.sparkle/
 sparkle-private-key*
+
+# Cloudflare's CLI (wrangler) account cache
+.cloudflare/
