@@ -59,10 +59,10 @@ def main() -> None:
     ap.add_argument("--dmg", type=Path, required=True)
     ap.add_argument("--signature", required=True, help="the DMG's EdDSA signature (sign_update -p)")
     ap.add_argument("--notes", type=Path, help="release notes, in Markdown")
-    ap.add_argument("--url", help="where the DMG is downloaded from (default: the GitHub release's asset)")
+    ap.add_argument("--url", help="where the DMG is downloaded from (default: keepmum.app/update/..., which counts the update and redirects to the GitHub release's asset; worker/)")
     ap.add_argument("--feed", type=Path, default=FEED)
     a = ap.parse_args()
-    url = a.url or f"{REPO}/releases/download/v{a.version}/{a.dmg.name}"
+    url = a.url or f"https://keepmum.app/update/v{a.version}/{a.dmg.name}"
     tree, channel = load(a.feed)
     for old in channel.findall("item"):
         if old.findtext(S("version")) == a.build:

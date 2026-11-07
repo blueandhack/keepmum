@@ -9,7 +9,8 @@ import Sparkle
 /// check automatically (once a day); Settings › General › Updates changes it, and "Check now" always works.
 /// Sparkle's own permission prompt is off, and it sends no system profile. A check is one request
 /// for the feed: Cloudflare, which serves keepmum.app, sees the IP address and keepmum's version,
-/// and keepmum.app counts checks per day and version (worker/), keeping no addresses.
+/// and keepmum.app counts checks per day and version (worker/), keeping no addresses. An update's DMG
+/// comes through keepmum.app/update/ too, counted the same way, from GitHub Releases.
 ///
 /// keepmum runs in the menu bar, so a scheduled check that finds an update does not interrupt: the
 /// menu shows it (`available`, Sparkle's gentle reminders), and Install opens Sparkle's window.
@@ -91,7 +92,7 @@ final class Updates: NSObject {
         alert.informativeText = """
             keepmum can look for a new version once a day and tell you when one is ready to install. \
             Each check downloads keepmum's update list from keepmum.app, which sees your IP address and \
-            keepmum's version and counts checks per day, keeping no addresses. Nothing else is sent: no \
+            keepmum's version and counts checks and updates per day, keeping no addresses. Nothing else is sent: no \
             usage data, no system details.
 
             You can change this, or check now, in Settings › General › Updates.
