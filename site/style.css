@@ -186,3 +186,20 @@ a { color: var(--ink); }
 footer { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 24px; padding-top: 24px; border-top: 1.5px solid rgba(26, 15, 11, 0.35); font-size: 15px; }
 footer p { max-width: 620px; line-height: 1.5; }
 footer nav { display: flex; flex-wrap: wrap; gap: 8px 24px; font-weight: 600; }
+
+/* Text pages (privacy) */
+.doc-top { background: var(--coral); }
+.doc { padding-top: 72px; padding-bottom: 104px; }
+.doc .wrap > * { max-width: 720px; }
+.doc h1 { font-size: clamp(44px, 7vw, 72px); line-height: 0.95; font-weight: 800; letter-spacing: -0.04em; }
+.doc .updated { margin-top: 16px; font-size: 16px; color: var(--muted); }
+.doc h2 { margin-top: 56px; font-size: 26px; line-height: 1.15; font-weight: 800; letter-spacing: -0.02em; text-wrap: balance; }
+.doc p, .doc li { font-size: 18px; line-height: 1.6; color: var(--body); }
+.doc p { margin-top: 14px; }
+.doc ul { margin: 14px 0 0; padding-left: 22px; display: grid; gap: 10px; }
+.doc strong { color: var(--ink); font-weight: 700; }
+.doc a { text-underline-offset: 3px; }
+.doc code { font-family: var(--mono); font-size: 0.86em; background: var(--sand); padding: 2px 6px; border-radius: 6px; }
+.doc-footer { background: var(--coral); }
+.doc-footer .wrap { padding-top: 32px; padding-bottom: 40px; }
+@media (max-width: 600px) { .doc { padding-top: 48px; } .doc p, .doc li { font-size: 17px; } }

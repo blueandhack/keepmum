@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Privacy · keepmum</title>
+<meta name="description" content="What keepmum and keepmum.app collect: your code and secrets stay on your Mac; keepmum.app counts downloads, update checks and updates per day, with no addresses, and you can opt out.">
+<meta name="theme-color" content="#E4572E">
+<link rel="canonical" href="https://keepmum.app/privacy">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+<script src="analytics.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="doc-top">
+  <div class="wrap top">
+    <a class="brand" href="/">
+      <svg width="30" height="30" viewBox="0 0 100 100" aria-hidden="true"><path d="M21.6 69.8 L21.6 46.3 C21.6 37 27.8 30.9 35.8 30.9 C43.8 30.9 50 37 50 46.3 L50 69.8 M50 69.8 L50 46.3 C50 37 56.2 30.9 64.2 30.9 C72.2 30.9 78.4 37 78.4 46.3 L78.4 69.8 M12.9 69.8 L87.1 69.8" fill="none" stroke="#1A0F0B" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      keepmum
+    </a>
+    <nav aria-label="Main">
+      <a class="hide-phone" href="https://github.com/blueandhack/keepmum">GitHub</a>
+      <a class="btn small" href="/download">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main" class="doc">
+  <div class="wrap">
+    <h1>Privacy</h1>
+    <p class="updated">Last updated November 7, 2026</p>
+
+    <h2>The short version</h2>
+    <p>keepmum runs on your Mac. Your prompts, code, files and secrets never reach the keepmum project. The project keeps counts (how many downloads, update checks and updates there are each day) and nothing about who: no IP addresses, no accounts, no identifiers. You can opt out of even the counts.</p>
+
+    <h2>On your Mac</h2>
+    <p>The keepmum proxy and the Mac app work locally. The values keepmum masks, its logs, its history and the Mac app’s pages stay on your Mac; the app talks only to the proxy on <code>127.0.0.1</code>, apart from update checks and the model downloads you start. Nothing is sent when the app opens or while you use it: no usage data, no crash reports, no analytics.</p>
+
+    <h2>What your AI provider receives</h2>
+    <p>keepmum forwards your coding agent’s requests to the provider you already use (Anthropic, OpenAI, Google, or a gateway you set up), with the secrets and personal data it detects replaced by placeholders, and puts the real values back in the answer. What the provider receives is covered by its own privacy policy. Detection can miss things; the <a href="/#limits">limitations</a> say where.</p>
+
+    <h2>What keepmum.app counts</h2>
+    <ul>
+      <li><strong>Website visits.</strong> Cloudflare Web Analytics counts page views on keepmum.app. It sets no cookies and does not fingerprint your browser.</li>
+      <li><strong>Downloads.</strong> Each click on a Download button is counted.</li>
+      <li><strong>Update checks.</strong> With automatic checks on, the Mac app asks keepmum.app once a day whether there is a new version. Each check is counted, with the app’s version.</li>
+      <li><strong>Updates.</strong> Each update the app downloads is counted, with the version it updates to.</li>
+    </ul>
+    <p>For each of these keepmum stores a day, a kind, a version and a number, such as “November 7, update check, 0.1.0a5, 41”. Nothing else about a request is kept: not your IP address, your browser or your Mac. The counts are kept as long as the project runs. keepmum also reads GitHub’s public download count of each release.</p>
+
+    <h2>Opting out</h2>
+    <ul>
+      <li><strong>In the Mac app:</strong> turn off <strong>Count this Mac</strong> in Settings › General › Updates. Updates keep working; checks and updates from your Mac are not counted. Turning off <strong>Check automatically</strong> as well means the app contacts keepmum.app only when you click Check now.</li>
+      <li><strong>On the website:</strong> send Global Privacy Control (built into Firefox, Brave and DuckDuckGo, and available as an extension for other browsers) or Do Not Track. keepmum.app then loads no analytics and does not count your downloads.</li>
+      <li><strong>On the command line:</strong> the <code>keepmum</code> command checks for nothing. It makes no requests except the ones it forwards for you and the model downloads you run (<code>keepmum setup</code>, and <code>keepmum guard setup</code> for the optional checks).</li>
+    </ul>
+
+    <h2>Services involved</h2>
+    <p>These services see your IP address when your Mac or browser reaches them, under their own privacy policies. keepmum’s counts never include it.</p>
+    <ul>
+      <li><strong>Cloudflare</strong> serves keepmum.app, the update list and the counts.</li>
+      <li><strong>GitHub</strong> hosts the source code and the releases; downloads and updates come from GitHub Releases.</li>
+      <li><strong>Hugging Face</strong> hosts the models <code>keepmum setup</code> and the optional checks download, each checked against a pinned SHA-256.</li>
+      <li><strong>Apple</strong> notarizes the app; macOS may check that notarization when you first open it, as it does for any app.</li>
+    </ul>
+
+    <h2>Your rights</h2>
+    <p>keepmum holds no personal data about you, so there is nothing to look up, export or delete. If you have a question, or think something here is wrong, write to the address below.</p>
+
+    <h2>Changes</h2>
+    <p>Changes to this policy are posted on this page with a new date. Every earlier version is in the project’s history on <a href="https://github.com/blueandhack/keepmum/commits/main/site/privacy.html">GitHub</a>.</p>
+
+    <h2>Contact</h2>
+    <p><a href="mailto:privacy@keepmum.app">privacy@keepmum.app</a>. For a security issue, use <a href="https://github.com/blueandhack/keepmum/security">GitHub’s private vulnerability reporting</a>.</p>
+  </div>
+</main>
+
+<div class="doc-footer">
+  <div class="wrap">
+    <footer>
+      <p>keepmum is an independent open-source project, not affiliated with or endorsed by Anthropic, OpenAI or Google. Apache 2.0.</p>
+      <nav aria-label="Footer">
+        <a href="/">Home</a>
+        <a href="https://github.com/blueandhack/keepmum">GitHub</a>
+        <a href="https://github.com/blueandhack/keepmum/blob/main/LICENSE">License</a>
+      </nav>
+    </footer>
+  </div>
+</div>
+</body>
+</html>
