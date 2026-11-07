@@ -147,6 +147,9 @@ struct MenuPanel: View {
         }
         .padding(Space.l)
         .frame(width: 320)
+        // Its full height, always: the menu bar window is sized from this, and without it a row
+        // that appears while the panel is open is squeezed (text cut to one line) instead.
+        .fixedSize(horizontal: false, vertical: true)
         .task { await engine.refresh() }
         // Opaque: the menu bar window's material shows what is behind it, and the theme's colors,
         // unlike the system's, do not adapt to it (gray labels vanish over a light window).
