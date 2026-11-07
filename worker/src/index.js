@@ -11,6 +11,9 @@
 //
 // Every six hours (cron), GitHub's download count for each release's DMG is noted, so downloads
 // straight from GitHub show up too.
+//
+// Nothing is counted for a Mac with "Count this Mac" off (the app sends Keepmum-Count: off) or a
+// browser that asks not to be tracked (Global Privacy Control, Do Not Track): keepmum.app/privacy.
 
 import { dashboard } from "./dashboard.js";
 
@@ -22,7 +25,7 @@ const VERSION = "[0-9A-Za-z.+-]{1,32}";
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const counted = request.method === "GET";
+    const counted = request.method === "GET" && !optedOut(request);
     if (url.pathname === "/appcast.xml") {
       const feed = await getFeed();
       if (!feed) return new Response("The update feed is unavailable; try again later.\n", { status: 502 });
@@ -64,6 +67,12 @@ export default {
     ctx.waitUntil(snapshotGitHub(env));
   },
 };
+
+/** The request asks not to be counted: the app's own opt-out, or the browser's. */
+function optedOut(request) {
+  const h = request.headers;
+  return h.get("keepmum-count") === "off" || h.get("sec-gpc") === "1" || h.get("dnt") === "1";
+}
 
 /** The feed's bytes, cached at Cloudflare for five minutes; null if GitHub does not answer. */
 async function getFeed() {
