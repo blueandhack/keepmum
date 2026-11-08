@@ -22,7 +22,7 @@ export DISABLE_AUTOUPDATER=1
 
 cd "$(dirname "$0")/.."
 status=0
-uv run --frozen python -m e2e run "$@" || status=$?
+uv run --frozen python -m e2e run --check-tools "$@" || status=$?
 
 # The summary (no values, no request bodies) for the CI page.
 summary="$(ls -dt e2e/results/scripted-*/summary.md 2>/dev/null | head -1 || true)"

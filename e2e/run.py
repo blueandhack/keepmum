@@ -140,6 +140,7 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         "known_gap": case.gap(agent.name), "findings": oracle.as_dicts(findings), "exit": code,
         "requests": len(tap.exchanges), "masked": len(masked),
         "turns": [s["turn"] for s in scripted.served] if scripted else None,
+        "tools": sorted(scripted.tools) if scripted else None,
         "code_mode": next((s.get("code_mode") for s in (scripted.served if scripted else []) if "code_mode" in s), None),
     }
     if keep is not None:
@@ -186,6 +187,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--model", help="the agent's model (live)")
     r.add_argument("--agent-arg", action="append", default=[], help="extra argument for the agent, repeatable")
     r.add_argument("--keep", action="store_true", help="keep transcripts and requests (values shown as {{v:name}})")
+    r.add_argument("--check-tools", action="store_true",
+                   help="fail on a tool an agent offers that e2e/tools.toml does not list (scripted mode)")
     args = p.parse_args(argv)
     _environment()
     cases = all_cases(getattr(args, "cases", None))
@@ -227,17 +230,48 @@ def main(argv: list[str] | None = None) -> int:
                         {"cls": "health", "what": f"harness error: {type(e).__name__}: {e}", "where": "e2e"}]}
                 results.append(res)
                 print(_line(res), flush=True)
+    tools_report = check_tools(results) if args.check_tools else None
     out.mkdir(parents=True, exist_ok=True)
     (out / "results.json").write_text(json.dumps(results, indent=1, ensure_ascii=False))
-    (out / "summary.md").write_text(summary(results, args.mode, agents))
+    (out / "summary.md").write_text(summary(results, args.mode, agents) + (tools_report["text"] if tools_report else ""))
     # A known gap that passes scripted fails the run, so its marker is removed and the case guards the
     # fix. Live, a real model may simply not fall into the trap that run: reported, not failed.
     failed = [r for r in results if r["status"] == "fail" or (r["status"] == "gap-passed" and r["mode"] == "scripted")]
     counts = {s: sum(r["status"] == s for r in results) for s in ("pass", "fail", "gap", "gap-passed", "skip")}
+    if tools_report:
+        print("\n" + tools_report["text"].strip())
+        if tools_report["new"]:
+            failed.append({"tools": tools_report["new"]})
     print(f"\n{counts['pass']} passed, {counts['fail']} failed, {counts['gap']} known gaps still open, "
           f"{counts['gap-passed']} known gaps now passing (remove their known_gap), {counts['skip']} skipped"
           f"  ->  {out / 'summary.md'}")
     return 1 if failed else 0
+
+
+TOOLS = Path(__file__).parent / "tools.toml"
+
+
+def check_tools(results: list[dict]) -> dict:
+    """The tools each agent offered, against the reviewed list in tools.toml: new ones fail the run."""
+    import tomllib
+
+    known = tomllib.loads(TOOLS.read_text())
+    seen: dict[str, set[str]] = {}
+    for r in results:
+        if r.get("tools") is not None:
+            seen.setdefault(r["agent"], set()).update(r["tools"])
+    new = {a: sorted(t - set(known.get(a, {}))) for a, t in seen.items() if t - set(known.get(a, {}))}
+    gone = {a: sorted(set(known.get(a, {})) - t) for a, t in seen.items() if set(known.get(a, {})) - t}
+    lines = ["", "## Tools the agents offer", ""]
+    for agent, tools in sorted(seen.items()):
+        lines.append(f"- {agent}: {len(tools)} tools, " + ("all reviewed" if agent not in new else
+                     f"**not reviewed: {', '.join(new[agent])}**"))
+        if agent in gone:
+            lines.append(f"  - no longer offered: {', '.join(gone[agent])}")
+    if new:
+        lines += ["", "A tool not in e2e/tools.toml may run commands, write files or reach the network in a way "
+                      "keepmum does not handle yet. Find out what it does, then list it there (see the file)."]
+    return {"new": new, "gone": gone, "text": "\n".join(lines) + "\n"}
 
 
 def summary(results: list[dict], mode: str, agents) -> str:
