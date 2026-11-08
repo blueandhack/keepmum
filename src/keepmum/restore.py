@@ -26,6 +26,23 @@ DEFAULT_POLICY = {
     "web_fetch": "keep",
     "web_search": "keep",
     "codesearch": "keep",
+    # Antigravity (agy 1.5.3): its browser acts on web pages from this Mac, read_url_content fetches
+    # from it, and call_mcp_tool reaches an MCP server without naming it in the tool's name, so the
+    # server's own setting cannot apply. search_web and generate_image ask Code Assist through
+    # keepmum anyway; kept, they do not depend on that.
+    "browser_*": "keep",
+    "open_browser_url": "keep",
+    "read_browser_page": "keep",
+    "click_browser_pixel": "keep",
+    "execute_browser_javascript": "keep",
+    "capture_browser_console_logs": "keep",
+    "capture_browser_screenshot": "keep",
+    "list_browser_pages": "keep",
+    "read_url_content": "keep",
+    "search_web": "keep",
+    "generate_image": "keep",
+    "search_marketplace": "keep",
+    "call_mcp_tool": "keep",
     "mcp__*": "own",
     "mcp_*": "own",
 }

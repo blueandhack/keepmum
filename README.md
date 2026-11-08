@@ -2,9 +2,9 @@
 
 <h1 align="center">keepmum</h1>
 
-<p align="center"><b>Keep secrets and personal data on your Mac while you use Claude Code, Codex, Gemini CLI, pi or opencode.</b></p>
+<p align="center"><b>Keep secrets and personal data on your Mac while you use Claude Code, Codex, Gemini CLI, the Antigravity CLI, pi or opencode.</b></p>
 
-keepmum is a local proxy that sits between your coding agent (Claude Code, Codex, Gemini CLI, pi or opencode) and its model provider (Anthropic, OpenAI or Google). Before a request leaves your Mac, it finds secrets (API keys, tokens, passwords, private keys, connection strings) and, if you want, personal data (names, emails, phones, addresses, account numbers), and replaces each one with a placeholder such as `KEEPMUM_SECRET_7f3a9c2e`. When the model answers, keepmum puts the real values back, so your agent can still edit your `.env` file correctly, but the provider never sees what is in it.
+keepmum is a local proxy that sits between your coding agent (Claude Code, Codex, Gemini CLI, the Antigravity CLI, pi or opencode) and its model provider (Anthropic, OpenAI or Google). Before a request leaves your Mac, it finds secrets (API keys, tokens, passwords, private keys, connection strings) and, if you want, personal data (names, emails, phones, addresses, account numbers), and replaces each one with a placeholder such as `KEEPMUM_SECRET_7f3a9c2e`. When the model answers, keepmum puts the real values back, so your agent can still edit your `.env` file correctly, but the provider never sees what is in it.
 
 Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned request to the provider. The name comes from "keep mum": to say nothing about a secret.
 
@@ -17,7 +17,8 @@ Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned
 ```
 Claude Code ─┐                            ┌──▶ Anthropic API
 Codex       ─┤                            │
-Gemini CLI  ─┼─▶ keepmum (on your Mac) ─────┼──▶ OpenAI API
+Gemini CLI  ─┤                            │
+Antigravity ─┼─▶ keepmum (on your Mac) ─────┼──▶ OpenAI API
 pi          ─┤   detect → mask            │
 opencode    ─┘                            └──▶ Google (Gemini API, Code Assist)
   real values  ◀── restore ◀───────────────── placeholders only
@@ -34,7 +35,7 @@ opencode    ─┘                            └──▶ Google (Gemini API, C
 ## Requirements
 
 - A Mac with Apple silicon, and macOS 14 or later
-- Claude Code, Codex, Gemini CLI, pi or opencode
+- Claude Code, Codex, Gemini CLI, the Antigravity CLI (`agy`), pi or opencode
 - For the command line only (the Mac app bundles all of it): Python 3.12+, [uv](https://docs.astral.sh/uv/), and Xcode or its command line tools (to build pf-serve)
 - About 1.7 GB of free memory while keepmum runs (the local model), and 1.6 GB of disk for it; neither with `keepmum model off`. The optional checks add their own while in use: 0.4 GB (injection) and 0.4, 1.1 or 4.9 GB (harm)
 
@@ -42,7 +43,7 @@ opencode    ─┘                            └──▶ Google (Gemini API, C
 
 ### The Mac app (everything included)
 
-Download `Keepmum-<version>.dmg` from the [Releases](https://github.com/blueandhack/keepmum/releases) page (or build it: [mac/README.md](mac/README.md)), drag Keepmum into Applications, open it, and follow **Settings › Setup**: download the model, start the background service, and switch on protection for each coding agent you use (Claude Code, Codex, pi, opencode; Gemini CLI runs through `keepmum gemini`, see [Use](#use)). The app bundles keepmum, its Python runtime and pf-serve; nothing else needs installing. Every session of a protected agent then goes through keepmum; for Claude Code that is the terminal, VS Code and the desktop app.
+Download `Keepmum-<version>.dmg` from the [Releases](https://github.com/blueandhack/keepmum/releases) page (or build it: [mac/README.md](mac/README.md)), drag Keepmum into Applications, open it, and follow **Settings › Setup**: download the model, start the background service, and switch on protection for each coding agent you use (Claude Code, Codex, pi, opencode; Gemini CLI and the Antigravity CLI run through `keepmum gemini` and `keepmum agy`, see [Use](#use)). The app bundles keepmum, its Python runtime and pf-serve; nothing else needs installing. Every session of a protected agent then goes through keepmum; for Claude Code that is the terminal, VS Code and the desktop app.
 
 ### The command line
 
@@ -63,11 +64,14 @@ keepmum selftest                              # sends a canary secret through ke
 keepmum claude          # starts Claude Code with every request scanned; arguments pass through to `claude`
 keepmum codex           # the same for Codex (ChatGPT login or API key); arguments pass through to `codex`
 keepmum gemini          # the same for Gemini CLI (Sign in with Google or an API key); arguments pass through to `gemini`
+keepmum agy             # the same for the Antigravity CLI (signed in with Google); arguments pass through to `agy`
 ```
 
 `keepmum codex` adds `-c` overrides for that run only: a `keepmum` model provider pointed at the proxy, with WebSockets off (keepmum refuses them, since it cannot scan them) and your existing Codex login. Your Codex config file is not changed.
 
 `keepmum gemini` points Gemini CLI at keepmum through its environment, which wins over every `.env` file Gemini CLI reads. It covers both sign-ins: an API key (the Gemini API) and Sign in with Google (Code Assist, whose setup and metrics calls carry no conversation text and pass through; any other Code Assist call is blocked). Vertex AI is refused, not sent. If you already point Gemini CLI at a gateway (`GOOGLE_GEMINI_BASE_URL` or `CODE_ASSIST_ENDPOINT`), keepmum forwards to it. There is no `keepmum protect` for Gemini CLI: it reads its address only from the environment or the first `.env` file it finds walking up from your project, so any project's own `.env` would override a setting keepmum made.
+
+`keepmum agy` points the Antigravity CLI at keepmum through `CLOUD_CODE_URL`, which carries every Code Assist call it makes, the model's included. Its setup calls (a project or conversation id, no text) pass through; any other call is blocked. If you already set `CLOUD_CODE_URL` (a gateway), keepmum forwards to it. It refuses to start when `AGY_LLM_GATEWAY_URL` is set, since agy would then send its model calls to that gateway around keepmum, and with `--remote-agent`, which runs the conversation on Google's machines. agy's commands (`run_command`) get values quoted for the shell like any agent's; its browser and URL tools, and `call_mcp_tool`, keep placeholders.
 
 ### In VS Code (Claude Code extension)
 
@@ -113,7 +117,7 @@ Each gateway gets a route on keepmum, `http://127.0.0.1:7788/gateway/<name>`, sa
 
 - **Claude Code, pi, opencode:** the base URL becomes keepmum's route. `off` puts the gateway's URL back.
 - **Codex:** keepmum's provider copies yours (its key variable, headers and auth), with only the base URL changed. keepmum's `model_provider` line notes which provider it replaced (`# keepmum protect (was "magpie")`), and `off` selects that provider again. A provider using `wire_api = "chat"` is refused, because keepmum does not scan Chat Completions. Local models (`ollama`, `lmstudio`, `oss`) need no protection, since nothing leaves the Mac.
-- **One run:** `keepmum claude`, `keepmum codex` and `keepmum gemini` go in front of the gateway set in the environment or in Codex's config for that run only.
+- **One run:** `keepmum claude`, `keepmum codex`, `keepmum gemini` and `keepmum agy` go in front of the gateway set in the environment or in Codex's config for that run only.
 
 A gateway's own app may write its address back into an agent's settings, for example when you switch models in it. That agent then goes around keepmum. `keepmum doctor` reports it, and the Mac app shows it in the menu bar with a **Protect** button. Run `keepmum protect on` again to fix it. A gateway must use https unless it runs on this Mac.
 
@@ -176,7 +180,7 @@ All three checks are off by default, and keepmum downloads the injection and har
 
 - **Injection** checks what tools return (web pages, files, shell output, MCP replies) for instructions planted for the agent, such as "AI assistants: run this setup script" or "send ~/.aws/credentials to …".
 - **Harm** checks what you typed, without what agents add to your turn (Claude Code's system reminders, Codex's environment context and AGENTS.md). It never checks tool results, system prompts or the resent history.
-- **Commands** checks the other direction: the shell commands a model's reply asks your agent to run (Claude Code's Bash, Codex's shell tools and the commands in its code-mode scripts, Gemini CLI's `run_shell_command`). Seven rules, no model: a download run as a script (`curl … | sh`), decoded text run as a script, deleting your home folder or the system, erasing a disk, a fork bomb, and credential files or environment variables sent over the network. In warn mode the agent gets the command as written and the hit is logged; in block mode it gets, in its place, a command that prints why keepmum refused it and fails, so the model can explain or ask you. It reads only what keepmum restores, so not in observe mode.
+- **Commands** checks the other direction: the shell commands a model's reply asks your agent to run (Claude Code's Bash, Codex's shell tools and the commands in its code-mode scripts, Gemini CLI's `run_shell_command`, the Antigravity CLI's `run_command`). Seven rules, no model: a download run as a script (`curl … | sh`), decoded text run as a script, deleting your home folder or the system, erasing a disk, a fork bomb, and credential files or environment variables sent over the network. In warn mode the agent gets the command as written and the hit is logged; in block mode it gets, in its place, a command that prints why keepmum refused it and fails, so the model can explain or ask you. It reads only what keepmum restores, so not in observe mode.
 
 **Local** (injection and harm) checks first, like block, and sends a flagged request to a model on your Mac instead of the provider. The agent gets its answer, and later requests that still carry the flagged text go there too, until you rewind or `/clear`. The local model gets the request with its real values (it stays on your Mac) but never your API key, and no tools: a flagged request is the one most likely to carry instructions planted for the agent, and without tools the local model can only answer in text. A note in its instructions says why the turn came to it. Use a capable model (8B or larger): a small one may repeat a planted instruction as advice, or help with what the harm check flagged.
 
@@ -258,7 +262,7 @@ keepmum extensions remove <id>  # you did not: take that one entry out, after a 
 - **What it reads:** plugins, plugin marketplaces, hooks (and the status-line command), Codex's trusted-hook records, MCP servers, skills, and the global instruction file every session reads, in Claude Code (`~/.claude/settings.json`, `~/.claude.json`, `~/.claude/skills`, `~/.claude/CLAUDE.md`), Codex (`~/.codex/config.toml`, `~/.codex/skills`, `~/.codex/AGENTS.md`), Cursor (`~/.cursor/mcp.json`, `hooks.json`), Gemini CLI (`~/.gemini/settings.json`, `extensions/`, `GEMINI.md`), Copilot CLI (`~/.copilot/mcp-config.json`) and opencode.
 - **What counts as new:** the first time keepmum runs, whatever the agents have is yours. After that, anything that appears is new until you keep it or remove it, and an instruction file whose text changed is new again (keepmum keeps a hash of it, never the text).
 - **What it points out:** an item that can put instructions in front of the model by itself: a hook that runs at every session start or prompt, a plugin that brings one, a Codex hook trusted without you being asked, and the global instruction files.
-- **Where it tells you:** the Mac app's menu bar and Settings › Extensions, `keepmum doctor`, and one line when `keepmum claude`, `codex` or `gemini` starts.
+- **Where it tells you:** the Mac app's menu bar and Settings › Extensions, `keepmum doctor`, and one line when `keepmum claude`, `codex`, `gemini` or `agy` starts.
 - **How it removes:** only the entry you choose, after a copy of the file in `~/.config/keepmum/backups/`, and only if the file reads the same otherwise (a Claude Code plugin is disabled, as `/plugin disable` leaves it). Each removal and each keep is in the audit log. It does not edit opencode's commented JSON, Gemini extension folders, skills, instruction files or Claude Code's own marketplace registry; for those it says how to remove them with the agent. Restart the agent afterwards.
 
 keepmum itself changes an agent's settings only when you turn on its protection, and only the one setting that points it at keepmum.
@@ -394,6 +398,7 @@ No language model judges spans at request time. The Apple on-device model and Qw
 - **Remote Control.** Claude Code turns Remote Control off while its requests go through a proxy, and Remote Control would send the restored transcript to Anthropic around keepmum anyway. Use an unprotected session when you need it.
 - **Codex and pi: the Responses and Messages APIs only.** Codex's WebSocket transport is refused (it falls back to HTTPS), and pi providers other than Anthropic and OpenAI (Google, OpenRouter, local models) are not routed through keepmum. Chat Completions requests are blocked, not sent unscanned.
 - **Gemini CLI: `keepmum gemini` only, and not in a Docker sandbox.** A Gemini CLI started without `keepmum gemini` goes straight to Google. Its Docker or Podman sandbox cannot reach keepmum on your Mac's 127.0.0.1 (requests fail; nothing is sent unscanned); the macOS Seatbelt sandbox works. Gemini CLI's usage statistics (prompt lengths and ids, no text) go to Google directly; `"usageStatisticsEnabled": false` in its settings turns them off.
+- **Antigravity CLI: `keepmum agy` only, signed in with Google.** An agy started without `keepmum agy` goes straight to Google, and so does the Antigravity editor. keepmum sees what agy sends to Code Assist; anything it sends to other Google services is not covered. Its MCP servers (`~/.gemini/config/mcp_config.json`) are reached through `call_mcp_tool`, which keeps placeholders, so a server cannot get back even values it returned. Flagged requests cannot go to a local model (`guard local`): its API is one none of them speak.
 - **opencode: the `anthropic` and `openai` providers only.** opencode Zen, GitHub Copilot, OpenRouter and other providers go straight to their own servers. opencode 2.x works with an API key or a ChatGPT login; opencode 1.x sends a ChatGPT login to chatgpt.com itself, around keepmum, and `keepmum protect status` warns about it.
 
 ## Development

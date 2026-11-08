@@ -186,7 +186,10 @@ class Antigravity(Agent):
     name, binary, api = "agy", "agy", "antigravity"
     # search_web asks Code Assist (generateContent, requestType web_search): back through keepmum.
     ROUTED = frozenset({"search_web"})
-    NETWORK = frozenset({"read_url_content"})  # and browser_*: fetched from this Mac
+    # Fetched or done from this Mac: keepmum keeps placeholders in them (restore.DEFAULT_POLICY).
+    NETWORK = frozenset({"read_url_content", "open_browser_url", "read_browser_page", "click_browser_pixel",
+                         "execute_browser_javascript", "capture_browser_console_logs", "capture_browser_screenshot",
+                         "list_browser_pages", "call_mcp_tool"})  # and browser_*
     modes = ("live",)
     mcp = False
 
@@ -196,8 +199,10 @@ class Antigravity(Agent):
         settings = json.dumps({"permissions": {"allow": ["command(*)"]}})
         argv = [shutil.which(self.binary), "-p", prompt, "--output-format", "stream-json", "--mode", "accept-edits",
                 "--sandbox", "--settings", settings, *(["--model", model] if model else []), *extra]
+        from keepmum.launch import antigravity_env  # as `keepmum agy` sets it
+
         env = {k: v for k, v in _clean_env(real_home).items() if not k.startswith("AGY_LLM_GATEWAY")}
-        return argv, {**env, "CLOUD_CODE_URL": f"http://127.0.0.1:{port}/antigravity"}
+        return argv, antigravity_env(port, env)
 
     def transcript(self, stdout, out):
         t = Transcript()

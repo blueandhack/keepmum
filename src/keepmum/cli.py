@@ -237,6 +237,50 @@ def gemini(ctx: typer.Context) -> None:
     raise typer.Exit(code)
 
 
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def agy(ctx: typer.Context) -> None:
+    """Start the Antigravity CLI with every request scanned. Arguments go to `agy` unchanged."""
+    import os
+    import shutil
+
+    from .launch import (
+        BackgroundServer,
+        _run_child,
+        antigravity_env,
+        antigravity_refusal,
+        antigravity_upstream,
+        log_to_file,
+        shared_serve_port,
+    )
+
+    binary = shutil.which("agy")
+    if binary is None:
+        typer.echo("keepmum agy: `agy` is not on PATH (install the Antigravity CLI)", err=True)
+        raise typer.Exit(2)
+    env = dict(os.environ)
+    if reason := antigravity_refusal(env, ctx.args):
+        typer.echo(f"keepmum agy: {reason}; nothing was started", err=True)
+        raise typer.Exit(2)
+    cfg = _config()
+    _extension_news()
+    upstream = antigravity_upstream(env, cfg.port)
+    # The service forwards to Google; an address set here (another gateway) needs a proxy of its own.
+    port = None if upstream else shared_serve_port(cfg, need="antigravity")
+    if port is not None:
+        raise typer.Exit(_run_child([binary, *ctx.args], antigravity_env(port, env)))
+    cfg, proxy = _proxy_or_exit(None, False, None, "agy")
+    if upstream:
+        proxy.prefixed["/antigravity"] = upstream
+    log_to_file(cfg.log_level)
+    server = BackgroundServer(proxy)
+    server.start()
+    try:
+        code = _run_child([binary, *ctx.args], antigravity_env(server.port, env))
+    finally:
+        server.stop()
+    raise typer.Exit(code)
+
+
 @app.command()
 def serve(
     port: int = typer.Option(None, help="Port on 127.0.0.1 (default: config, else 7788)."),

@@ -1,6 +1,7 @@
 """Gemini CLI: the Gemini API and Code Assist, scanned and restored like the other APIs."""
 
 import json
+from collections import Counter
 import os
 import secrets
 import stat
@@ -216,3 +217,83 @@ def test_keepmum_gemini_end_to_end(tmp_path, monkeypatch):
     sent = b"".join(mock.received).decode()
     assert "generateContent" in sent and canary not in sent and PLACEHOLDER.search(sent)
     assert canary in out.read_text()  # the reply came back restored
+
+
+def _fake_agy(tmp_path, monkeypatch, body: str):
+    """A stand-in `agy` on PATH running body, with keepmum's HOME and config in tmp_path."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for k in launch.BYPASS_KEYS + ("CLOUD_CODE_URL", "AGY_LLM_GATEWAY_URL", "AGY_LLM_GATEWAY_PROXY_URL"):
+        monkeypatch.delenv(k, raising=False)
+    cfg = tmp_path / ".config" / "keepmum"
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "config.toml").write_text("[detect]\nmodel = false\n")
+    fake = tmp_path / "bin" / "agy"
+    fake.parent.mkdir(exist_ok=True)
+    fake.write_text(f"#!{sys.executable}\n" + textwrap.dedent(body))
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ['PATH']}")
+
+
+def test_keepmum_agy_end_to_end(tmp_path, monkeypatch):
+    """`keepmum agy` runs a stand-in `agy` that posts as the Antigravity CLI does, to the
+    CLOUD_CODE_URL keepmum gave it, here in front of a gateway already set there."""
+    from keepmum.cli import app
+
+    canary = selftest.make_canary()
+    out = tmp_path / "reply.txt"
+    _fake_agy(tmp_path, monkeypatch, f"""\
+        import json, os, urllib.request
+        base = os.environ["CLOUD_CODE_URL"]
+        assert base.endswith("/antigravity"), base
+        body = json.dumps({{"model": "m", "project": "p", "request": {{"contents": [
+            {{"role": "user", "parts": [{{"text": "token {canary}"}}]}}]}}}}).encode()
+        req = urllib.request.Request(base + "/v1internal:generateContent", data=body,
+                                     headers={{"content-type": "application/json", "user-agent": "antigravity/cli/1.5.3"}})
+        open({str(out)!r}, "w").write(urllib.request.urlopen(req).read().decode())
+        """)
+    mock = selftest.MockUpstream()
+    upstream = launch.BackgroundServer(_App(mock.app))
+    upstream.start()
+    monkeypatch.setenv("CLOUD_CODE_URL", f"http://127.0.0.1:{upstream.port}")
+    try:
+        result = CliRunner().invoke(app, ["agy"])
+    finally:
+        upstream.stop()
+    assert result.exit_code == 0, result.output
+    sent = b"".join(mock.received).decode()
+    assert "generateContent" in sent and canary not in sent and PLACEHOLDER.search(sent)
+    assert canary in out.read_text()
+
+
+@pytest.mark.parametrize("env, args", [({"AGY_LLM_GATEWAY_URL": "https://llm.corp.example"}, []),
+                                       ({}, ["--remote-agent", "-p", "hi"])])
+def test_keepmum_agy_refuses_what_would_go_around_it(tmp_path, monkeypatch, env, args):
+    from keepmum.cli import app
+
+    ran = tmp_path / "ran"
+    _fake_agy(tmp_path, monkeypatch, f"open({str(ran)!r}, 'w').write('ran')\n")
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    result = CliRunner().invoke(app, ["agy", *args])
+    assert result.exit_code == 2 and "nothing was started" in result.output and not ran.exists()
+
+
+def test_stats_name_antigravity():
+    from keepmum.stats import client_name, client_of
+
+    cid = client_of("antigravity/cli/1.5.3 (aidev_client; os_type=darwin; arch=arm64)")
+    assert (cid, client_name(cid)) == ("antigravity", "Antigravity")
+
+
+def test_antigravity_web_tools_keep_placeholders():
+    """agy's browser and URL tools act from this Mac on the web: they get placeholders, as
+    WebFetch does. Its file and command tools get the real value."""
+    from keepmum.restore import DEFAULT_POLICY, restore_tool
+
+    v = Vault(secrets.token_bytes(32))
+    ph = v.placeholder("SECRET", "hunter2-Xq9vL")
+    for name, args in [("browser_input", {"Text": ph}), ("open_browser_url", {"Url": f"https://x.example/?k={ph}"}),
+                       ("read_url_content", {"Url": f"https://x.example/{ph}"}), ("call_mcp_tool", {"Arguments": ph}),
+                       ("execute_browser_javascript", {"Script": f"fill('{ph}')"})]:
+        assert ph in json.dumps(restore_tool(name, args, v, DEFAULT_POLICY, Counter())), name
+    assert restore_tool("write_to_file", {"CodeContent": ph}, v, DEFAULT_POLICY, Counter()) == {"CodeContent": "hunter2-Xq9vL"}

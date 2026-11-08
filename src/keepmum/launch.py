@@ -52,7 +52,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     pipeline = default_pipeline(pii=pii, rules_only=rules_only or not cfg.model, allow_strings=cfg.allow_strings,
                                 allow_patterns=cfg.allow_patterns, pass_types=cfg.pass_types, mask_rules=cfg.mask_rules,
                                 off_rules=cfg.off_rules)
-    info = {"mode": mode, "pii": pii, "detector": pipeline.name, "version": __version__, "apis": ["messages", "responses", "gemini"],
+    info = {"mode": mode, "pii": pii, "detector": pipeline.name, "version": __version__, "apis": ["messages", "responses", "gemini", "antigravity"],
             "checks": {"injection": cfg.guard_injection, "harm": cfg.guard_harm, "harm_model": cfg.guard_harm_model,
                        "commands": cfg.guard_commands}}
     from .stats import History, Stats
@@ -303,6 +303,34 @@ def gemini_upstreams(env: dict[str, str], port: int) -> dict[str, str]:
         if value and not value.startswith((f"http://127.0.0.1:{port}", f"http://localhost:{port}")):
             out[prefix] = value
     return out
+
+
+# The Antigravity CLI (agy), signed in with Google, sends every Code Assist call, the model's
+# included, to CLOUD_CODE_URL (agy 1.5.3).
+ANTIGRAVITY_VAR = "CLOUD_CODE_URL"
+
+
+def antigravity_env(port: int, env: dict[str, str]) -> dict[str, str]:
+    """agy's environment pointed at keepmum's /antigravity route."""
+    return {**env, ANTIGRAVITY_VAR: f"http://127.0.0.1:{port}/antigravity"}
+
+
+def antigravity_upstream(env: dict[str, str], port: int) -> str | None:
+    """A Code Assist address already set for agy (a company gateway): keepmum forwards there."""
+    value = env.get(ANTIGRAVITY_VAR, "").rstrip("/")
+    if value and not value.startswith((f"http://127.0.0.1:{port}", f"http://localhost:{port}")):
+        return value
+    return None
+
+
+def antigravity_refusal(env: dict[str, str], args: list[str]) -> str | None:
+    """Why agy, run this way, would send requests keepmum never sees; None when it would not."""
+    if any(env.get(k) for k in ("AGY_LLM_GATEWAY_URL", "AGY_LLM_GATEWAY_PROXY_URL")):
+        return ("AGY_LLM_GATEWAY_URL is set, so agy would send its model calls straight to that gateway, around "
+                "keepmum. keepmum covers agy signed in with Google: unset it to run through keepmum")
+    if any(a == "--remote-agent" or a.startswith("--remote-agent=") for a in args):
+        return "--remote-agent runs the conversation on Google's machines, where keepmum cannot scan it"
+    return None
 
 
 PROTECTED_BUT_DOWN = ("protection is on, so Claude Code goes to the keepmum service, but it is not running: "
