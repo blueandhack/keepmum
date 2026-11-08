@@ -263,3 +263,90 @@ def test_a_path_in_json_text_and_an_email_without_an_at_are_not_masked(rules):
     mail = "write to ana@keepmum.app"
     pf = _FakePF([Span(9, len(mail), "EMAIL", 0.9, "pf-serve")])
     assert values(mail, Pipeline(rules, pf, pii=True).detect(mail)) == ["ana@keepmum.app"]
+
+
+def _assigned(rules, text):
+    return values(text, [s for s in rules.detect(text) if s.source.endswith("secret-assignment")])
+
+
+@pytest.mark.parametrize("text, value", [
+    # Quoted, with spaces and shell characters: masked whole (it was not masked at all).
+    ('DB_PASSWORD="p@ss w0rd $HOME!"', "p@ss w0rd $HOME!"),
+    ("export DB_PASSWORD='correct horse battery staple'", "correct horse battery staple"),
+    # A quote inside an unquoted password: masked whole (it was cut at the quote, the rest sent).
+    ('ADMIN_PASSWORD=Tr0ub4dor"&\\3x', 'Tr0ub4dor"&\\3x'),
+    ("API_SECRET=c0rrect\\horse9Zq", "c0rrect\\horse9Zq"),
+    ('echo "DB_PASSWORD=Xk9$mQ2vL7pZw4" >> .env', "Xk9$mQ2vL7pZw4"),
+    ('{"password":"abc123XYZ","user":"bob"}', "abc123XYZ"),
+    ('conn = "Server=x;Password=s3cr3tPw!;User=y"', "s3cr3tPw!"),
+])
+def test_assignment_values_are_masked_whole(rules, text, value):
+    assert _assigned(rules, text) == [value]
+
+
+def test_a_value_ends_at_an_escaped_new_line():
+    """Codex sends command output as JSON text: a value must not run on into the next lines."""
+    import json
+
+    r = RulesDetector()
+    text = json.dumps({"output": f"GITHUB_TOKEN={FAKE_GITHUB}\nLOG_LEVEL=info\nDB_HOST=db.internal\n"})
+    assert all(v == FAKE_GITHUB for v in values(text, r.detect(text)))
+    twice = json.dumps(json.dumps({"output": "API_SECRET=c0rrect\\horse9Zq\nX=1"}))
+    assert _assigned(r, twice) == ["c0rrect\\\\\\\\horse9Zq"]
+    patch = 'await tools.apply_patch("*** Begin Patch\\n+API_KEY=KEEPMUM_SECRET_5a47cafc\\n+REGION=eu\\n*** End Patch\\n");'
+    assert _assigned(r, patch) == []  # a placeholder is not masked again, with or without what follows
+    escaped = json.dumps({"output": 'DB_PASSWORD="p@ss w0rd $HOME!"\nADMIN_PASSWORD=Tr0ub4dor"&\\3x\n'})
+    assert _assigned(r, escaped) == ["p@ss w0rd $HOME!", 'Tr0ub4dor\\"&\\\\3x']
+
+
+@pytest.mark.parametrize("text", [
+    '"passwordHint": "Use at least 8 characters"',
+    '"password": "Enter your password"',
+    'password: "${{ secrets.DB_PASSWORD }}"',
+    'if password == "hunter22x":',
+    'f"PASSWORD={pw}"',
+])
+def test_assignment_text_that_is_not_a_secret(rules, text):
+    assert _assigned(rules, text) == []
+
+
+def test_a_path_in_prose_is_not_a_guessed_secret():
+    from keepmum.detect.rules import is_path
+
+    assert is_path("bench/results/PHASE0") and is_path("./scripts/run-all") and is_path("docs/test-cases/")
+    assert not is_path("wJalrXUtnFEMI/K7MDENG/bPxRfiCYzz9KeyQ") and not is_path("PHASE0")
+    p = Pipeline(RulesDetector())
+    text = "The numbers are in bench/results/PHASE0, see there. AWS: wJalrXUtnFEMI/K7MDENG/bPxRfiCYzz9KeyQ"
+    assert values(text, p.detect(text)) == ["wJalrXUtnFEMI/K7MDENG/bPxRfiCYzz9KeyQ"]
+
+
+def test_the_model_reads_names_in_file_names_as_words():
+    from keepmum.detect.rules import file_view
+
+    text = "clients/Margaret Thornbury_resume.md and backup-ghp_x.txt; my_var = 1"
+    assert file_view(text) == "clients/Margaret Thornbury resume.md and backup-ghp x.txt; my_var = 1"
+    assert len(file_view(text)) == len(text)
+
+
+@pytest.mark.parametrize("text, found, name", [
+    ("clients/Margaret Thornbury_resume.md", "clients/Margaret Thornbury_resume.md", "Margaret Thornbury"),
+    ("Margaret_Thornbury_cover_letter.md", "Margaret_Thornbury_cover_letter.md", "Margaret_Thornbury"),
+    ("Margaret Thornbury.pdf", "Margaret Thornbury.pdf", "Margaret Thornbury"),
+    ("Ask Mary-Jane O'Neil.", "Mary-Jane O'Neil", "Mary-Jane O'Neil"),
+])
+def test_a_name_found_in_a_file_name_is_only_the_name(text, found, name):
+    start = text.index(found)
+    span = Pipeline.trim_pii(text, Span(start, start + len(found), "PERSON", 0.9, "pf-serve"))
+    assert text[span.start:span.end] == name
+
+
+def test_no_personal_data_span_runs_into_a_file_name():
+    """The model may give a second span (an address) over the file name; trimmed too, it cannot
+    merge the name back into `Margaret Thornbury_cover`."""
+    text = "clients/Margaret Thornbury_cover_letter.md"
+    start = text.index("Thornbury")
+    span = Pipeline.trim_pii(text, Span(start, text.index(".md"), "ADDRESS", 0.6, "pf-serve"))
+    assert text[span.start:span.end] == "Thornbury"
+    email = "write to margaret_t@example.org"
+    e = Pipeline.trim_pii(email, Span(9, len(email), "EMAIL", 0.9, "pf-serve"))
+    assert email[e.start:e.end] == "margaret_t@example.org"

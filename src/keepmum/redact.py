@@ -9,6 +9,7 @@ from collections import Counter, OrderedDict
 
 from .detect import Span
 from .detect.merge import merge
+from .encode import json_strings
 from .tools import server_of
 from .vault import PLACEHOLDER, Vault
 
@@ -220,10 +221,19 @@ class Redactor:
                                       "before": before, "after": after})
         if not spans:
             return text
+        # A value inside a JSON string (Codex sends command output as JSON text) is kept as it reads
+        # unescaped: `Tr0ub4dor\"&\\3x` there is `Tr0ub4dor"&\3x`, with the same placeholder.
+        strings = json_strings(text) if any("\\" in text[s.start:s.end] for s in spans) else None
         out, pos = [], 0
         for s in spans:
             out.append(text[pos : s.start])
-            out.append(self.vault.placeholder(s.type, text[s.start : s.end], s.source.split("|"), self._origin))
+            value = text[s.start : s.end]
+            if strings and any(a <= s.start and s.end <= b for a, b in strings):
+                try:
+                    value = json.loads(f'"{value}"')
+                except ValueError:
+                    pass
+            out.append(self.vault.placeholder(s.type, value, s.source.split("|"), self._origin))
             self.counts[s.type] += 1
             pos = s.end
         out.append(text[pos:])

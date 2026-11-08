@@ -23,9 +23,11 @@ import re
 import shlex
 from pathlib import PurePosixPath
 
-# The tools that run a shell command: Claude Code, Codex (function, local and hosted shells),
-# pi and opencode, Gemini CLI.
-SHELL_TOOLS = frozenset({"Bash", "bash", "shell", "local_shell", "exec_command", "shell_command", "run_shell_command"})
+# The tools that run a shell command: Claude Code, Codex (function, local and hosted shells, and
+# code mode's `exec`, whose script runs commands through nested tools: codemode.py), pi and
+# opencode, Gemini CLI.
+SHELL_TOOLS = frozenset({"Bash", "bash", "shell", "local_shell", "exec_command", "shell_command", "run_shell_command",
+                         "exec"})
 
 # Issuer rule (rules.toml id) -> the hosts its tokens are used at; each matches itself and its
 # subdomains. An empty tuple: a key that is never sent anywhere, so any host is the wrong one.

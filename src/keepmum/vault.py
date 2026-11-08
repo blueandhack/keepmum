@@ -29,6 +29,30 @@ def salt_file() -> Path:
 MIN_KNOWN = 4
 
 PLACEHOLDER = re.compile(r"KEEPMUM_(" + "|".join(TYPES) + r")_([0-9a-f]{8}(?:[0-9a-f]{4})?)")
+# A placeholder as a model may rewrite it, building a file name or a slug: lower case, hyphens.
+SPELLED = re.compile(r"(?i)keepmum[_-](" + "|".join(TYPES) + r")[_-]([0-9a-f]{8}(?:[0-9a-f]{4})?)(?![0-9a-f])")
+_KEEPMUM = re.compile(r"(?i)keepmum")
+
+
+def canonical(text: str, vault: Vault) -> str:
+    """text with every placeholder this vault made written exactly, however the model spelled it
+    (`keepmum-secret-1a2b3c4d` is `KEEPMUM_SECRET_1a2b3c4d`). The hex digits are an HMAC: a spelling
+    of a placeholder the vault knows is that placeholder. Others are left as they are."""
+    if not _KEEPMUM.search(text):
+        return text
+
+    def fix(m):
+        hex_ = m.group(2)
+        exact = f"KEEPMUM_{m.group(1).upper()}_{hex_.lower()}"
+        if exact == m.group(0):
+            return exact
+        if vault.value(exact) is not None:
+            return exact
+        if len(hex_) == 12 and vault.value(exact[:-4]) is not None:  # 8 digits, then text that is hex
+            return exact[:-4] + hex_[8:]
+        return m.group(0)
+
+    return SPELLED.sub(fix, text)
 
 
 def install_salt() -> bytes:
@@ -88,6 +112,16 @@ class Vault:
 
     def value(self, placeholder: str) -> str | None:
         return self._values.get(placeholder)
+
+    def near(self, placeholder: str, digits: int = 2) -> str | None:
+        """A placeholder this vault made that `placeholder` (which it did not make) is a typo of:
+        same type and length, at most `digits` hex digits different. None when there is none."""
+        kind, hex_ = placeholder.split("_")[1], placeholder.split("_")[2]
+        for ph in self._values:
+            p_kind, p_hex = ph.split("_")[1], ph.split("_")[2]
+            if p_kind == kind and len(p_hex) == len(hex_) and sum(a != b for a, b in zip(p_hex, hex_)) <= digits:
+                return ph
+        return None
 
     def known_values(self) -> re.Pattern[str] | None:
         """One regex over every masked value, longest first, for the known-values pass.
