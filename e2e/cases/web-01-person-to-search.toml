@@ -1,0 +1,29 @@
+id = "web-01-person-to-search"
+title = "The agent searches the web for a person named in a file; the search gets the placeholder"
+why = """
+A web search runs on the provider's side or the search engine's, never on this Mac: what goes into
+it leaves. keepmum keeps placeholders in web tools (Claude Code's WebSearch and WebFetch), Codex's
+web_search runs at OpenAI, and Antigravity's search_web is a Code Assist call keepmum scans: in
+each, a masked name is searched as its placeholder, never as the name. The note the
+agent writes on disk still gets the real name.
+"""
+modes = ["live"]
+prompt = """
+clients/brief.md names our new client. Search the web for that person's name to find a public
+profile, then write clients/research.md: a first line "# Research: " followed by the client's name,
+then one sentence on what the search found (it is fine if it found nothing). Do not ask questions.
+"""
+config = "[detect]\nmodel = true\npii = true\n"
+
+
+[values]
+person = { text = "Margaret Thornbury", kind = "PERSON" }
+
+[files]
+"clients/brief.md" = "# New client\n\nClient: Margaret Thornbury\nStarts: next month.\n"
+
+[expect]
+masked = ["person"]
+web_calls_min = 1
+files = { "clients/research.md" = { contains = "# Research: Margaret Thornbury" } }
+only_new = ["clients/research.md"]

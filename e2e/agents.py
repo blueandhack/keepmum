@@ -21,6 +21,10 @@ class Transcript:
     commands: list[str] = field(default_factory=list)  # commands the agent ran, as it ran them
     tool_inputs: list[str] = field(default_factory=list)  # file edits and other tool inputs, as run
     mcp_inputs: list[str] = field(default_factory=list)  # MCP tool calls: placeholders are right there (expect.mcp_*)
+    # Tools that send what they get off this Mac without keepmum scanning it again: web search and
+    # fetch, a browser. A placeholder is right there.
+    network_inputs: list[str] = field(default_factory=list)
+    web_calls: int = 0  # every web tool call, those that go back through keepmum too (expect.web_calls_min)
     errors: list[str] = field(default_factory=list)
 
 
@@ -36,7 +40,9 @@ def _clean_env(real_home: str) -> dict[str, str]:
 class Agent:
     name = ""
     binary = ""
-    api = ""  # the provider route keepmum serves it on: anthropic, chatgpt, openai
+    api = ""  # the provider route keepmum serves it on: anthropic, chatgpt, openai, antigravity
+    modes = ("scripted", "live")  # scripted needs the scripted model to speak its provider's API
+    mcp = True  # it can be given the stub MCP server for one run
 
     def available(self) -> bool:
         return shutil.which(self.binary) is not None
@@ -103,6 +109,12 @@ class Codex(Agent):
                     t.tool_inputs.append(json.dumps(item.get("changes", []), ensure_ascii=False))
                 elif kind == "mcp_tool_call":
                     t.mcp_inputs.append(json.dumps(item, ensure_ascii=False))
+                    # With a ChatGPT login Codex searches the web through its own connector.
+                    if item.get("server") == "codex_apps" and "search" in str(item.get("tool", "")):
+                        t.web_calls += 1
+                elif kind == "web_search":
+                    t.network_inputs.append(json.dumps(item, ensure_ascii=False))
+                    t.web_calls += 1
                 else:
                     t.tool_inputs.append(json.dumps(item, ensure_ascii=False))
             elif ev.get("type") in ("error", "turn.failed"):
@@ -148,6 +160,9 @@ class Claude(Agent):
                             t.commands.append(str(inp.get("command", "")))
                         elif str(b.get("name", "")).startswith("mcp__"):
                             t.mcp_inputs.append(json.dumps(inp, ensure_ascii=False))
+                        elif b.get("name") in ("WebSearch", "WebFetch"):
+                            t.network_inputs.append(json.dumps(inp, ensure_ascii=False))
+                            t.web_calls += 1
                         else:
                             t.tool_inputs.append(json.dumps(inp, ensure_ascii=False))
             elif ev.get("type") == "user":
@@ -162,4 +177,64 @@ class Claude(Agent):
         return t
 
 
-AGENTS: dict[str, Agent] = {a.name: a for a in (Codex(), Claude())}
+class Antigravity(Agent):
+    """The Antigravity CLI, signed in with Google: Code Assist on daily-cloudcode-pa, which
+    CLOUD_CODE_URL moves to keepmum's /antigravity. Live only: the scripted model does not speak
+    Gemini yet. No MCP: agy takes MCP servers only from its global config, never for one session.
+    Its conversations are kept in ~/.gemini/antigravity-cli, as any agy run's are."""
+
+    name, binary, api = "agy", "agy", "antigravity"
+    # search_web asks Code Assist (generateContent, requestType web_search): back through keepmum.
+    ROUTED = frozenset({"search_web"})
+    NETWORK = frozenset({"read_url_content"})  # and browser_*: fetched from this Mac
+    modes = ("live",)
+    mcp = False
+
+    def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None):
+        # Headless agy denies every command no rule allows. This rule holds for this session only
+        # (--settings is never saved); --sandbox restricts the terminal, as Claude Code's does.
+        settings = json.dumps({"permissions": {"allow": ["command(*)"]}})
+        argv = [shutil.which(self.binary), "-p", prompt, "--output-format", "stream-json", "--mode", "accept-edits",
+                "--sandbox", "--settings", settings, *(["--model", model] if model else []), *extra]
+        env = {k: v for k, v in _clean_env(real_home).items() if not k.startswith("AGY_LLM_GATEWAY")}
+        return argv, {**env, "CLOUD_CODE_URL": f"http://127.0.0.1:{port}/antigravity"}
+
+    def transcript(self, stdout, out):
+        t = Transcript()
+        said: dict[int, list[str]] = {}
+        for line in stdout.splitlines():
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            step = ev.get("step_update") or {}
+            if step.get("step_type") == "agent_response" and step.get("text_delta"):
+                said.setdefault(step.get("step_index", 0), []).append(step["text_delta"])
+            elif step.get("step_type") == "tool" and step.get("state") in ("DONE", "ERROR"):
+                info = step.get("tool_info") or {}
+                params = info.get("parameters") or {}
+                if info.get("name") == "run_command":
+                    t.commands.append(str(params.get("CommandLine", "")))
+                elif str(info.get("name", "")).startswith("mcp"):
+                    t.mcp_inputs.append(json.dumps(params, ensure_ascii=False))
+                elif info.get("name") in self.ROUTED:
+                    t.web_calls += 1  # the search is a Code Assist call, scanned by keepmum like any other
+                elif info.get("name") in self.NETWORK or str(info.get("name", "")).startswith("browser_"):
+                    t.network_inputs.append(json.dumps({"tool": info.get("name"), **params}, ensure_ascii=False))
+                    t.web_calls += 1
+                else:
+                    t.tool_inputs.append(json.dumps({"tool": info.get("name"), **params}, ensure_ascii=False))
+                if info.get("output"):
+                    t.shown.append(str(info["output"]))
+                if info.get("error"):
+                    t.shown.append(json.dumps(info["error"], ensure_ascii=False))
+            elif ev.get("event") == "result":
+                result = ev.get("result") or {}
+                t.final = str(result.get("response", ""))
+                if result.get("status") != "SUCCESS":
+                    t.errors.append(json.dumps(result, ensure_ascii=False)[:2000])
+        t.shown += ["".join(parts) for _, parts in sorted(said.items())]
+        return t
+
+
+AGENTS: dict[str, Agent] = {a.name: a for a in (Codex(), Claude(), Antigravity())}

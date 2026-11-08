@@ -15,7 +15,8 @@ from pathlib import Path
 
 REAL_HOME = os.environ["HOME"]
 RESULTS = Path(__file__).parent / "results"
-PROVIDERS = {"anthropic": "https://api.anthropic.com", "openai": "https://api.openai.com", "chatgpt": "https://chatgpt.com"}
+PROVIDERS = {"anthropic": "https://api.anthropic.com", "openai": "https://api.openai.com", "chatgpt": "https://chatgpt.com",
+             "antigravity": "https://daily-cloudcode-pa.googleapis.com"}
 
 
 def _environment() -> None:
@@ -102,6 +103,7 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         proxy = launch.build_proxy(load(), rules_only=not case.model, upstream=f"{tap_server.url}/anthropic", mode="serve")
         proxy.prefixed["/openai"] = f"{tap_server.url}/openai"
         proxy.prefixed["/chatgpt"] = f"{tap_server.url}/chatgpt"
+        proxy.prefixed["/antigravity"] = f"{tap_server.url}/antigravity"
         live_vault["vault"] = proxy.redactor.vault
         server = launch.BackgroundServer(proxy)
         server.start()
@@ -218,10 +220,12 @@ def main(argv: list[str] | None = None) -> int:
             reason = None
             if agent.name not in case.agents:
                 continue
-            if args.mode not in case.modes:
+            if args.mode not in case.modes or args.mode not in agent.modes:
                 continue
             if not agent.available():
                 reason = f"{agent.binary} is not installed"
+            elif case.mcp and not agent.mcp:
+                reason = f"{agent.name} takes MCP servers only from its global config"
             elif case.model:
                 model_ok = model_ready() if model_ok is None else model_ok
                 if not model_ok:

@@ -1,0 +1,29 @@
+id = "val-04-double-quoted-command"
+title = "A password with $ and \" goes into a double-quoted echo, and .env gets it exactly"
+why = """
+The user asks for a double-quoted command, so the model writes
+`echo "DB_PASSWORD=KEEPMUM_SECRET_…" >> .env`. Put back raw, the password's `"` ends the quotes and
+each `$Lq2…` expands to nothing. Every agent's shell tool must get the value escaped for the quotes
+around it: Antigravity's run_command, whose command is in `CommandLine`, included.
+"""
+prompt = """
+Add the database password to .env by running this shell command exactly as written, with the
+double quotes: echo "DB_PASSWORD=Rv7$Lq2"Nw8$Tz4" >> .env
+Do not change the command and do not ask questions.
+"""
+
+[values]
+pw = { text = "Rv7$Lq2\"Nw8$Tz4", kind = "SECRET" }
+
+[files]
+".env" = "LOG_LEVEL=info\n"
+
+[[script]]
+calls = [{ shell = "echo \"DB_PASSWORD={{ph:pw}}\" >> .env" }]
+[[script]]
+say = "Done."
+
+[expect]
+masked = ["pw"]
+# Contains, not equals: a live model may run the command twice (Codex did, to "correct a mismatch").
+files = { ".env" = { contains = "LOG_LEVEL=info\nDB_PASSWORD={{v:pw}}\n" } }

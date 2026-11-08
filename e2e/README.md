@@ -1,7 +1,7 @@
 # End-to-end cases with real agents
 
 The unit tests check keepmum's functions. These cases check what the user ends up with: a real
-Codex or Claude Code, running real tools on a real folder, through keepmum. The questions they answer:
+Codex, Claude Code or the Antigravity CLI (`agy`), running real tools on a real folder, through keepmum. The questions they answer:
 
 - Did any protected value leave the Mac, whole or in part?
 - Does every file the agent creates or renames carry the real name, never `KEEPMUM_…`?
@@ -37,6 +37,7 @@ Keychain) are not read or written. Two consequences:
   route (`/chatgpt`, zstd bodies) is covered when you run `python -m e2e run` on a Mac signed in that way.
 - Cases that need the Privacy Filter model (`config` with `model = true`) skip themselves on a runner
   without it.
+- The Antigravity CLI is not in CI: it runs live only, with a Google sign-in (below).
 
 To move to a new agent version, run the suite locally with it, then raise the pin in the same change.
 
@@ -45,7 +46,8 @@ To move to a new agent version, run the suite locally with it, then raise the pi
 ```
 real agent ──▶ keepmum ──▶ tap ──▶ scripted model    (scripted)
  (codex,      own HOME,    records       or
-  claude)     salt and     every byte  the provider   (live)
+  claude,     salt and     every byte  the provider   (live)
+  agy)
               config       that leaves
 ```
 
@@ -60,6 +62,13 @@ Each run gets:
   --ephemeral -s workspace-write`, and `claude -p --setting-sources project,local --strict-mcp-config`.
   User config, MCP servers, hooks and plugins stay out; a case that needs an MCP server gets the stub one. Codex still lists the user's skills, so
   requests differ a little between Macs. The checks look only at the case's own values and files.
+- **The Antigravity CLI** (`agy -p --output-format stream-json --mode accept-edits --sandbox`), signed
+  in with Google: `CLOUD_CODE_URL` points its Code Assist calls at keepmum's `/antigravity`, and a
+  session-only `--settings` rule allows its commands (headless, it denies every command no rule
+  allows). It reads the user's `~/.gemini/config` (there is no flag to skip it) and keeps each run in
+  its conversation history. Live only: the scripted model does not speak Gemini yet. No MCP case: agy
+  takes MCP servers only from its global config. Its sandbox lets the model retry a blocked command
+  outside it, so a live run can reach the network; the cases' values are synthetic.
 - **A workspace** built from the case's `[files]`, snapshotted before and after.
 
 ### Two modes
@@ -85,7 +94,7 @@ Whatever a case asks, `oracle.py` checks these, worst first:
 
 | Class | Fails the run when |
 |---|---|
-| `leak` | any form of a protected value (raw, JSON-escaped once or twice, base64, URL-encoded) is in a request, or a value was masked only in part and the rest was sent |
+| `leak` | any form of a protected value (raw, JSON-escaped once or twice, base64, URL-encoded) is in a request, or a value was masked only in part and the rest was sent; or it went into an MCP call or a web tool that sends from the Mac (WebFetch, a browser) |
 | `residue` | a placeholder, in any spelling (`keepmum_secret_…`, `keepmum-secret-…`), is in a file name or file on disk, a command the agent ran, a tool's input, or the final answer |
 | `false-mask` | a workspace path or name, or a string the case lists in `plain`, was sent as a placeholder; or a protected value was masked together with the text around it |
 | `task` | the workspace is not what the case expects: a missing file, a wrong name, wrong content, an unexpected new file |
@@ -104,7 +113,7 @@ title = "A file whose name holds a token is renamed, and its old name written do
 why = "What breaks for the user if this fails."
 prompt = "The task, for live mode. Say 'Do not ask questions.'"
 config = "[detect]\nmodel = false\n"   # keepmum's config.toml (default: rules only)
-agents = ["codex", "claude"]           # default: both
+agents = ["codex", "claude", "agy"]    # default: all three (agy runs live only)
 modes = ["scripted", "live"]           # default: both
 plain = ["guard-20261104-231405.md"]   # must reach the provider unmasked
 workspace_dir = "ws"                   # the workspace folder's name (templates allowed)
@@ -142,6 +151,7 @@ agent_may_fail = false
 mcp_calls_min = 1                                  # calls the MCP server must receive
 mcp_contains = []                                  # text it must receive (templates)
 mcp_may_receive = []                               # values it may get real (a type its setting allows)
+web_calls_min = 1                                  # web searches or fetches the agent must make
 ```
 
 A script call can carry one form per agent, for a turn they make differently: `{ shell = "…", codex =
@@ -157,6 +167,15 @@ cancel them otherwise) and Claude Code through `--mcp-config`. It writes each ca
 log the oracle reads: a protected value in the log, or in the MCP call the agent's transcript shows
 (a call that failed shows its input too), is a `leak`, unless the case lists it in `mcp_may_receive`.
 Placeholders in an MCP call are not `residue`: keeping them there is the point.
+
+### Web tools
+
+A web search or fetch sends its input off the Mac. Claude Code's `WebSearch` and `WebFetch` and
+Antigravity's `read_url_content` and `browser_*` tools are read from the transcript like MCP calls:
+a protected value in their input is a `leak`. Codex searches at OpenAI (with a ChatGPT login,
+through its `codex_apps` connector, an MCP call). Antigravity's `search_web` is a Code Assist call
+(`requestType: "web_search"`) that goes back through keepmum, so the leak check on requests covers
+it. `web_calls_min` makes sure the agent searched at all.
 
 Templates: `{{v:x}}` is the real value (files, expectations). `{{ph:x}}` is the placeholder the model
 was shown for it (scripts). `{{ph:x|lower}}`, `|slug`, `|upper` and `|typo` give a placeholder as a
