@@ -21,6 +21,28 @@ jobs:
       - run: uv sync --frozen
       - run: uv run --frozen pytest -q
 
+  agents:
+    # The e2e suite (e2e/README.md): the real Codex and Claude Code through keepmum, answered by a
+    # scripted model and signed in with dummy keys, so no secret is needed (e2e/ci.sh). The agents
+    # are pinned: an update can change how they call tools, which should arrive as its own change,
+    # not as a failure on an unrelated one. Cases that need the model skip themselves.
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      CODEX_VERSION: 0.147.0
+      CLAUDE_CODE_VERSION: 2.1.310
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - run: uv sync --frozen
+      - name: Install the agents
+        run: |
+          node --version
+          npm install --no-fund --no-audit --prefix "$RUNNER_TEMP/agents" \
+            "@openai/codex@$CODEX_VERSION" "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+          echo "$RUNNER_TEMP/agents/node_modules/.bin" >> "$GITHUB_PATH"
+      - run: e2e/ci.sh
+
   mac-app:
     runs-on: macos-26
     steps:
