@@ -1,11 +1,14 @@
 #!/bin/sh
-# The scripted e2e suite as CI runs it: real Codex and Claude Code, signed in with dummy API keys.
+# The scripted e2e suite as CI runs it: real Codex, Claude Code and Antigravity CLI, signed in with
+# dummy API keys.
 #
 # In scripted mode nothing reaches a provider: keepmum forwards to the tap, and the tap to the
 # scripted model, which never reads a credential. The agents only need one to start, so a dummy
 # key in a throwaway folder is enough, and no real secret is needed. They sign in by API key, so
 # this covers keepmum's API-key routes; the ChatGPT-login route is covered by running the suite
-# on a Mac signed in that way (`python -m e2e run`).
+# on a Mac signed in that way (`python -m e2e run`). The Antigravity CLI needs no login at all: the
+# harness runs it through its gateway mode with a dummy key, in a HOME of its own (e2e/agents.py);
+# its Google sign-in route is covered live.
 #
 # Usage: e2e/ci.sh [case ...]   (the agents must be on PATH; their versions are printed)
 set -eu
@@ -18,7 +21,7 @@ export CODEX_HOME="$work/codex" CLAUDE_CONFIG_DIR="$work/claude"
 mkdir -p "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"
 printf '%s' "sk-e2e-dummy-not-a-key-0000000000000000" | codex login --with-api-key >/dev/null
 export ANTHROPIC_API_KEY="sk-ant-api03-e2e-dummy-not-a-key-$(printf '0%.0s' $(seq 1 60))AA"
-export DISABLE_AUTOUPDATER=1
+export DISABLE_AUTOUPDATER=1 AGY_CLI_DISABLE_AUTO_UPDATE=1
 
 cd "$(dirname "$0")/.."
 status=0

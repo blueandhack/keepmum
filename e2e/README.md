@@ -37,7 +37,9 @@ Keychain) are not read or written. Two consequences:
   route (`/chatgpt`, zstd bodies) is covered when you run `python -m e2e run` on a Mac signed in that way.
 - Cases that need the Privacy Filter model (`config` with `model = true`) skip themselves on a runner
   without it.
-- The Antigravity CLI is not in CI: it runs live only, with a Google sign-in (below).
+- The Antigravity CLI runs in CI with no login at all, through its gateway mode with a dummy key
+  (below). It is pinned by its release's URL and SHA-512 (`AGY_URL`, `AGY_SHA512`): its installer only
+  installs the newest. Its Google sign-in route (`/antigravity`) is covered live.
 
 To move to a new agent version, run the suite locally with it, then raise the pin in the same change.
 
@@ -62,13 +64,17 @@ Each run gets:
   --ephemeral -s workspace-write`, and `claude -p --setting-sources project,local --strict-mcp-config`.
   User config, MCP servers, hooks and plugins stay out; a case that needs an MCP server gets the stub one. Codex still lists the user's skills, so
   requests differ a little between Macs. The checks look only at the case's own values and files.
-- **The Antigravity CLI** (`agy -p --output-format stream-json --mode accept-edits --sandbox`), signed
-  in with Google: `CLOUD_CODE_URL` points its Code Assist calls at keepmum's `/antigravity`, and a
-  session-only `--settings` rule allows its commands (headless, it denies every command no rule
-  allows). It reads the user's `~/.gemini/config` (there is no flag to skip it) and keeps each run in
-  its conversation history. Live only: the scripted model does not speak Gemini yet. No MCP case: agy
-  takes MCP servers only from its global config. Its sandbox lets the model retry a blocked command
-  outside it, so a live run can reach the network; the cases' values are synthetic.
+- **The Antigravity CLI** (`agy -p --output-format stream-json --mode accept-edits`), pointed at
+  keepmum as `keepmum agy` points it, with a session-only `--settings` rule allowing its commands
+  (headless, it denies every command no rule allows). Live, it is signed in with Google:
+  `CLOUD_CODE_URL` sends its Code Assist calls to keepmum's `/antigravity`; it runs with `--sandbox`,
+  reads the user's `~/.gemini/config` (there is no flag to skip it) and keeps each run in its
+  conversation history. Its sandbox lets the model retry a blocked command outside it, so a live run
+  can reach the network; the cases' values are synthetic. Scripted, it has no login and a HOME of its
+  own: its gateway mode (`AGY_LLM_GATEWAY_URL`, a dummy key) sends its model calls to keepmum's
+  `/gemini`, and it runs without `--sandbox`, which in a fresh HOME refuses every write to the
+  workspace (the commands are the case's own). No MCP case: agy takes MCP servers only from its global
+  config.
 - **A workspace** built from the case's `[files]`, snapshotted before and after.
 
 ### Two modes
@@ -84,7 +90,8 @@ Each run gets:
 The scripted model writes real tool calls in each agent's own wire format: Claude Code's `Bash`,
 `Write`, `Read` and `Edit`, and Codex 0.147's code mode (`exec` running `tools.exec_command` and
 `tools.apply_patch`, with plain `exec_command` and `apply_patch` when a Codex offers those; MCP
-tools from the script, `tools.mcp__notes__send_note(…)`, in a raw `codex` call). The
+tools from the script, `tools.mcp__notes__send_note(…)`, in a raw `codex` call), and the
+Antigravity CLI's `run_command`, `write_file`, `read_file` and `edit_file` over the Gemini API. The
 agent runs them for real. The scripted model copies the placeholder it was actually shown, taken from
 the live vault, as a real model would. It splits each placeholder across two stream deltas.
 
@@ -113,7 +120,7 @@ title = "A file whose name holds a token is renamed, and its old name written do
 why = "What breaks for the user if this fails."
 prompt = "The task, for live mode. Say 'Do not ask questions.'"
 config = "[detect]\nmodel = false\n"   # keepmum's config.toml (default: rules only)
-agents = ["codex", "claude", "agy"]    # default: all three (agy runs live only)
+agents = ["codex", "claude", "agy"]    # default: all three
 modes = ["scripted", "live"]           # default: both
 plain = ["guard-20261104-231405.md"]   # must reach the provider unmasked
 workspace_dir = "ws"                   # the workspace folder's name (templates allowed)
@@ -155,8 +162,8 @@ web_calls_min = 1                                  # web searches or fetches the
 ```
 
 A script call can carry one form per agent, for a turn they make differently: `{ shell = "…", codex =
-"<script>" }` is the script for Codex and the command for Claude Code, and a call with only `codex` or
-only `claude` is made by that agent only.
+"<script>" }` is the script for Codex and the command for Claude Code and agy, and a call with only
+`codex`, only `claude` or only `agy` is made by that agent only.
 
 ### The MCP server
 
@@ -182,7 +189,7 @@ was shown for it (scripts). `{{ph:x|lower}}`, `|slug`, `|upper` and `|typo` give
 careless model rewrites it. `{{seen:text}}` is text as the model saw it, with every masked value
 replaced; use it for a name the model copies from a listing. `{{cwd}}` is the workspace path as the
 agent told the model. Script calls: `shell`, `write` + `content`, `read`, `edit` + `old` + `new`,
-and raw `codex = "<JavaScript>"` or `claude = {name, input}`.
+and raw `codex = "<JavaScript>"`, `claude = {name, input}` or `agy = {name, args}`.
 
 Results never hold a case's values: everything written shows them as `{{v:name}}`. `--keep` also
 writes the requests, which hold whatever else the agent sent (paths, skill lists). Do not share them.

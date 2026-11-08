@@ -1,7 +1,7 @@
 """A stand-in model that plays a case's script, in each agent's own wire format.
 
 The real agent binary runs against it: Claude Code over the Messages API, Codex over the Responses
-API. The model's tool calls are real, so the agent really runs them (writes files, runs commands)
+API, the Antigravity CLI over the Gemini API (its gateway mode). The model's tool calls are real, so the agent really runs them (writes files, runs commands)
 after keepmum restored them. Only the model is scripted, which makes the run deterministic.
 
 A script is a list of turns. Each turn is what the model says on one request:
@@ -32,7 +32,8 @@ from .servers import decode_body
 # The workspace path as the agent tells the model (spaces and all): Codex's <cwd>, Claude Code's
 # environment section. Searched in the request as JSON text, where a line ends in an escaped \n.
 _CWD = (re.compile(r"<cwd>([^<]+)</cwd>"),
-        re.compile(r"(?:Primary working directory|[Ww]orking directory): *(/.+?)(?:\\n|\\u|\"|$)"))
+        re.compile(r"(?:Primary working directory|[Ww]orking directory): *(/.+?)(?:\\n|\\u|\"|$)"),
+        re.compile(r"Active Workspaces:\\n- (/.+?)(?:\\n|\\u|\"|$)"))  # Antigravity
 
 
 def _ev(data: dict) -> str:
@@ -78,6 +79,13 @@ class ScriptedModel:
             self.requests.append(body)
             self.tools |= {n for n in self._tool_names(body) if n}
             return self._responses(body)
+        if m := re.search(r":(stream)?[gG]enerateContent$", path):
+            self.requests.append(body)
+            self.tools |= {f.get("name") for t in body.get("tools") or [] if isinstance(t, dict)
+                           for f in t.get("functionDeclarations") or [] if f.get("name")}
+            return self._generate(body, stream=bool(m.group(1)))
+        if "/v1internal:" in path:  # Code Assist setup: nothing to say
+            return JSONResponse({})
         return JSONResponse({"error": f"scripted model: no {path}"}, status_code=404)
 
     # --- which turn ---------------------------------------------------------------
@@ -111,7 +119,7 @@ class ScriptedModel:
         blocks = []
         if turn.get("say"):
             blocks.append({"type": "text", "text": self.render(turn["say"], cwd)})
-        for i, call in enumerate(c for c in turn.get("calls", []) if set(c) != {"codex"}):  # codex-only: skipped
+        for i, call in enumerate(c for c in turn.get("calls", []) if set(c) not in ({"codex"}, {"agy"})):
             name, args = self._claude_call(call, cwd)
             blocks.append({"type": "tool_use", "id": f"toolu_e2e_{index}_{i}", "name": name, "input": args})
         return self._anthropic(blocks, body)
@@ -190,7 +198,7 @@ class ScriptedModel:
         if turn.get("say"):
             out_items.append({"type": "message", "id": f"msg_e2e_{index}", "role": "assistant", "status": "completed",
                               "content": [{"type": "output_text", "text": self.render(turn["say"], cwd), "annotations": []}]})
-        for i, call in enumerate(c for c in turn.get("calls", []) if set(c) != {"claude"}):  # claude-only: skipped
+        for i, call in enumerate(c for c in turn.get("calls", []) if set(c) not in ({"claude"}, {"agy"})):
             out_items.append(self._codex_call(call, cwd, code_mode, f"{index}_{i}"))
         return self._openai(out_items)
 
@@ -256,3 +264,64 @@ class ScriptedModel:
         out.append(_ev({"type": "response.completed", "response": {"id": "resp_e2e", "status": "completed",
                                                                    "output": items, "usage": usage}}))
         return Response("".join(out), media_type="text/event-stream")
+
+
+    # --- Gemini API (the Antigravity CLI, through its gateway) ---------------------------------
+
+    def _generate(self, body: dict, stream: bool) -> Response:
+        if not body.get("tools"):  # a side request: the safety rater watching the trajectory
+            return self._gemini([{"text": "ok"}], stream)
+        outputs = sum(1 for c in body.get("contents") or [] for part in c.get("parts") or []
+                      if isinstance(part, dict) and "functionResponse" in part)
+        index, turn = self._turn(outputs)
+        cwd = self._cwd(body)
+        self.served.append({"api": "gemini", "turn": index, "outputs": outputs, "cwd": cwd})
+        parts = []
+        if turn.get("say"):
+            parts.append({"text": self.render(turn["say"], cwd)})
+        for i, call in enumerate(c for c in turn.get("calls", []) if set(c) not in ({"codex"}, {"claude"})):
+            name, args = self._agy_call(call, cwd)
+            parts.append({"functionCall": {"id": f"call_e2e_{index}_{i}", "name": name, "args": args}})
+        return self._gemini(parts, stream)
+
+    def _agy_call(self, call: dict, cwd: str) -> tuple[str, dict]:
+        def absolute(p):
+            p = self.render(p, cwd)
+            return p if p.startswith("/") else f"{cwd.rstrip('/')}/{p}"
+
+        if "agy" in call:  # a raw call: {agy = {name = "write_file", args = {...}}}
+            raw = call["agy"]
+            return raw["name"], json.loads(self.render(json.dumps(raw["args"]), cwd))
+        if "shell" in call:
+            return "run_command", {"CommandLine": self.render(call["shell"], cwd), "WaitMsBeforeAsync": 10000,
+                                   "toolSummary": "run a command"}
+        if "write" in call:
+            return "write_file", {"Path": absolute(call["write"]), "Content": self.render(call.get("content", ""), cwd),
+                                  "Overwrite": True}
+        if "read" in call:
+            return "read_file", {"Path": absolute(call["read"])}
+        if "edit" in call:
+            return "edit_file", {"Path": absolute(call["edit"]), "Target": self.render(call["old"], cwd),
+                                 "Replacement": self.render(call["new"], cwd)}
+        raise ValueError(f"unknown call {call}")
+
+    @staticmethod
+    def _gemini(parts: list[dict], stream: bool) -> Response:
+        usage = {"promptTokenCount": 100, "candidatesTokenCount": 10, "totalTokenCount": 110}
+
+        def chunk(ps, done=False):
+            c = {"content": {"role": "model", "parts": ps}, "index": 0}
+            if done:
+                c["finishReason"] = "STOP"
+            return {"candidates": [c], "usageMetadata": usage, "modelVersion": "scripted"}
+
+        if not stream:
+            return JSONResponse(chunk(parts, done=True))
+        out = []
+        for part in parts:
+            if "text" in part:  # text in two pieces, cut inside a placeholder; a call comes whole
+                out += [chunk([{"text": piece}]) for piece in _halves(part["text"])]
+            else:
+                out.append(chunk([part]))
+        out.append(chunk([{"text": ""}], done=True))
+        return Response("".join(f"data: {json.dumps(c)}\r\n\r\n" for c in out), media_type="text/event-stream")

@@ -57,7 +57,7 @@ class Agent:
             return "?"
 
     def command(self, ws: Path, port: int, prompt: str, real_home: str, out: Path, model: str | None,
-                extra: list[str], mcp: dict | None = None) -> tuple[list[str], dict[str, str]]:
+                extra: list[str], mcp: dict | None = None, mode: str = "live") -> tuple[list[str], dict[str, str]]:
         """`mcp`: one stdio MCP server to give the agent, {name, command, args, env}."""
         raise NotImplementedError
 
@@ -74,7 +74,7 @@ class Codex(Agent):
 
         return "openai" if codex_auth_mode() == "apikey" else "chatgpt"
 
-    def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None):
+    def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
         from keepmum.clients import codex_args
 
         servers = []
@@ -127,7 +127,7 @@ class Codex(Agent):
 class Claude(Agent):
     name, binary, api = "claude", "claude", "anthropic"
 
-    def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None):
+    def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
         # Claude Code's own sandbox, as Codex runs in workspace-write: commands run without a prompt
         # but cannot write outside the workspace or reach the network; file edits are accepted.
         sandbox = json.dumps({"sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True,
@@ -178,10 +178,11 @@ class Claude(Agent):
 
 
 class Antigravity(Agent):
-    """The Antigravity CLI, signed in with Google: Code Assist on daily-cloudcode-pa, which
-    CLOUD_CODE_URL moves to keepmum's /antigravity. Live only: the scripted model does not speak
-    Gemini yet. No MCP: agy takes MCP servers only from its global config, never for one session.
-    Its conversations are kept in ~/.gemini/antigravity-cli, as any agy run's are."""
+    """The Antigravity CLI. Live: signed in with Google, Code Assist on daily-cloudcode-pa, which
+    CLOUD_CODE_URL moves to keepmum's /antigravity; its conversations are kept in the user's
+    ~/.gemini/antigravity-cli. Scripted: no login at all, its gateway mode (AGY_LLM_GATEWAY_URL, a
+    dummy key) on keepmum's /gemini, in a HOME of its own. Both are set as `keepmum agy` sets them.
+    No MCP: agy takes MCP servers only from its global config, never for one session."""
 
     name, binary, api = "agy", "agy", "antigravity"
     # search_web asks Code Assist (generateContent, requestType web_search): back through keepmum.
@@ -190,18 +191,25 @@ class Antigravity(Agent):
     NETWORK = frozenset({"read_url_content", "open_browser_url", "read_browser_page", "click_browser_pixel",
                          "execute_browser_javascript", "capture_browser_console_logs", "capture_browser_screenshot",
                          "list_browser_pages", "call_mcp_tool"})  # and browser_*
-    modes = ("live",)
     mcp = False
 
-    def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None):
+    def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
         # Headless agy denies every command no rule allows. This rule holds for this session only
-        # (--settings is never saved); --sandbox restricts the terminal, as Claude Code's does.
+        # (--settings is never saved). Live, --sandbox restricts the terminal, as Claude Code's does.
+        # Scripted, the commands are the case's own, and agy's sandbox, in a HOME of its own, would
+        # refuse every write to the workspace.
         settings = json.dumps({"permissions": {"allow": ["command(*)"]}})
         argv = [shutil.which(self.binary), "-p", prompt, "--output-format", "stream-json", "--mode", "accept-edits",
-                "--sandbox", "--settings", settings, *(["--model", model] if model else []), *extra]
+                *(["--sandbox"] if mode == "live" else []), "--settings", settings,
+                *(["--model", model] if model else []), *extra]
         from keepmum.launch import antigravity_env  # as `keepmum agy` sets it
 
         env = {k: v for k, v in _clean_env(real_home).items() if not k.startswith("AGY_LLM_GATEWAY")}
+        if mode == "scripted":
+            home = out / "agy-home"
+            home.mkdir(exist_ok=True)
+            env |= {"HOME": str(home), "AGY_LLM_GATEWAY_URL": "https://gateway.e2e.invalid",
+                    "AGY_LLM_GATEWAY_API_KEY": "e2e-dummy-key"}
         return argv, antigravity_env(port, env)
 
     def transcript(self, stdout, out):

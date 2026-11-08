@@ -8,8 +8,8 @@
 # tools, destinations.SHELL_TOOLS and codemode.CODE_TOOLS for commands), add a case if it can touch
 # disk or network, then list it here. A tool no longer offered is only reported.
 #
-# Checked against Codex 0.147.0 and 0.167.0, Claude Code 2.1.310 and 2.1.319 on Nov 8, 2026, with the
-# e2e stub MCP server configured (mcp-01). Tools a personal login adds (ChatGPT's image generation and
+# Checked against Codex 0.147.0 and 0.167.0, Claude Code 2.1.310 and 2.1.319, and the Antigravity CLI
+# 1.5.3 on Nov 8, 2026, with the e2e stub MCP server configured (mcp-01). Tools a personal login adds (ChatGPT's image generation and
 # connectors, claude.ai's) are not in CI and not listed.
 #
 # MCP tools are not listed: an agent names them `mcp__<server>__<tool>`, and keepmum holds every one
@@ -54,3 +54,20 @@
 "ReportFindings" = "shows review findings to the user: restored"
 "ToolSearch" = "loads the schema of another tool: no values"
 "DeferredToolPlaceholder" = "stands in for tools loaded later through ToolSearch: no values"
+
+# The Antigravity CLI declares these 12 to its model, signed in with Google or through a gateway. Its
+# stream-json `init` lists about 60 more (browser_*, read_url_content, call_mcp_tool, …) that it
+# declares in other setups; restore.DEFAULT_POLICY keeps placeholders in those that act on the web.
+[agy]
+"run_command" = "runs a shell command (CommandLine): destinations and commands checks, values quoted for the shell"
+"read_file" = "reads a local file by path: restored"
+"write_file" = "writes a local file (Path, Content): restored"
+"edit_file" = "replaces text in a local file (Target, Replacement): restored"
+"search_web" = "a web search, asked of the model provider (Code Assist web_search, or the gateway): placeholders kept"
+"manage_task" = "lists, reads or types into agy's background commands: restored (its Input is a running command's stdin)"
+"send_message" = "a message to a sub-agent on this Mac, whose own requests go through keepmum: restored"
+"schedule" = "a timer or cron job that prompts agy again later, on this Mac: restored"
+"invoke_subagent" = "starts a sub-agent on this Mac, whose own requests go through keepmum: restored"
+"define_subagent" = "defines a sub-agent type (name, prompt) on this Mac: restored"
+"manage_subagents" = "lists or stops sub-agents: no values"
+"ask_question" = "asks the user multiple-choice questions: restored"

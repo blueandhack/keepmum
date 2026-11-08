@@ -16,7 +16,7 @@ from pathlib import Path
 REAL_HOME = os.environ["HOME"]
 RESULTS = Path(__file__).parent / "results"
 PROVIDERS = {"anthropic": "https://api.anthropic.com", "openai": "https://api.openai.com", "chatgpt": "https://chatgpt.com",
-             "antigravity": "https://daily-cloudcode-pa.googleapis.com"}
+             "antigravity": "https://daily-cloudcode-pa.googleapis.com", "gemini": "https://generativelanguage.googleapis.com"}
 
 
 def _environment() -> None:
@@ -104,6 +104,7 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         proxy.prefixed["/openai"] = f"{tap_server.url}/openai"
         proxy.prefixed["/chatgpt"] = f"{tap_server.url}/chatgpt"
         proxy.prefixed["/antigravity"] = f"{tap_server.url}/antigravity"
+        proxy.prefixed["/gemini"] = f"{tap_server.url}/gemini"
         live_vault["vault"] = proxy.redactor.vault
         server = launch.BackgroundServer(proxy)
         server.start()
@@ -113,7 +114,7 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
             mcp = {"name": "notes", "command": sys.executable, "args": [str(Path(__file__).parent / "mcp_notes.py")],
                    "env": {"KEEPMUM_E2E_MCP_LOG": str(out / "mcp.jsonl"),
                            "KEEPMUM_E2E_MCP_REPLY": case.resolve(case.raw.get("mcp_reply", "no record"), salt)}}
-        argv, env = agent.command(ws, server.port, case.resolve(case.prompt, salt), REAL_HOME, out, model, extra, mcp)
+        argv, env = agent.command(ws, server.port, case.resolve(case.prompt, salt), REAL_HOME, out, model, extra, mcp, mode)
         try:
             done = subprocess.run(argv, env=env, cwd=ws, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                   timeout=case.timeout)

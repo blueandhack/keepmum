@@ -1,7 +1,7 @@
 name: Agents (latest)
 
-# Daily: the e2e suite (e2e/ci.sh) against the newest Codex and Claude Code, not the versions ci.yml
-# pins. An agent update can change how it calls tools (Codex 0.147 moved every command into a
+# Daily: the e2e suite (e2e/ci.sh) against the newest Codex, Claude Code and Antigravity CLI, not the
+# versions ci.yml pins. An agent update can change how it calls tools (Codex 0.147 moved every command into a
 # JavaScript `exec` tool) and keepmum must follow. This fails on the day such an update ships: a
 # case that breaks, or a tool the agent now offers that e2e/tools.toml does not list. A failed
 # scheduled run is emailed to whoever last changed this schedule. To move to the new versions, run
@@ -26,6 +26,16 @@ jobs:
         run: |
           npm install --no-fund --no-audit --prefix "$RUNNER_TEMP/agents" @openai/codex@latest @anthropic-ai/claude-code@latest
           echo "$RUNNER_TEMP/agents/node_modules/.bin" >> "$GITHUB_PATH"
+          # The Antigravity CLI as its installer gets it (the newest release in its manifest, checked
+          # against the manifest's SHA-512), without the installer's shell-profile changes.
+          manifest="$(curl -fsSL https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/darwin_arm64.json)"
+          field() { printf '%s' "$manifest" | python3 -c "import json, sys; print(json.load(sys.stdin)['$1'])"; }
+          curl -fsSL -o "$RUNNER_TEMP/agy.tar.gz" "$(field url)"
+          echo "$(field sha512)  $RUNNER_TEMP/agy.tar.gz" | shasum -a 512 -c -
+          mkdir -p "$RUNNER_TEMP/agy"
+          tar -xzf "$RUNNER_TEMP/agy.tar.gz" -C "$RUNNER_TEMP/agy"
+          mv "$RUNNER_TEMP/agy/antigravity" "$RUNNER_TEMP/agy/agy"
+          echo "$RUNNER_TEMP/agy" >> "$GITHUB_PATH"
       - name: Compare with the pinned versions
         run: |
           {
@@ -35,6 +45,7 @@ jobs:
             echo "|---|---|---|"
             echo "| Codex | $(codex --version | awk '{print $NF}') | $(sed -n 's/.*CODEX_VERSION: //p' .github/workflows/ci.yml) |"
             echo "| Claude Code | $(claude --version | awk '{print $1}') | $(sed -n 's/.*CLAUDE_CODE_VERSION: //p' .github/workflows/ci.yml) |"
+            echo "| Antigravity CLI | $(agy --version) | $(sed -n 's/.*AGY_VERSION: //p' .github/workflows/ci.yml) |"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
       - run: e2e/ci.sh
