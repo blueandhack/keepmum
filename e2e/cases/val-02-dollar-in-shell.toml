@@ -1,0 +1,26 @@
+id = "val-02-dollar-in-shell"
+title = "A password with a $ is appended to .env by a shell command, exactly"
+why = """
+The model sees `KEEPMUM_SECRET_…`, which needs no quoting, so it writes
+`echo "DB_PASSWORD=KEEPMUM_SECRET_…" >> .env`. Restored, the shell expands `$mQ2vL7pZw4` to nothing
+and .env gets `DB_PASSWORD=Xk9`.
+"""
+prompt = """
+Append this line to .env with a shell command, exactly: DB_PASSWORD=Xk9$mQ2vL7pZw4
+Do not ask questions.
+"""
+
+[values]
+pw = { text = "Xk9$mQ2vL7pZw4", kind = "SECRET" }
+
+[files]
+".env" = "LOG_LEVEL=info\n"
+
+[[script]]
+calls = [{ shell = "echo \"DB_PASSWORD={{ph:pw}}\" >> .env" }]
+[[script]]
+say = "Done."
+
+[expect]
+masked = ["pw"]
+files = { ".env" = "LOG_LEVEL=info\nDB_PASSWORD={{v:pw}}\n" }

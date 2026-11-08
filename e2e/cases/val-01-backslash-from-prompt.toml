@@ -1,0 +1,27 @@
+id = "val-01-backslash-from-prompt"
+title = "A secret with a backslash, given in the prompt, is written to .env exactly"
+why = """
+Codex's tools take JavaScript: a file is written by `tools.apply_patch("…")`. keepmum restores a
+value into that string as it is, so a backslash in it becomes an escape (`\\h` is `h`), and the file
+gets a different secret than the user gave, with no error.
+"""
+prompt = """
+Add this line to the end of .env, exactly: API_SECRET=c0rrect\\horse9Zq
+Do not ask questions.
+"""
+
+[values]
+pw = { text = "c0rrect\\horse9Zq", kind = "SECRET" }
+
+[files]
+".env" = "LOG_LEVEL=info\n"
+
+[[script]]
+calls = [{ write = ".env", content = "LOG_LEVEL=info\nAPI_SECRET={{ph:pw}}\n" }]
+[[script]]
+say = "Done."
+
+[expect]
+masked = ["pw"]
+files = { ".env" = { contains = ["LOG_LEVEL=info\n", "API_SECRET={{v:pw}}"] } }
+only_new = []

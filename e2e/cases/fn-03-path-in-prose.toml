@@ -1,0 +1,27 @@
+id = "fn-03-path-in-prose"
+title = "A path without an extension, in prose, is not taken for a secret"
+why = """
+`bench/results/PHASE0` in a sentence has no extension, so the file-name check does not apply, and the
+entropy rule masks it. The model is then asked about a placeholder, and any file it names from it
+depends on a restore.
+"""
+prompt = """
+README.md mentions a results file. Create LINK.md containing one line: that path with .md added.
+Do not ask questions.
+"""
+plain = ["bench/results/PHASE0"]
+
+[files]
+"README.md" = "The numbers are in bench/results/PHASE0, see there.\n"
+"bench/results/PHASE0.md" = "phase 0\n"
+
+[[script]]
+calls = [{ read = "README.md" }]
+[[script]]
+calls = [{ write = "LINK.md", content = "{{seen:bench/results/PHASE0}}.md\n" }]
+[[script]]
+say = "Done."
+
+[expect]
+files = { "LINK.md" = "bench/results/PHASE0.md\n" }
+only_new = ["LINK.md"]

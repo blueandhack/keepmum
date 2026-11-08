@@ -1,0 +1,31 @@
+id = "fn-04-person-in-file-name"
+title = "A new file is named after a person's file; the person's name is restored in the new name"
+why = """
+With personal data on, a name in a file name is masked. The model builds the new file's name from
+the placeholder; the file on disk must carry the real name, never `KEEPMUM_PERSON_…`.
+"""
+prompt = """
+In clients/ there is one resume file. Create a cover letter next to it, named like the resume but
+ending in _cover_letter.md instead of _resume.md, containing the line "Dear hiring manager,".
+Do not ask questions.
+"""
+config = "[detect]\nmodel = true\npii = true\n"
+
+
+[values]
+person = { text = "Margaret Thornbury", kind = "PERSON" }
+
+[files]
+"clients/Margaret Thornbury_resume.md" = "# Margaret Thornbury\nEngineer.\n"
+
+[[script]]
+calls = [{ shell = "ls clients" }]
+[[script]]
+calls = [{ write = "{{seen:clients/Margaret Thornbury}}_cover_letter.md", content = "Dear hiring manager,\n" }]
+[[script]]
+say = "Created the cover letter."
+
+[expect]
+masked = ["person"]
+files = { "clients/Margaret Thornbury_cover_letter.md" = { contains = "Dear hiring manager," } }
+only_new = ["clients/Margaret Thornbury_cover_letter.md"]
