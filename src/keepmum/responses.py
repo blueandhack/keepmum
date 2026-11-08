@@ -10,11 +10,16 @@ Verified against Codex 0.147 on chatgpt.com/backend-api/codex (Oct 27, 2026). A 
 - output_text.done, content_part.*, output_item.*, function_call_arguments.done and
   response.completed carry whole texts and items: restored in place.
 - Everything else (reasoning, metadata, errors) passes through byte for byte.
+
+A note the tool policy collects while a call is restored (`policy.notes`: the script check's, about
+a Codex script keepmum cannot fully see) goes to the user as an assistant message of its own, right
+after that call, in the stream and in a whole reply; every later item's output_index moves up one.
 """
 
 from __future__ import annotations
 
 import json
+import secrets
 from collections import Counter
 
 from .restore import DEFAULT_POLICY, StreamRestorer, _hold_from, next_run, restore_reply, restore_tool
@@ -49,11 +54,28 @@ def restore_item(item, vault: Vault, policy: dict = DEFAULT_POLICY, counts: Coun
     return item
 
 
+def note_item(text: str) -> dict:
+    """keepmum's note to the user, as an assistant message (Codex shows it like its own commentary)."""
+    return {"type": "message", "id": f"msg_keepmum_{secrets.token_hex(8)}", "role": "assistant", "status": "completed",
+            "phase": "commentary", "content": [{"type": "output_text", "text": text, "annotations": []}]}
+
+
+def _notes(policy) -> list[str] | None:
+    notes = getattr(policy, "notes", None)
+    return notes if isinstance(notes, list) else None
+
+
 def restore_responses(body: dict, vault: Vault, policy: dict = DEFAULT_POLICY, counts: Counter | None = None) -> dict:
-    """A non-streaming /responses reply with placeholders restored."""
-    if isinstance(body.get("output"), list):
-        return {**body, "output": [restore_item(i, vault, policy, counts) for i in body["output"]]}
-    return body
+    """A non-streaming /responses reply with placeholders restored, and the policy's notes after the
+    calls they are about."""
+    if not isinstance(body.get("output"), list):
+        return body
+    notes, out = _notes(policy), []
+    for item in body["output"]:
+        before = len(notes) if notes is not None else 0
+        out.append(restore_item(item, vault, policy, counts))
+        out += [note_item(n) for n in (notes[before:] if notes is not None else [])]
+    return {**body, "output": out}
 
 
 class ResponsesStreamRestorer(StreamRestorer):
@@ -64,6 +86,32 @@ class ResponsesStreamRestorer(StreamRestorer):
         self._text: dict[tuple, str] = {}    # (item_id, content_index) -> held-back tail
         self._runs: dict[tuple, str] = {}    # (item_id, content_index) -> the run its text ends in
         self._calls: dict[str, dict] = {}    # item_id -> {"name", "parts", "last"}
+        self._pending: dict[str, list[str]] = {}  # item_id -> notes to show once that call is done
+        self._sent: dict[str, list[dict]] = {}    # item_id -> the note items shown after it
+        self._after: list[int] = []               # output_index (as sent upstream) of each call a note follows
+
+    def _at(self, index: int) -> int:
+        """An upstream output_index as the client sees it: each note before it moves it up one."""
+        return index + sum(1 for i in self._after if i < index)
+
+    def _note_events(self, name, after: int, sequence, text: str) -> tuple[bytes, dict]:
+        item = note_item(text)
+        at, part = after + 1, item["content"][0]
+        base = {"item_id": item["id"], "output_index": at, "content_index": 0}
+        if sequence is not None:
+            base["sequence_number"] = sequence
+        events = [
+            ("response.output_item.added", {"output_index": at, "item": {**item, "status": "in_progress", "content": []}}),
+            ("response.content_part.added", {**base, "part": {**part, "text": ""}}),
+            ("response.output_text.delta", {**base, "delta": part["text"]}),
+            ("response.output_text.done", {**base, "text": part["text"]}),
+            ("response.content_part.done", {**base, "part": part}),
+            ("response.output_item.done", {"output_index": at, "item": item}),
+        ]
+        out = b"".join(self._emit(name and kind, {"type": kind, **({"sequence_number": sequence} if sequence is not None
+                                                                    and "sequence_number" not in data else {}), **data})
+                       for kind, data in events)
+        return out, item
 
     def _event(self, raw: bytes) -> bytes:
         try:
@@ -82,6 +130,10 @@ class ResponsesStreamRestorer(StreamRestorer):
         if not isinstance(data, dict):
             return raw
         kind = data.get("type", "")
+        upstream_index = data.get("output_index")
+        if self._after and isinstance(upstream_index, int) and self._at(upstream_index) != upstream_index:
+            data = {**data, "output_index": self._at(upstream_index)}
+            raw = self._emit(name, data)
         # Counted once, where a value first comes out (text deltas, a finished tool call); the
         # same value repeated in .done events, items and response.completed is not counted again.
         v, p, c, again = self.vault, self.policy, self.counts, Counter()
@@ -123,10 +175,14 @@ class ResponsesStreamRestorer(StreamRestorer):
             field = "arguments" if "arguments" in kind else "input"
             call = self._calls.pop(data.get("item_id"), {"name": "mcp__" if "mcp_call" in kind else "", "parts": [], "last": None})
             whole = data.get(field) if isinstance(data.get(field), str) else "".join(call["parts"])
+            notes = _notes(p)
+            before = len(notes) if notes is not None else 0
             if field == "arguments":
                 whole = _restore_args(whole, call["name"], v, p, c)
             else:
                 whole = restore_tool(call["name"], whole, v, p, c)
+            if notes is not None and len(notes) > before:
+                self._pending.setdefault(data.get("item_id"), []).extend(notes[before:])
             delta = b""
             if call["parts"]:
                 last = call["last"] or {}
@@ -141,9 +197,36 @@ class ResponsesStreamRestorer(StreamRestorer):
         if kind == "response.output_item.done":
             item = data.get("item")
             item_counts = c if isinstance(item, dict) and item.get("type") in ("local_shell_call", "shell_call") else again
-            return self._emit(name, {**data, "item": restore_item(item, v, p, item_counts)})
+            out = self._emit(name, {**data, "item": restore_item(item, v, p, item_counts)})
+            item_id = item.get("id") if isinstance(item, dict) else None
+            if item_id in self._pending and isinstance(upstream_index, int):
+                for text in self._pending.pop(item_id):
+                    events, note = self._note_events(name, self._at(upstream_index), data.get("sequence_number"), text)
+                    out += events
+                    self._sent.setdefault(item_id, []).append(note)
+                    self._after.append(upstream_index)
+            return out
         if kind in ("response.completed", "response.done", "response.incomplete"):
             resp = data.get("response")
             if isinstance(resp, dict):
-                return self._emit(name, {**data, "response": restore_responses(resp, v, p, again)})
+                # The whole reply again: restored without collecting notes twice, and with the notes
+                # this stream showed, each after its call.
+                quiet = _quiet(p)
+                resp = restore_responses(resp, v, quiet, again)
+                if self._sent and isinstance(resp.get("output"), list):
+                    out_items = []
+                    for item in resp["output"]:
+                        out_items.append(item)
+                        out_items += self._sent.get(item.get("id") if isinstance(item, dict) else None, [])
+                    resp = {**resp, "output": out_items}
+                return self._emit(name, {**data, "response": resp})
         return raw
+
+
+def _quiet(policy):
+    """The policy without its notes and review: for restoring what was already reviewed."""
+    if _notes(policy) is None:
+        return policy
+    from .restore import ToolPolicy
+
+    return ToolPolicy(policy, getattr(policy, "registry", None), getattr(policy, "destinations", None))

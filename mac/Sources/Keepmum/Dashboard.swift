@@ -59,6 +59,9 @@ struct Dashboard: View {
         .onChange(of: engine.settingsRequested, initial: true) { _, requested in
             if let requested { page = .settings; settingsPane = requested; engine.settingsRequested = nil }
         }
+        .onChange(of: engine.pageRequested, initial: true) { _, requested in
+            if let requested { page = requested; engine.pageRequested = nil }
+        }
         .onChange(of: engine.status?.port, initial: true) { _, p in
             if let p { store.configuredPort = p }
         }
@@ -287,11 +290,16 @@ func checkLabel(_ c: Snapshot.Event.Check) -> String {
     switch c.check {
     case "harm": "Harm · \((c.categories ?? []).first ?? "flagged")"
     case "commands": "Command · \((c.categories ?? []).first ?? "flagged")"
+    case "script": "Script · \((c.categories ?? []).first ?? "flagged")"
     default: "Injection · \(toolLabel(c.source ?? "a tool"))"
     }
 }
 
 func checkHelp(_ c: Snapshot.Event.Check) -> String {
+    if c.check == "script" {
+        return "A Codex script in the reply hands values it works out itself, such as a command's output, to a network tool: "
+            + "\((c.categories ?? []).joined(separator: ", ")). keepmum could not check them; the agent got the script with a note after it (warn)."
+    }
     if c.check == "commands" {
         let what = "The commands check flagged a \(c.source ?? "shell") command in the reply: \((c.categories ?? []).joined(separator: ", "))."
         let outcome = c.action == "blocked" ? "The agent got a command that says why and fails, in its place."

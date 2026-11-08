@@ -36,7 +36,7 @@ struct MenuLabel: View {
         let unique = store.snapshot.vaultSize ?? 0
         HStack(spacing: 3) {
             let live = store.connection == .live || store.connection == .sample
-            let attention = store.toolsNeedReview || engine.aroundClient != nil
+            let attention = store.toolsNeedReview || engine.aroundClient != nil || store.scriptWarning != nil
             Image(nsImage: !live ? Brand.menuBarIdle : attention ? Brand.menuBarAttention : Brand.menuBarActive)
             if unique > 0 { Text(unique.compact).monospacedDigit() }
         }
@@ -110,6 +110,26 @@ struct MenuPanel: View {
                     Spacer(minLength: Space.s)
                     PillButton(title: "Protect") { Task { await engine.setProtection(true, client: around.id) } }
                         .disabled(!engine.isBundled || engine.busy || !engine.serviceRunning)
+                }
+                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
+                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
+            }
+            if let warning = store.scriptWarning {
+                // A Codex script handed values keepmum could not see to a network tool (ScriptWarnings).
+                HStack(spacing: Space.s) {
+                    Image(systemName: "curlybraces").foregroundStyle(Theme.warning)
+                    // The server alone ("notes"): the tool is on the Logs page.
+                    let to = (warning.categories ?? []).first?.replacingOccurrences(of: "computed values sent to ", with: "")
+                        .components(separatedBy: " › ").first ?? "a network tool"
+                    Text("Unchecked values to \(to)")
+                        .font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                        .help("A Codex script passed values it worked out, such as a command's output, to a network tool. keepmum could not check them.")
+                    Spacer(minLength: Space.s)
+                    PillButton(title: "Logs") {
+                        store.markScriptWarningsSeen()
+                        engine.pageRequested = .logs
+                        DashboardWindow.show(openWindow)
+                    }
                 }
                 .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
                 .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))

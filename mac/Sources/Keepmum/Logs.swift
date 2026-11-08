@@ -226,9 +226,9 @@ struct ChecksCard: View {
             .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 100, alignment: .leading)
             Text(h.flagged).font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(h.check == "commands" ? "—" : String(format: "%.2f", h.score)).font(.km(.callout)).monospacedDigit()
+            Text(h.isRule ? "—" : String(format: "%.2f", h.score)).font(.km(.callout)).monospacedDigit()
                 .foregroundStyle(Theme.textSecondary).frame(width: 50, alignment: .trailing)
-                .help(h.check == "commands" ? "A rule matched: rules have no score" : "")
+                .help(h.isRule ? "A rule matched: rules have no score" : "")
             Text(h.chars.formatted()).font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
                 .frame(width: 60, alignment: .trailing)
             CheckOutcome(hit: h).frame(width: 80, alignment: .leading).padding(.leading, Space.s)
@@ -237,9 +237,18 @@ struct ChecksCard: View {
 }
 
 extension Snapshot.GuardHit {
-    var checkName: String { check == "harm" ? "Harm" : check == "commands" ? "Command" : "Injection" }
-    var checkTitle: String { check == "harm" ? "Harmful request" : check == "commands" ? "Risky command" : "Prompt injection" }
-    var checkIcon: String { check == "harm" ? "exclamationmark.bubble" : check == "commands" ? "terminal" : "syringe" }
+    var checkName: String {
+        check == "harm" ? "Harm" : check == "commands" ? "Command" : check == "script" ? "Script" : "Injection"
+    }
+    var checkTitle: String {
+        check == "harm" ? "Harmful request" : check == "commands" ? "Risky command"
+            : check == "script" ? "Values keepmum could not check" : "Prompt injection"
+    }
+    var checkIcon: String {
+        check == "harm" ? "exclamationmark.bubble" : check == "commands" ? "terminal" : check == "script" ? "curlybraces" : "syringe"
+    }
+    /// A rule matched (the commands and script checks): no score, and the reply is what was flagged.
+    var isRule: Bool { check == "commands" || check == "script" }
     var cats: [String] { categories ?? [] }
 
     /// Where it was flagged, short, for the row.
@@ -247,6 +256,7 @@ extension Snapshot.GuardHit {
         switch check {
         case "harm": "What was typed" + (cats.isEmpty ? "" : ": \(cats.joined(separator: ", "))")
         case "commands": "\(source ?? "Shell") command: \(cats.joined(separator: ", "))"
+        case "script": "Codex script: \(cats.joined(separator: ", "))"
         default: "\(toolLabel(source ?? "a tool")) result" + (earlier == true ? " (flagged before)" : "")
         }
     }
@@ -279,6 +289,8 @@ extension Snapshot.GuardHit {
             return "\(agent) got a command that prints why it was stopped and fails, in place of this one. The command never ran."
         case ("commands", _):
             return "The reply went to \(agent) unchanged: the command ran only if \(agent) or you approved it. Check what it did."
+        case ("script", _):
+            return "The script went to \(agent) unchanged, with a note from keepmum after it. It hands values it works out itself, such as a command's output, to a network tool. keepmum sees only what goes to the model and back, so it could not check those values: a secret in them may have reached the server."
         case (_, "blocked"):
             return "The request was refused before it left this Mac: \(providerName) received nothing, and \(agent) got an error saying why."
         case (_, "local"):
@@ -298,6 +310,8 @@ extension Snapshot.GuardHit {
             return "If the command was what you wanted, run it yourself, or set Risky commands to Warn."
         case ("commands", _):
             return "To have such commands replaced before the agent gets them, set Risky commands to Block (Settings › Checks)."
+        case ("script", _):
+            return "Check what the server received, and rotate any secret that went out. To keep secrets out, ask the agent to make the network call in a step of its own: what it sends then goes through keepmum."
         case ("harm", "blocked"):
             return "Rephrase the request, or rewind (or /clear). Harm in Warn mode would send such requests with a warning."
         case ("harm", "local"):
@@ -378,13 +392,13 @@ struct CheckDetail: View {
             Text(h.whatHappened).font(.km(.body)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Space.l, verticalSpacing: Space.s) {
                 field("Found in", found(h))
-                if !h.cats.isEmpty { field(h.check == "commands" ? "Rule" : "Categories", h.cats.joined(separator: ", ")) }
+                if !h.cats.isEmpty { field(h.isRule ? "Rule" : "Categories", h.cats.joined(separator: ", ")) }
                 field("Score", score(h))
                 field("Length", "\(h.chars.formatted()) characters")
                 if let mode = h.mode { field("Mode", modeName(mode)) }
-                if let model = h.model { field(h.check == "commands" ? "Checked by" : "Model", model) }
+                if let model = h.model { field(h.isRule ? "Checked by" : "Model", model) }
                 field("Agent", agentName(h.client))
-                field(h.action == "warned" && h.check != "commands" ? "Sent to" : h.check == "commands" ? "Reply from" : "Meant for",
+                field(h.action == "warned" && !h.isRule ? "Sent to" : h.isRule ? "Reply from" : "Meant for",
                       h.providerName)
                 if let a = h.answeredBy {
                     field("Answered by", "\(LocalServersSection.shortName(a.model)) at \(a.url.replacingOccurrences(of: "http://", with: ""))"
@@ -424,6 +438,7 @@ struct CheckDetail: View {
         switch h.check {
         case "harm": "What you typed"
         case "commands": "The command"
+        case "script": "The script"
         default: "What \(toolLabel(h.source ?? "the tool")) returned"
         }
     }
@@ -445,6 +460,7 @@ struct CheckDetail: View {
         switch h.check {
         case "harm": return "What you typed"
         case "commands": return "A \(h.source ?? "shell") command in the model's reply"
+        case "script": return "A Codex script (\(h.source ?? "exec")) in the model's reply"
         default:
             return "What \(toolLabel(h.source ?? "a tool")) returned"
                 + (h.earlier == true ? ", flagged on an earlier request and still in the conversation" : "")
@@ -452,7 +468,7 @@ struct CheckDetail: View {
     }
 
     private func score(_ h: Snapshot.GuardHit) -> String {
-        if h.check == "commands" { return "A rule matched" }
+        if h.isRule { return "A rule matched" }
         let s = String(format: "%.2f", h.score)
         guard let t = h.threshold else { return s }
         return "\(s), at or over the \(String(format: "%.2f", t)) threshold (1.00 is certain)"

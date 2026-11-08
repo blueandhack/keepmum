@@ -205,6 +205,12 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
         out.append(Finding("health", f"the agent exited {exit_code}", "agent"))
     if exit_code is None:
         out.append(Finding("health", f"the agent did not finish in {case.timeout} s", "agent"))
+    # A check that warns (lets the request through): keepmum recorded it, and the user saw its note.
+    for check in case.expect.get("warned", []):
+        if check not in keepmum.get("warned", []):
+            out.append(Finding("task", f"keepmum's {check} check never warned", "keepmum"))
+    if case.expect.get("warn_shown") and not any("keepmum: " in t for t in [*transcript.shown, transcript.final]):
+        out.append(Finding("task", "the agent never showed keepmum's note", "transcript"))
     if keepmum.get("unresolved") and keepmum["unresolved"] != case.expect.get("unresolved"):
         out.append(Finding("health", f"keepmum met {keepmum['unresolved']} placeholder(s) it could not restore", "keepmum"))
     for e in keepmum.get("errors", []):

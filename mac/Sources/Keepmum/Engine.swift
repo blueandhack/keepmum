@@ -265,6 +265,8 @@ final class Engine {
     var error: String?
     /// The menu bar asks the dashboard to open Settings on a pane: Setup, or Tools to review one.
     var settingsRequested: SettingsPane?
+    /// The menu bar asks the dashboard to open a page: Logs, for a script keepmum could not check.
+    var pageRequested: Page?
 
     /// Contents/Resources/keepmum. Missing when the app was built without the engine (SKIP_RUNTIME).
     let cli = Bundle.main.url(forResource: "keepmum", withExtension: nil)

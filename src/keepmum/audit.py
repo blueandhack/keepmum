@@ -500,6 +500,10 @@ def summary(entry: dict) -> str:
                    f"in the reply ({', '.join(cats)})"
             return (f"{entry.get('client', '?')} -> {entry.get('provider', '?')}; {what}; "
                     + ("the agent got a refusal in its place" if entry.get("action") == "blocked" else "sent with a warning"))
+        if entry.get("check") == "script":
+            cats = sorted({c for h in hits for c in h.get("categories") or []})
+            return (f"{entry.get('client', '?')} -> {entry.get('provider', '?')}; script check flagged a Codex script "
+                    f"in the reply ({', '.join(cats)}): values keepmum could not check; sent with a note to the user")
         if entry.get("check") == "harm":
             cats = sorted({c for h in hits for c in h.get("categories") or []})
             what = f"harm check flagged what the user typed ({', '.join(cats) or 'no category'}, " \

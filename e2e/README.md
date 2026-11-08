@@ -160,6 +160,8 @@ mcp_calls_min = 1                                  # calls the MCP server must r
 mcp_contains = []                                  # text it must receive (templates)
 mcp_may_receive = []                               # values it may get real (a type its setting allows)
 web_calls_min = 1                                  # web searches or fetches the agent must make
+warned = ["script"]                               # checks that must warn (let the request through, flagged)
+warn_shown = true                                  # the agent must show the user a `keepmum: …` note
 ```
 
 A script call can carry one form per agent, for a turn they make differently: `{ shell = "…", codex =

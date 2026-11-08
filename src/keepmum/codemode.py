@@ -107,6 +107,7 @@ class Script:
     refs: list[Ref] = field(default_factory=list)
     declared: dict[str, list[int]] = field(default_factory=dict)  # name -> where each const/let/var of it is
     assigned: set[str] = field(default_factory=set)  # names assigned after their declaration, or parameters
+    call_spans: list[tuple[str, int, int]] = field(default_factory=list)  # (nested tool, its "(", its ")")
 
     def bindings(self, source: str) -> dict[str, Literal]:
         """Names bound once to a plain string literal and never changed (`const tok = "…";`):
@@ -158,6 +159,7 @@ def parse(source: str) -> Script:
     stack: list[tuple[str, str | None, int]] = []
     templates: list[list] = []  # per open template: [span start, chunks [(a, b, call, call_open)]]
     closed: dict[int, int] = {}  # a call's ( -> its )
+    spans: list[tuple[str, int, int]] = []  # every closed nested tool call: (tool, its "(", its ")")
     prev = ""  # the last significant token, to tell a regular expression from a division
     i, n = 0, len(source)
 
@@ -290,6 +292,7 @@ def parse(source: str) -> Script:
                 kind, name, at = stack.pop()
                 if kind == "(" and name is not None:
                     closed[at] = i
+                    spans.append((name, at, i))
         i, prev = i + 1, c
     while templates:  # unterminated
         span_start, chunks = templates.pop()
@@ -303,7 +306,7 @@ def parse(source: str) -> Script:
         out.append(lit)
     names = [Ref(a, b, w, call, (at, closed.get(at, n)) if at is not None else None, sh)
              for a, b, w, call, at, sh in refs]
-    return Script(out, calls, dynamic, names, declared, assigned)
+    return Script(out, calls, dynamic, names, declared, assigned, spans)
 
 
 def literals(source: str) -> list[Literal]:
@@ -324,3 +327,71 @@ def script_strings(source: str) -> list[str]:
         seen.add(lit.span)
         out.append(_unescape(source[lit.span[0]:lit.span[1]]))
     return out
+
+
+# Globals a script may use in a network tool's arguments that carry no data of their own: a value
+# that does is a name of its own there (`JSON.stringify(token)` names `token`).
+_HARMLESS = frozenset({"Date", "Math", "JSON", "String", "Number", "Boolean", "Object", "Array", "encodeURIComponent",
+                       "decodeURIComponent", "encodeURI", "decodeURI", "parseInt", "parseFloat", "undefined", "NaN",
+                       "Infinity", "console", "text"})
+
+
+def computed_to_network(source: str, action_of) -> list[str]:
+    """The network tools (`action_of(name)` is not "restore") a script hands a computed value to:
+    a name other than a plain string constant, or another tool's result, when the
+    script also runs a command. keepmum sees what goes to and from the model, so it never sees what
+    such a value holds: a command's output can go to the server unchecked (`cat .env`, parsed, sent
+    to an MCP tool). A script that reaches its tools by name (`tools[x]`) and runs a command is
+    reported as "a tool the script names at run time"."""
+    script = parse(source)
+    if not script.calls & SHELL_CALLS:
+        return []
+    bound = set(script.bindings(source))
+    out: list[str] = []
+    for name, a, b in script.call_spans:
+        decided = name
+        if name in MCP_RESOURCE_CALLS:
+            m = _SERVER_ARG.search(source, a, b)
+            decided = f"mcp__{m.group(2) if m else '?'}__{name}"
+        if name in SHELL_CALLS or action_of(decided) == "restore":
+            continue
+        # A name other than a plain constant, or another tool's result (a ${…} part is one of these).
+        computed = any(a < r.start < b and r.name not in bound and r.name not in _HARMLESS for r in script.refs) \
+            or any(a < x < y < b for _, x, y in script.call_spans)
+        if computed and decided not in out:
+            out.append(decided)
+    if script.dynamic and not out:
+        out.append("a tool the script names at run time")
+    return out
+
+
+def shown_tool(name: str) -> str:
+    """A tool as a person reads it: `mcp__notes__send_note` -> "notes › send_note"."""
+    if name.startswith("mcp__"):
+        server, _, tool = name[5:].partition("__")
+        return f"{server.removeprefix('claude_ai_')} › {tool}" if tool else server
+    return name
+
+
+class ScriptCheck:
+    """Warns, never refuses, when a Codex code-mode script hands a computed value to a network tool
+    (computed_to_network): keepmum cannot see that value, so a secret in a command's output can
+    reach the server. `review(name, value, action_of)` gives the hits to record and the note to show
+    in the agent, or ([], None)."""
+
+    name = "script"
+    label = "keepmum's script check"
+    mode = "warn"
+
+    def review(self, name: str, value, action_of) -> tuple[list[dict], str | None]:
+        if name not in CODE_TOOLS or not isinstance(value, str):
+            return [], None
+        tools = computed_to_network(value, action_of)
+        if not tools:
+            return [], None
+        shown = ", ".join(shown_tool(t) for t in tools)
+        hit = {"check": self.name, "source": name, "score": 1.0, "chars": len(value), "earlier": False,
+               "categories": [f"computed values sent to {shown_tool(t)}" for t in tools]}
+        note = (f"keepmum: this script sends values it computes, such as a command's output, to {shown}. keepmum "
+                "cannot see those values, so it cannot keep a secret out of them.")
+        return [hit], note

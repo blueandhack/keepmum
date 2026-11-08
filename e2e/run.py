@@ -127,6 +127,8 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         masked = {ph: (ph.split("_")[1], value) for ph, value in vault._values.items()}
         events = list(proxy.stats.events)
         keepmum = {"unresolved": proxy.stats.unresolved,
+                   "warned": sorted({h.get("check") for h in proxy.stats.snapshot()["guard"]["hits"]
+                                     if h.get("action") == "warned"}),
                    "errors": [{"path": e.get("path"), "status": e.get("status"), "outcome": e.get("outcome")}
                               for e in events if (e.get("status") or 0) >= 400]}
     finally:

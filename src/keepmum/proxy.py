@@ -733,6 +733,7 @@ class Proxy:
             cats = ", ".join(h.get("categories") or []) or "no category"
             what = (f"what the user typed ({cats})" if guard.name == "harm"
                     else f"a {h['source']} command in the reply ({cats})" if guard.name == "commands"
+                    else f"a {h['source']} script in the reply ({cats})" if guard.name == "script"
                     else f"a {h['source'] or 'tool'} result")
             done = ("sent to the agent as a refusal" if guard.name == "commands" else "request not sent") \
                 if action == "blocked" else "sent to the local model instead" if action == "local" else "sent (warn)"
@@ -763,13 +764,34 @@ class Proxy:
 
     def _reply_policy(self, path: str, origin, kind: str, texts: dict | None = None) -> ToolPolicy:
         """The tool policy for one reply: with the commands check on, each shell command in it is
-        reviewed as it is restored; a hit is a note on the request (Activity, the flow's Flagged band)."""
-        if self.commands is None or self.commands.mode == "off":
-            return self.policy
+        reviewed as it is restored; a hit is a note on the request (Activity, the flow's Flagged band).
+        The script check always runs: a Codex script that sends computed values to a network tool
+        is recorded, and the agent shows a note about it (the policy's `notes`), never refused."""
+        from .codemode import ScriptCheck
+
         request = secrets.token_hex(6)
+        notes: list[str] = []
+        script = ScriptCheck()
+        # A stream restores a call twice (its input's .done, then the whole item): each call is
+        # reviewed, recorded and noted once, and the second time gets the same answer.
+        reviewed: dict[str, object] = {}
 
         def review(name, value):
-            replaced, hits = self.commands.review(name, value)
+            key = name + "\0" + json.dumps(value, sort_keys=True, default=str)
+            if key in reviewed:
+                return reviewed[key]
+            reviewed[key] = replaced = once(name, value)
+            return replaced
+
+        def once(name, value):
+            replaced, hits = self.commands.review(name, value) if self.commands is not None else (None, [])
+            if replaced is None:
+                found, note = script.review(name, value, lambda n: rule_for(n, self.policy)[1])
+                if found:
+                    shown = [(None, self._prompt(texts) if self._context() else None)] * len(found)
+                    self._record_hits(script, found, "warned", path, origin, shown)
+                    self.stats.record_flagged(path, found, origin, kind=kind, request=request, action="warned")
+                    notes.append(note)
             if hits:
                 action = "blocked" if replaced is not None else "warned"
                 shown = None
@@ -782,7 +804,9 @@ class Proxy:
                 self.stats.record_flagged(path, hits, origin, kind=kind, request=request, action=action)
             return replaced
 
-        return self.policy.with_review(review)
+        policy = self.policy.with_review(review)
+        policy.notes = notes
+        return policy
 
     async def _stream(self, url, headers, payload, path, t: Target, scan_ms, counts, new=0, outcome="forwarded",
                       origin=None, found=None, texts: dict | None = None, flight: int | None = None) -> Response:

@@ -388,6 +388,7 @@ final class StatsStore {
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             apply(try decoder.decode(Snapshot.self, from: data), connection: .live)
+            ScriptWarnings.notifyNew(snapshot.guardHits)
         } catch {
             connection = .offline("keepmum is not running")
         }
@@ -436,6 +437,14 @@ final class StatsStore {
     private(set) var toolServers: [ToolServer] = []
     /// A server not reviewed yet, or paused because its tools changed: the menu bar shows a dot.
     var toolsNeedReview: Bool { toolServers.contains { $0.new || $0.paused } }
+
+    /// A script keepmum could not check, not looked at yet: the menu bar shows a dot (ScriptWarnings).
+    private(set) var scriptSeenChanges = 0
+    var scriptWarning: Snapshot.GuardHit? { _ = scriptSeenChanges; return ScriptWarnings.unseen(snapshot.guardHits) }
+    func markScriptWarningsSeen() {
+        ScriptWarnings.markSeen(snapshot.guardHits)
+        scriptSeenChanges += 1
+    }
 
     func loadTools() async {
         if sampleMode {
@@ -691,7 +700,7 @@ struct SampleFeed {
         snap.recent[3].outcome = "blocked"; snap.recent[3].status = 403; snap.recent[3].scanMs = 31; snap.recent[3].redacted = [:]
         snap.recent[3].restored = [:]; snap.recent[3].new = 0; snap.recent[3].client = "codex"; snap.recent[3].provider = "openai"
         snap.recent[3].guard = [.init(check: "harm", action: "blocked", score: 0.99, categories: ["Jailbreak"])]
-        snap.guard = .init(requests: ["warned": 2, "blocked": 1, "local": 1], hits: [
+        snap.guard = .init(requests: ["warned": 3, "blocked": 1, "local": 1], hits: [
             .init(ts: snap.recent[7].ts, check: "injection", source: "WebFetch", score: 0.98, chars: 5_101, earlier: false,
                   action: "warned", client: "claude-code", provider: "anthropic", mode: "warn",
                   model: "Prompt Injection Guard Small v2.3", threshold: 0.65, path: "/v1/messages", seq: 1),
@@ -705,6 +714,10 @@ struct SampleFeed {
             .init(ts: snap.recent[1].ts, check: "commands", source: "Bash", score: 1.0, chars: 64,
                   categories: ["a download run as a script"], earlier: false, action: "warned", client: "claude-code",
                   provider: "anthropic", mode: "warn", model: "keepmum's command rules", path: "/v1/messages", seq: 4),
+            .init(ts: snap.recent[2].ts, check: "script", source: "exec", score: 1.0, chars: 186,
+                  categories: ["computed values sent to notes › send_note"], earlier: false, action: "warned", client: "codex",
+                  provider: "openai", mode: "warn", model: "keepmum's script check", path: "/chatgpt/backend-api/codex/responses",
+                  seq: 5),
         ])
     }
 
