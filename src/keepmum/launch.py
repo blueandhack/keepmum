@@ -305,29 +305,48 @@ def gemini_upstreams(env: dict[str, str], port: int) -> dict[str, str]:
     return out
 
 
-# The Antigravity CLI (agy), signed in with Google, sends every Code Assist call, the model's
-# included, to CLOUD_CODE_URL (agy 1.5.3).
+# The Antigravity CLI (agy 1.5.3): signed in with Google, it sends every Code Assist call, the
+# model's included, to CLOUD_CODE_URL. With a company gateway (AGY_LLM_GATEWAY_URL), it sends its
+# model calls there in the Gemini API's format instead, authenticates with the gateway's key, and
+# makes no Code Assist calls; with CLOUD_CODE_URL set too, its model calls go to CLOUD_CODE_URL.
 ANTIGRAVITY_VAR = "CLOUD_CODE_URL"
+ANTIGRAVITY_GATEWAY_VAR = "AGY_LLM_GATEWAY_URL"
 
 
 def antigravity_env(port: int, env: dict[str, str]) -> dict[str, str]:
-    """agy's environment pointed at keepmum's /antigravity route."""
+    """agy's environment pointed at keepmum: a gateway, when one is set, at /gemini; else Code
+    Assist at /antigravity."""
+    if env.get(ANTIGRAVITY_GATEWAY_VAR):
+        return {**env, ANTIGRAVITY_GATEWAY_VAR: f"http://127.0.0.1:{port}/gemini"}
     return {**env, ANTIGRAVITY_VAR: f"http://127.0.0.1:{port}/antigravity"}
 
 
-def antigravity_upstream(env: dict[str, str], port: int) -> str | None:
-    """A Code Assist address already set for agy (a company gateway): keepmum forwards there."""
-    value = env.get(ANTIGRAVITY_VAR, "").rstrip("/")
-    if value and not value.startswith((f"http://127.0.0.1:{port}", f"http://localhost:{port}")):
-        return value
-    return None
+def antigravity_upstreams(env: dict[str, str], port: int) -> dict[str, str]:
+    """Addresses already set for agy (a company gateway, a Code Assist endpoint): keepmum forwards
+    there, as {route prefix: URL}."""
+    out = {}
+    for var, prefix in ((ANTIGRAVITY_VAR, "/antigravity"), (ANTIGRAVITY_GATEWAY_VAR, "/gemini")):
+        value = env.get(var, "").rstrip("/")
+        if value and not value.startswith((f"http://127.0.0.1:{port}", f"http://localhost:{port}")):
+            out[prefix] = value
+    return out
 
 
 def antigravity_refusal(env: dict[str, str], args: list[str]) -> str | None:
-    """Why agy, run this way, would send requests keepmum never sees; None when it would not."""
-    if any(env.get(k) for k in ("AGY_LLM_GATEWAY_URL", "AGY_LLM_GATEWAY_PROXY_URL")):
-        return ("AGY_LLM_GATEWAY_URL is set, so agy would send its model calls straight to that gateway, around "
-                "keepmum. keepmum covers agy signed in with Google: unset it to run through keepmum")
+    """Why agy, run this way, would send requests keepmum never sees or cannot scan; None when it
+    would not."""
+    if env.get(ANTIGRAVITY_GATEWAY_VAR):
+        if env.get(ANTIGRAVITY_VAR):
+            return ("both AGY_LLM_GATEWAY_URL and CLOUD_CODE_URL are set: agy would send its model calls to "
+                    "CLOUD_CODE_URL. Unset one of them")
+        if env.get("AGY_LLM_GATEWAY_WIRE_PROTOCOL"):
+            return ("AGY_LLM_GATEWAY_WIRE_PROTOCOL is set: agy would talk to the gateway in another API (openai is "
+                    "Chat Completions), which keepmum does not scan. Unset it to use the Gemini API")
+        if env.get("AGY_LLM_GATEWAY_PROXY_URL"):
+            return "AGY_LLM_GATEWAY_PROXY_URL is set: agy would reach the gateway through that proxy, around keepmum"
+        if env.get("AGY_LLM_GATEWAY_CLIENT_CERT"):
+            return ("AGY_LLM_GATEWAY_CLIENT_CERT is set: the gateway wants agy's client certificate, which keepmum, "
+                    "in between, cannot present")
     if any(a == "--remote-agent" or a.startswith("--remote-agent=") for a in args):
         return "--remote-agent runs the conversation on Google's machines, where keepmum cannot scan it"
     return None

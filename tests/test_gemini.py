@@ -222,7 +222,8 @@ def test_keepmum_gemini_end_to_end(tmp_path, monkeypatch):
 def _fake_agy(tmp_path, monkeypatch, body: str):
     """A stand-in `agy` on PATH running body, with keepmum's HOME and config in tmp_path."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    for k in launch.BYPASS_KEYS + ("CLOUD_CODE_URL", "AGY_LLM_GATEWAY_URL", "AGY_LLM_GATEWAY_PROXY_URL"):
+    for k in launch.BYPASS_KEYS + ("CLOUD_CODE_URL", "AGY_LLM_GATEWAY_URL", "AGY_LLM_GATEWAY_PROXY_URL",
+                                   "AGY_LLM_GATEWAY_WIRE_PROTOCOL", "AGY_LLM_GATEWAY_CLIENT_CERT"):
         monkeypatch.delenv(k, raising=False)
     cfg = tmp_path / ".config" / "keepmum"
     cfg.mkdir(parents=True, exist_ok=True)
@@ -265,7 +266,13 @@ def test_keepmum_agy_end_to_end(tmp_path, monkeypatch):
     assert canary in out.read_text()
 
 
-@pytest.mark.parametrize("env, args", [({"AGY_LLM_GATEWAY_URL": "https://llm.corp.example"}, []),
+GATEWAY = {"AGY_LLM_GATEWAY_URL": "https://llm.corp.example"}
+
+
+@pytest.mark.parametrize("env, args", [({**GATEWAY, "AGY_LLM_GATEWAY_WIRE_PROTOCOL": "openai"}, []),
+                                       ({**GATEWAY, "AGY_LLM_GATEWAY_PROXY_URL": "http://proxy.corp.example"}, []),
+                                       ({**GATEWAY, "AGY_LLM_GATEWAY_CLIENT_CERT": "/x/cert.pem"}, []),
+                                       ({**GATEWAY, "CLOUD_CODE_URL": "https://cc.corp.example"}, []),
                                        ({}, ["--remote-agent", "-p", "hi"])])
 def test_keepmum_agy_refuses_what_would_go_around_it(tmp_path, monkeypatch, env, args):
     from keepmum.cli import app
@@ -276,6 +283,36 @@ def test_keepmum_agy_refuses_what_would_go_around_it(tmp_path, monkeypatch, env,
         monkeypatch.setenv(k, v)
     result = CliRunner().invoke(app, ["agy", *args])
     assert result.exit_code == 2 and "nothing was started" in result.output and not ran.exists()
+
+
+def test_keepmum_agy_scans_a_gateway(tmp_path, monkeypatch):
+    """With AGY_LLM_GATEWAY_URL, agy sends its model calls to that gateway in the Gemini API's
+    format: keepmum takes the variable's place and forwards there, scanned."""
+    from keepmum.cli import app
+
+    canary = selftest.make_canary()
+    out = tmp_path / "reply.txt"
+    _fake_agy(tmp_path, monkeypatch, f"""\
+        import json, os, urllib.request
+        base = os.environ["AGY_LLM_GATEWAY_URL"]
+        assert base.endswith("/gemini") and "CLOUD_CODE_URL" not in os.environ, base
+        body = json.dumps({{"contents": [{{"role": "user", "parts": [{{"text": "token {canary}"}}]}}]}}).encode()
+        req = urllib.request.Request(base + "/v1beta/models/m:generateContent", data=body,
+                                     headers={{"content-type": "application/json", "authorization": "Bearer k"}})
+        open({str(out)!r}, "w").write(urllib.request.urlopen(req).read().decode())
+        """)
+    mock = selftest.MockUpstream()
+    upstream = launch.BackgroundServer(_App(mock.app))
+    upstream.start()
+    monkeypatch.setenv("AGY_LLM_GATEWAY_URL", f"http://127.0.0.1:{upstream.port}")
+    try:
+        result = CliRunner().invoke(app, ["agy"])
+    finally:
+        upstream.stop()
+    assert result.exit_code == 0, result.output
+    sent = b"".join(mock.received).decode()
+    assert "generateContent" in sent and canary not in sent and PLACEHOLDER.search(sent)
+    assert canary in out.read_text()
 
 
 def test_stats_name_antigravity():

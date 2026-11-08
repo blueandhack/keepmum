@@ -248,7 +248,7 @@ def agy(ctx: typer.Context) -> None:
         _run_child,
         antigravity_env,
         antigravity_refusal,
-        antigravity_upstream,
+        antigravity_upstreams,
         log_to_file,
         shared_serve_port,
     )
@@ -263,14 +263,13 @@ def agy(ctx: typer.Context) -> None:
         raise typer.Exit(2)
     cfg = _config()
     _extension_news()
-    upstream = antigravity_upstream(env, cfg.port)
-    # The service forwards to Google; an address set here (another gateway) needs a proxy of its own.
-    port = None if upstream else shared_serve_port(cfg, need="antigravity")
+    upstreams = antigravity_upstreams(env, cfg.port)
+    # The service forwards to Google; an address set here (a gateway) needs a proxy of its own.
+    port = None if upstreams else shared_serve_port(cfg, need="antigravity")
     if port is not None:
         raise typer.Exit(_run_child([binary, *ctx.args], antigravity_env(port, env)))
     cfg, proxy = _proxy_or_exit(None, False, None, "agy")
-    if upstream:
-        proxy.prefixed["/antigravity"] = upstream
+    proxy.prefixed.update(upstreams)
     log_to_file(cfg.log_level)
     server = BackgroundServer(proxy)
     server.start()
