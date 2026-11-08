@@ -6,8 +6,8 @@ The real value may: `Xk9$mQ2…` in `echo "DB_PASSWORD=…"` would be expanded b
 call is encoded for where its placeholder sits:
 
 - a shell command: unquoted, in '…', in "…", in a heredoc (quoted delimiter: as is)
-- a Codex code-mode script (codemode.py): in a JavaScript string literal; a literal that is not a
-  patch is a command too, so the value is quoted for the shell first, then for JavaScript
+- a Codex code-mode script (codemode.py): in a JavaScript string literal; a literal passed to a
+  command, or one that may become a command, is quoted for the shell first, then for JavaScript
 - a JSON document in a tool's input (a file being written): in a JSON string
 
 A value that needs no quoting (a token: letters, digits, `_-./:@+=,%`) is put back as it is, so
@@ -135,36 +135,52 @@ def js_escape(value: str, quote: str) -> str:
     return out.replace(quote, "\\" + quote)
 
 
-def restore_script(source: str, swap) -> str:
-    """A code-mode script with each placeholder put back: in a string literal, escaped for it (and
-    quoted for the shell first, unless the literal is a patch); elsewhere, as it is."""
+def restore_script(source: str, swap_for, edits: list[tuple[int, int, str]] = ()) -> str:
+    """A code-mode script with each placeholder put back, escaped for its string literal, and
+    quoted for the shell first when the literal may be a command. `swap_for(literal)` gives the
+    swap for a codemode.Literal, or for None: code outside the literals; and whether the literal
+    is shell text. `edits`: (start, end, text) to put in place of code outside the literals."""
     from .codemode import _unescape, literals
 
     if not PLACEHOLDER.search(source):
         return source
     out, pos = [], 0
-    for start, end, quote, in_patch in literals(source):
-        raw = source[start:end]
+    outside, _ = swap_for(None)
+    edits = sorted(edits)
+
+    def code(a: int, b: int) -> str:
+        parts = []
+        for start, end, text in edits:
+            if a <= start < b:
+                parts += [_restore_raw(source[a:start], outside), text]
+                a = end
+        return "".join(parts) + _restore_raw(source[a:b], outside)
+
+    for lit in literals(source):
+        raw = source[lit.start:lit.end]
         if not PLACEHOLDER.search(raw):
             continue
-        out.append(_restore_raw(source[pos:start], swap))
+        out.append(code(pos, lit.start))
+        swap, shell = swap_for(lit)
         pieces, last = [], 0
         matches = list(PLACEHOLDER.finditer(raw))
-        ctx = {} if in_patch else shell_contexts(_unescape(raw), [len(_unescape(raw[:m.start()])) for m in matches])
+        # Positions in the whole literal: a template's chunks are one command.
+        at = {m.start(): len(_unescape(source[lit.span[0]:lit.start + m.start()])) for m in matches} if shell else {}
+        ctx = shell_contexts(_unescape(source[lit.span[0]:lit.span[1]]), list(at.values())) if shell else {}
         for m in matches:
             value = swap(m)
             pieces.append(raw[last:m.start()])
             if value is None:
                 pieces.append(m.group(0))
             else:
-                if not in_patch:
-                    value = shell_quote(value, ctx[len(_unescape(raw[:m.start()]))])
-                pieces.append(js_escape(value, quote))
+                if shell:
+                    value = shell_quote(value, ctx[at[m.start()]])
+                pieces.append(js_escape(value, lit.quote))
             last = m.end()
         pieces.append(raw[last:])
         out.append("".join(pieces))
-        pos = end
-    out.append(_restore_raw(source[pos:], swap))
+        pos = lit.end
+    out.append(code(pos, len(source)))
     return "".join(out)
 
 

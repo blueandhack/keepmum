@@ -122,6 +122,22 @@ def detector_of(source: str) -> tuple[str, str]:
     return "model", ""
 
 
+
+def _caller(item: dict) -> str:
+    """The tool a Responses call's output comes from. A Codex code-mode script that calls only one
+    MCP server's tools returns that server's results, so its output is that server's: a value it
+    found can go back to it (codemode.py)."""
+    from .codemode import CODE_TOOLS, MCP_RESOURCE_CALLS, parse
+
+    name = item["name"]
+    if name not in CODE_TOOLS or not isinstance(item.get("input"), str):
+        return name
+    script = parse(item["input"])
+    servers = {server_of(n) for n in script.calls}
+    if script.dynamic or len(servers) != 1 or script.calls & MCP_RESOURCE_CALLS or not next(iter(servers)).startswith("mcp__"):
+        return name
+    return f"{next(iter(servers))}__exec"
+
 class Redactor:
     def __init__(self, detector, vault: Vault, cache_size: int = 4096):
         self.detector = detector
@@ -371,7 +387,7 @@ class Redactor:
         if isinstance(items, str):
             items = [{"type": "message", "role": "user", "content": items}]
         if isinstance(items, list):
-            self._calls = {i["call_id"]: i["name"] for i in items if isinstance(i, dict)
+            self._calls = {i["call_id"]: _caller(i) for i in items if isinstance(i, dict)
                            and i.get("type") in ("function_call", "custom_tool_call")
                            and isinstance(i.get("call_id"), str) and isinstance(i.get("name"), str)}
             out["input"] = [RESPONSES_HINT, *(self._responses_item(i) for i in items)]
