@@ -104,11 +104,11 @@ class Pipeline:
             spans = [s for s in spans if s.type == "SECRET" or s.source.startswith("user:")]
         # A file name or path that only a guess (entropy, the model) took for a secret is not one:
         # a token rule that knows the format still masks a key, wherever it is.
-        from .rules import GUESSES, is_file_name
+        from .rules import GUESSES, is_file_name, is_path
 
         # The model also calls some dated file names an EMAIL: without an @, nothing is one.
         spans = [s for s in spans if not (s.source in GUESSES and (
-            s.type == "SECRET" and is_file_name(text, s.start, s.end)
+            s.type == "SECRET" and (is_file_name(text, s.start, s.end) or is_path(text[s.start:s.end]))
             or s.type == "EMAIL" and "@" not in text[s.start:s.end]))]
         refined = len(spans)
         # Counted per value, after overlapping hits merge: three rules on one token are one secret.
@@ -162,9 +162,10 @@ class Pipeline:
         detector that found it is turned off ([rules] off, or the model) or was your own rule and is gone."""
         if self.allowlist and self.allowlist.allows(value):
             return True
-        from .rules import GUESSES, is_file_name
+        from .rules import GUESSES, is_file_name, is_path
 
-        if kind == "SECRET" and sources and set(sources) <= GUESSES | {"known"} and is_file_name(value, 0, len(value)):
+        if kind == "SECRET" and sources and set(sources) <= GUESSES | {"known"} and (
+                is_file_name(value, 0, len(value)) or is_path(value)):
             return True  # a file name masked before keepmum knew better
         mine = {f"user:{r.id}" for r in self.rules.user_rules} if self.rules else set()
         if not self.pii and kind != "SECRET" and not any(x in mine for x in sources):
@@ -198,7 +199,10 @@ class Pipeline:
         pf = self.pf
         if not pf:
             return out
-        for s in self._model_detect(pf, text):
+        from .rules import file_view
+
+        # With personal data on, the model reads names in file names as words (rules.file_view).
+        for s in self._model_detect(pf, file_view(text) if self.pii else text):
             if s.type == "ACCOUNT" and self.refine and self.credential_not_account(text, s):
                 s = Span(s.start, s.end, "SECRET", s.confidence, s.source)
             if s.type != "SECRET" and not self.pii:
@@ -288,6 +292,23 @@ class Pipeline:
             a += 1
         while b > a and text[b - 1] in _PII_EDGE:
             b -= 1
+        if span.type not in ("EMAIL", "URL") and a < b:
+            # A name in a path or file name: not the folders before it, nor the rest of the file
+            # name after it (clients/Margaret Thornbury_resume.md is Margaret Thornbury). Every type
+            # but addresses with their own dots and underscores, so that no span the model also
+            # gives (an ADDRESS over Thornbury_cover) merges the name back into the file name.
+            from .rules import _EXT_AFTER
+
+            value = text[a:b]
+            if "/" in value:
+                a += value.rindex("/") + 1
+            # Cut at `_resume`, `_cover_letter`: an underscore before a lowercase word. Names are
+            # capitalized, so Margaret_Thornbury stays whole.
+            cut = next((i for i in range(a, b) if text[i] == "_" and text[i + 1:i + 2].islower()
+                        or text[i] == "." and _EXT_AFTER.match(text, i)), b)
+            b = cut
+            while b > a and text[b - 1] in _PII_EDGE + " ":
+                b -= 1
         return Span(a, b, span.type, span.confidence, span.source) if a < b else None
 
     @staticmethod

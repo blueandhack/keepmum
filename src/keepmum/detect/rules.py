@@ -37,6 +37,64 @@ class Rule:
     prose_guard: bool = False
     min_classes: int = 0  # of lowercase, uppercase, digits, other: below this the value is a word, not a secret
     user: bool = False  # written by the user ([rules] mask), reported as user:<name>
+    # "assignment": the regex ends where the value starts (its groups: "key", the name, and "open",
+    # an opening quote if any), and assignment_value finds where the value ends.
+    scan: str | None = None
+
+
+# What may follow the end of an unquoted value: the end, a space, punctuation, another escape, or
+# the next KEY= (in text that is itself a JSON or JavaScript string, after an escaped new line).
+_AFTER_VALUE = re.compile(r"""$|[\s,;)\]}>"'`\\+#*\[{<-]|[A-Za-z_][\w.-]*[ \t]*[=:]""")
+_AFTER_QUOTE = re.compile(r"""$|[\s,;)\]}>"'`\\+]""")
+_UPPER_KEY = re.compile(r"[A-Z0-9_.-]*[A-Z][A-Z0-9_.-]*")
+
+
+def assignment_value(text: str, start: int, opening: str, key: str, limit: int = 200) -> int | None:
+    """Where the value of `key = value` that starts at `start` ends, or None: it is no value.
+
+    Quoted (`opening` is its quote as the text writes it: `"`, or `\\"` in a JSON string): the value
+    runs to the same quote on the same line, spaces and all. A value with spaces is taken after an
+    environment-style key (DB_PASSWORD="p@ss w0rd $X"), or when it is a few words mixing three kinds
+    of character; not UI text ("passwordHint": "Use at least 8 characters").
+
+    Unquoted: the value runs to whitespace, `,`, `;` or a backtick. A quote, or an escape in text
+    that is itself a JSON or JavaScript string (`\\n`, `\\"`), ends it only where what follows looks
+    like an end: `Tr0ub4dor"&3x` is one value; in `ghp_…\\nLOG_LEVEL=info` the value is the token.
+    """
+    n = len(text)
+    stop = min(n, start + limit)
+    if opening:
+        close = text.find(opening, start, stop + len(opening))
+        while close > start and len(opening) == 1 and text[close - 1] == "\\":  # an escaped quote inside
+            close = text.find(opening, close + 1, stop + 1)
+        if close < 0 or "\n" in text[start:close]:
+            return None
+        value = text[start:close]
+        if any(c.isspace() for c in value):
+            words = value.split()
+            if not (_UPPER_KEY.fullmatch(key) or (len(words) <= 4 and char_classes("".join(words)) >= 3)):
+                return None
+        return close
+    i = start
+    while i < stop:
+        c = text[i]
+        if c.isspace() or c in ",;`":
+            break
+        if c == "\\":
+            # A run of backslashes and the character after it is one escape, at whatever depth the
+            # text is escaped: `\n` in a JSON string, `\\n` in JSON inside a JSON string.
+            j = i
+            while j < n and text[j] == "\\":
+                j += 1
+            nxt = text[j] if j < n else ""
+            if (nxt and nxt in "nrt" and _AFTER_VALUE.match(text, j + 1)) or (nxt and nxt in "\"'" and _AFTER_QUOTE.match(text, j + 1)):
+                break
+            i = j + 1
+            continue
+        if c in "\"'" and _AFTER_QUOTE.match(text, i + 1):
+            break
+        i += 1
+    return i
 
 
 class Allowlist:
@@ -75,6 +133,29 @@ _EXT_AFTER = re.compile(rf"\.(?:{FILE_EXT})(?![\w])", re.I)
 _ESCAPES_AT_END = re.compile(r'(?:\\[nrt"\\/])+$')
 # Detectors that guess at secrets from a string's look, not from a token's known format.
 GUESSES = frozenset({"rules:entropy", "pf-serve"})
+
+
+_JOINED = re.compile(r"(?<=[A-Za-z])_(?=[A-Za-z])")
+
+
+def file_view(text: str) -> str:
+    """text as the model should read it: in file names, an underscore between letters is a space
+    (Margaret Thornbury_resume.md). The model reads `Thornbury_resume` as one word and either misses
+    the name or takes the whole file name for it. Same length, so spans map back as they are."""
+    if "_" not in text:
+        return text
+    return _FILE.sub(lambda m: _JOINED.sub(" ", m.group()), text)
+
+
+# A piece of a path as people name things: one word in one case, or a few joined by - _ .
+_WORDISH = r"(?:[a-z][a-z0-9]*|[A-Z][A-Z0-9]*|[A-Z][a-z0-9]+|[0-9]+)"
+_PATH_OF_WORDS = re.compile(rf"\.{{0,2}}/?(?:{_WORDISH}(?:[-_.]{_WORDISH})*/)+{_WORDISH}(?:[-_.]{_WORDISH})*/?")
+
+
+def is_path(value: str) -> bool:
+    """value is a path of named pieces, with or without an extension (bench/results/PHASE0); not a
+    key that happens to hold a slash (wJalrXUtnFEMI/K7MDENG/…, whose pieces mix case at random)."""
+    return "/" in value and bool(_PATH_OF_WORDS.fullmatch(value))
 
 
 def is_file_name(text: str, start: int, end: int) -> bool:
@@ -159,6 +240,7 @@ class RulesDetector:
                 filters=r.get("filters", "placeholder"),
                 prose_guard=r.get("prose_guard", False),
                 min_classes=r.get("min_classes", 0),
+                scan=r.get("scan"),
             )
             for r in cfg.get("rule", [])
         ]
@@ -203,15 +285,22 @@ class RulesDetector:
             if rule.keywords and not any(k in lowered for k in rule.keywords):
                 continue
             for m in rule.regex.finditer(text):
-                start, end = m.span(rule.group)
+                if rule.scan == "assignment":
+                    start = m.end()
+                    end = assignment_value(text, start, m.group("open") or "", m.group("key"))
+                    if end is None or end - start < 6:
+                        continue
+                else:
+                    start, end = m.span(rule.group)
                 if start < 0 or start == end:
                     continue
+                value = text[start:end]
                 # Code closes calls after a value (`flag=False))`): judge the value without them.
-                if self.looks_like_placeholder(m.group(rule.group).rstrip(")]}>"), rule.filters):
+                if self.looks_like_placeholder(value.rstrip(")]}>"), rule.filters):
                     continue
-                if rule.prose_guard and _PROSE_WORD.fullmatch(m.group(rule.group)) and _PROSE_NEXT.match(text, end):
+                if rule.prose_guard and _PROSE_WORD.fullmatch(value) and _PROSE_NEXT.match(text, end):
                     continue
-                if rule.min_classes and char_classes(m.group(rule.group)) < rule.min_classes:
+                if rule.min_classes and char_classes(value) < rule.min_classes:
                     continue
                 spans.append(Span(start, end, rule.type, rule.confidence, f"user:{rule.id}" if rule.user else f"{SOURCE}:{rule.id}"))
         if self.entropy.get("enabled") and "entropy" not in self.off:

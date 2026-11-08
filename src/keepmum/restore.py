@@ -9,7 +9,7 @@ import shlex
 from collections import Counter
 
 from .detect import TYPES
-from .vault import PLACEHOLDER, Vault
+from .vault import PLACEHOLDER, Vault, canonical
 
 log = logging.getLogger("keepmum")
 
@@ -99,9 +99,27 @@ def resolve(m, vault: Vault) -> tuple[str, str | None, str]:
     return ph, value, ""
 
 
+def _in_json_string(text: str):
+    """A test for positions inside a string of text, when text is one JSON document: a value put
+    back there is JSON-escaped, as it was before it was masked (redact.py keeps values unescaped)."""
+    from .encode import json_strings
+
+    strings = json_strings(text) if text.lstrip()[:1] in ("{", "[") and PLACEHOLDER.search(text) else None
+    if not strings:
+        return lambda i: False
+    return lambda i: any(a <= i < b for a, b in strings)
+
+
+def _as_json(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)[1:-1]
+
+
 def restore_text(text: str, vault: Vault, counts: Counter | None = None, only: set[str] | None = None) -> str:
     """Replace every placeholder the vault knows (with `only`, just those placeholders).
-    Unknown placeholders stay as they are."""
+    Unknown placeholders stay as they are. In a JSON document, values in strings are escaped.
+    A placeholder the model respelled (lower case, hyphens) is put back too."""
+    text = canonical(text, vault)
+    inside = _in_json_string(text)
 
     def swap(m):
         ph, value, suffix = resolve(m, vault)
@@ -113,7 +131,7 @@ def restore_text(text: str, vault: Vault, counts: Counter | None = None, only: s
             return m.group(0)
         if counts is not None:
             counts[ph.split("_")[1]] += 1
-        return value + suffix
+        return (_as_json(value) if inside(m.start()) else value) + suffix
 
     return PLACEHOLDER.sub(swap, text)
 
@@ -148,6 +166,8 @@ def next_run(before: str, text: str) -> str:
 def restore_reply(text: str, vault: Vault, counts: Counter | None = None, before: str = "") -> str:
     """restore_text for reply text a client shows, except placeholders inside an http(s) address.
     `before`: the run the reply ended in before `text` (next_run), when it came in earlier pieces."""
+    text = canonical(text, vault)
+    inside = _in_json_string(text)
 
     def swap(m):
         ph, value, suffix = resolve(m, vault)
@@ -155,7 +175,10 @@ def restore_reply(text: str, vault: Vault, counts: Counter | None = None, before
             if counts is not None:
                 counts[(URL, ph.split("_")[1])] += 1
             return m.group(0)
-        return restore_text(m.group(0), vault, counts)
+        restored = restore_text(m.group(0), vault, counts)
+        if value is not None and inside(m.start()) and restored != m.group(0):
+            return _as_json(value) + suffix
+        return restored
 
     return PLACEHOLDER.sub(swap, text)
 
@@ -225,9 +248,15 @@ def tool_values(name: str, value, vault: Vault, policy: dict) -> tuple[set[str] 
     return allowed, decisions
 
 
-def _command_texts(value):
+def _command_texts(value, name: str | None = None):
     """The strings of a shell tool's input that could be commands (not its description). An argv
-    list is also read as one command line, so `["curl", "host"]` is still curl and its host."""
+    list is also read as one command line, so `["curl", "host"]` is still curl and its host. A
+    code-mode script (codemode.py) gives its string literals, not the patches it applies."""
+    from .codemode import CODE_TOOLS, script_strings
+
+    if name in CODE_TOOLS and isinstance(value, str):
+        yield from script_strings(value)
+        return
     if isinstance(value, str):
         yield value
     elif isinstance(value, list):
@@ -247,11 +276,15 @@ def _wrong_destinations(name: str, value, found: Counter, vault: Vault, policy: 
 
     if name not in SHELL_TOOLS or not found:
         return set()
-    hosts = set().union(*(hosts_in(t) for t in _command_texts(value)))
+    texts = list(_command_texts(value, name))
+    hosts = set().union(*(hosts_in(t) for t in texts))
     if not hosts:
         return set()
+    # Only a placeholder in what runs can be sent: one in a description, or in a patch a code-mode
+    # script applies, is not.
+    commands = "\n".join(texts)
     wrong = set()
-    for ph in found:
+    for ph in (ph for ph in found if ph in commands):
         sources = vault.sources_of(vault.value(ph))
         allowed = allowed_hosts(sources, getattr(policy, "destinations", None))
         bad = wrong_hosts(hosts, allowed) if allowed is not None else []
@@ -274,6 +307,18 @@ def restore_tool(name: str, value, vault: Vault, policy: dict, counts: Counter |
             tree = json.loads(value)
         except ValueError:
             parse = False
+    tree = _canonical_tree(tree, vault)
+    if not parse:
+        value = tree
+    if (typo := _typo(name, tree, vault)) is not None:
+        from .commands import refusal
+
+        if counts is not None:
+            counts[UNRESOLVED] += 1
+        refused = refusal(name, tree, [], message=(
+            f"keepmum could not run this: {typo[0]} is not a placeholder from this conversation (did you mean "
+            f"{typo[1]}?). It was not run. Copy each KEEPMUM_ placeholder exactly as it appears earlier."))
+        return json.dumps(refused, ensure_ascii=False) if parse else refused
     review = getattr(policy, "review", None)
     if review is not None and (replaced := review(name, tree)) is not None:
         return json.dumps(replaced, ensure_ascii=False) if parse else replaced  # a refused command: no values go in
@@ -284,8 +329,86 @@ def restore_tool(name: str, value, vault: Vault, policy: dict, counts: Counter |
     if only is not None and not only:
         return value  # nothing to put back: the input goes out exactly as the model wrote it
     if parse:
-        return json.dumps(_values(tree, vault, counts, only), ensure_ascii=False)
-    return _values(value, vault, counts, only)
+        return json.dumps(_tool_values(name, tree, vault, counts, only), ensure_ascii=False)
+    return _tool_values(name, value, vault, counts, only)
+
+
+def _canonical_tree(value, vault: Vault):
+    """Every string in a tool's input (keys too) with respelled placeholders written exactly."""
+    if isinstance(value, str):
+        return canonical(value, vault)
+    if isinstance(value, dict):
+        return {(canonical(k, vault) if isinstance(k, str) else k): _canonical_tree(v, vault) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_canonical_tree(v, vault) for v in value]
+    return value
+
+
+def _typo(name: str, value, vault: Vault) -> tuple[str, str] | None:
+    """(the placeholder, the one it is a typo of) when a command holds a placeholder keepmum did not
+    make but nearly did: run, it would name a file or write a value `KEEPMUM_…`. Only commands: a
+    file being written can hold placeholder-shaped text on purpose (keepmum's own tests)."""
+    from .codemode import CODE_TOOLS
+    from .destinations import SHELL_TOOLS
+
+    if name not in SHELL_TOOLS and name not in CODE_TOOLS:
+        return None
+    for text in _command_texts(value, name):
+        for m in PLACEHOLDER.finditer(text):
+            if resolve(m, vault)[1] is None and (near := vault.near(m.group(0))) is not None:
+                return m.group(0), near
+    return None
+
+
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish"})
+_SHELL_FLAG = re.compile(r"-[a-z]*c[a-z]*")
+
+
+def _tool_values(name: str, value, vault: Vault, counts: Counter | None, only: set[str] | None):
+    """A tool's input with its real values, each encoded for where its placeholder sits (encode.py):
+    quoted for the shell in a command, escaped in a code-mode script's literals or in a JSON
+    document being written, and as it is everywhere else."""
+    from .codemode import CODE_TOOLS
+    from .destinations import SHELL_TOOLS
+    from .encode import restore_command, restore_json_text, restore_script
+
+    def swap(m):
+        ph, real, suffix = resolve(m, vault)
+        if real is None:
+            if counts is not None:
+                counts[UNRESOLVED] += 1
+            return None
+        if only is not None and ph not in only:
+            return None
+        if counts is not None:
+            counts[ph.split("_")[1]] += 1
+        return real + suffix
+
+    def plain(text: str) -> str:
+        return PLACEHOLDER.sub(lambda m: v if (v := swap(m)) is not None else m.group(0), text)
+
+    if name in CODE_TOOLS and isinstance(value, str):
+        return restore_script(value, swap)
+    shell = name in SHELL_TOOLS
+
+    def walk(v, key=None):
+        if isinstance(v, str):
+            if shell and key in ("command", "cmd", "commands", "script"):
+                return restore_command(v, swap)
+            doc = restore_json_text(v, swap) if PLACEHOLDER.search(v) else None
+            return doc if doc is not None else plain(v)
+        if isinstance(v, dict):
+            return {(plain(k) if isinstance(k, str) else k): walk(x, k) for k, x in v.items()}
+        if isinstance(v, list):
+            if shell and v and all(isinstance(x, str) for x in v) and key != "commands":
+                # argv: only the script after `bash -c` is shell; other arguments go as they are
+                program = v[0].rsplit("/", 1)[-1]
+                return [restore_command(x, swap) if i > 0 and program in _SHELLS and _SHELL_FLAG.fullmatch(v[i - 1])
+                        else plain(x) for i, x in enumerate(v)]
+            return [walk(x, key) for x in v]
+        return v
+
+    return walk(value)
 
 
 def restore_response(body: dict, vault: Vault, policy: dict[str, str] = DEFAULT_POLICY, counts: Counter | None = None) -> dict:

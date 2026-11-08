@@ -17,6 +17,7 @@ the clear cases; a command built to hide what it does gets past them, so the res
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 
@@ -63,7 +64,7 @@ def command_lines(name: str, value) -> list[str]:
 
     if name not in SHELL_TOOLS:
         return []
-    return [t for t in _command_texts(value) if isinstance(t, str) and t.strip()]
+    return [t for t in _command_texts(value, name) if isinstance(t, str) and t.strip()]
 
 
 # Text that echo or printf only prints is not run: single-quoted, or double-quoted without $( or `.
@@ -80,12 +81,17 @@ def check(text: str) -> list[str]:
     return hits
 
 
-def refusal(name: str, value, labels: list[str]):
+def refusal(name: str, value, labels: list[str], message: str | None = None):
     """The tool input to send in place of a refused command: it prints why, and fails. The same
     shape as the model's (a command string, or an argv list), with its other fields kept."""
-    message = (f"keepmum refused this command: {', '.join(labels)}. It was not run. If the user wants it run, "
-               "they can run it themselves, or switch the commands check to warn (keepmum guard commands warn).")
+    message = message or (f"keepmum refused this command: {', '.join(labels)}. It was not run. If the user wants it "
+                          "run, they can run it themselves, or switch the commands check to warn "
+                          "(keepmum guard commands warn).")
     script = f"printf '%s\\n' {shlex.quote(message)} >&2; exit 1"
+    from .codemode import CODE_TOOLS
+
+    if name in CODE_TOOLS and isinstance(value, str):  # a code-mode script: refuse in JavaScript
+        return f"throw new Error({json.dumps(message)});"
 
     def swap(v, key=None):
         if isinstance(v, dict):
