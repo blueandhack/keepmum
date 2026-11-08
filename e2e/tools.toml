@@ -1,0 +1,41 @@
+# Every tool each agent offers its model in the CI setup (e2e/ci.sh: pinned versions, dummy API keys,
+# no user config), and what keepmum does with a value in its input. `--check-tools` fails a run on
+# any tool not listed here: a new tool may run commands, write files or reach the network in a way
+# keepmum does not know yet. Codex 0.147 moved every command into its code-mode `exec` tool, and
+# keepmum restored real values into it unchecked until the e2e suite found it.
+#
+# A new tool: find out what it does, make sure keepmum handles it (restore.DEFAULT_POLICY for network
+# tools, destinations.SHELL_TOOLS and codemode.CODE_TOOLS for commands), add a case if it can touch
+# disk or network, then list it here. A tool no longer offered is only reported.
+#
+# Checked against Codex 0.147.0 and Claude Code 2.1.310 on Nov 8, 2026.
+
+[codex]
+"exec" = "code mode: a JavaScript script calling the exec:* tools; its string literals are read as commands (codemode.py), its patches as file text, values escaped for JavaScript"
+"exec:exec_command" = "runs a shell command, from an exec script: destinations and commands checks, values quoted for the shell"
+"exec:write_stdin" = "types into a running command, from an exec script: its text is read as a command"
+"exec:apply_patch" = "writes files, from an exec script: values restored into the patch text"
+"exec:update_plan" = "the plan the user sees: restored as text"
+"exec:view_image" = "opens a local image by path: restored"
+"wait" = "waits on a running exec script: no values"
+"request_user_input" = "asks the user a question: restored"
+"spawn_agent" = "starts a sub-agent on this Mac, whose own requests go through keepmum: restored"
+"send_message" = "a message to a sub-agent on this Mac: restored"
+"followup_task" = "more work for a sub-agent on this Mac: restored"
+"wait_agent" = "waits on a sub-agent: no values"
+"list_agents" = "lists sub-agents: no values"
+"interrupt_agent" = "stops a sub-agent: no values"
+
+[claude]
+"Bash" = "runs a shell command: destinations and commands checks, values quoted for the shell"
+"Write" = "writes a file: restored; in a JSON file, escaped"
+"Edit" = "edits a file: restored, so the text it replaces matches the file; in a JSON file, escaped"
+"Read" = "reads a file by path: restored"
+"Agent" = "starts a sub-agent on this Mac, whose own requests go through keepmum: restored"
+"Skill" = "runs one of the user's skills on this Mac: restored"
+"Workflow" = "runs a workflow of sub-agents on this Mac: restored"
+"ScheduleWakeup" = "schedules this session to resume on this Mac: restored"
+"ListAgents" = "lists agents on this Mac: no values"
+"ReportFindings" = "shows review findings to the user: restored"
+"ToolSearch" = "loads the schema of another tool: no values"
+"DeferredToolPlaceholder" = "stands in for tools loaded later through ToolSearch: no values"

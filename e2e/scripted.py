@@ -53,6 +53,7 @@ class ScriptedModel:
         self.turns = turns
         self.render = render
         self.served: list[dict] = []  # per request: api, turn, outputs seen
+        self.tools: set[str] = set()  # every tool the agent offered its model (tools.toml)
         self.requests: list[dict] = []  # the parsed bodies, as keepmum sent them
         self.app = Starlette(routes=[Route("/{path:path}", self.handle, methods=["GET", "POST"])])
 
@@ -71,9 +72,11 @@ class ScriptedModel:
             return JSONResponse({"input_tokens": 100})
         if path.endswith("/v1/messages"):
             self.requests.append(body)
+            self.tools |= {t.get("name") for t in body.get("tools") or [] if isinstance(t, dict) and t.get("name")}
             return self._messages(body)
         if path.endswith("/responses"):
             self.requests.append(body)
+            self.tools |= {n for n in self._tool_names(body) if n}
             return self._responses(body)
         return JSONResponse({"error": f"scripted model: no {path}"}, status_code=404)
 
@@ -162,11 +165,17 @@ class ScriptedModel:
 
     @staticmethod
     def _tool_names(body: dict) -> set[str]:
-        names = {t.get("name") for t in body.get("tools") or [] if isinstance(t, dict)}
+        """The tools a Responses request offers, and those a code-mode `exec` script can call, as
+        exec:<name> (declared in its description: `declare const tools: { apply_patch(…`)."""
+        tools = [t for t in body.get("tools") or [] if isinstance(t, dict)]
         for item in body.get("input") or []:
             if isinstance(item, dict) and item.get("type") == "additional_tools":
                 for ns in item.get("tools") or []:
-                    names |= {t.get("name") for t in ns.get("tools") or [] if isinstance(t, dict)}
+                    tools += [t for t in ns.get("tools") or [] if isinstance(t, dict)]
+        names = {t.get("name") for t in tools}
+        for t in tools:
+            if t.get("name") == "exec" and isinstance(t.get("description"), str):
+                names |= {f"exec:{n}" for n in re.findall(r"declare const tools: \{ (\w+)\(", t["description"])}
         return names
 
     def _responses(self, body: dict) -> Response:

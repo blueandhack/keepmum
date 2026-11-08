@@ -1,0 +1,40 @@
+name: Agents (latest)
+
+# Daily: the e2e suite (e2e/ci.sh) against the newest Codex and Claude Code, not the versions ci.yml
+# pins. An agent update can change how it calls tools (Codex 0.147 moved every command into a
+# JavaScript `exec` tool) and keepmum must follow. This fails on the day such an update ships: a
+# case that breaks, or a tool the agent now offers that e2e/tools.toml does not list. A failed
+# scheduled run is emailed to whoever last changed this schedule. To move to the new versions, run
+# the suite with them, fix what it finds, and raise the pins in ci.yml.
+on:
+  schedule:
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - run: uv sync --frozen
+      - name: Install the newest agents
+        run: |
+          npm install --no-fund --no-audit --prefix "$RUNNER_TEMP/agents" @openai/codex@latest @anthropic-ai/claude-code@latest
+          echo "$RUNNER_TEMP/agents/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Compare with the pinned versions
+        run: |
+          {
+            echo "## Agent versions"
+            echo
+            echo "| Agent | Newest | Pinned in ci.yml |"
+            echo "|---|---|---|"
+            echo "| Codex | $(codex --version | awk '{print $NF}') | $(sed -n 's/.*CODEX_VERSION: //p' .github/workflows/ci.yml) |"
+            echo "| Claude Code | $(claude --version | awk '{print $1}') | $(sed -n 's/.*CLAUDE_CODE_VERSION: //p' .github/workflows/ci.yml) |"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+      - run: e2e/ci.sh
