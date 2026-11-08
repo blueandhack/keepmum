@@ -19,6 +19,27 @@ Codex or Claude Code, running real tools on a real folder, through keepmum. The 
 The exit code is 0 when nothing regressed. Results go to `e2e/results/<mode>-<time>/summary.md`
 (not committed).
 
+### In CI
+
+The `agents` job in `.github/workflows/ci.yml` runs the scripted suite on every change, with Codex and
+Claude Code pinned to the versions this suite was last checked against (`CODEX_VERSION`,
+`CLAUDE_CODE_VERSION`). It calls `e2e/ci.sh`, which you can run yourself:
+
+```sh
+e2e/ci.sh                  # every case; e2e/ci.sh fn- for some
+```
+
+The agents sign in with dummy API keys, in a temporary folder. Nothing reaches a provider in scripted
+mode, so the key is never checked, and no real secret is needed. Your own logins (`~/.codex`, the
+Keychain) are not read or written. Two consequences:
+
+- CI covers keepmum's API-key routes (`/openai`, the Messages API with `x-api-key`). The ChatGPT-login
+  route (`/chatgpt`, zstd bodies) is covered when you run `python -m e2e run` on a Mac signed in that way.
+- Cases that need the Privacy Filter model (`config` with `model = true`) skip themselves on a runner
+  without it.
+
+To move to a new agent version, run the suite locally with it, then raise the pin in the same change.
+
 ## How a run works
 
 ```
