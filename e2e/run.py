@@ -149,6 +149,7 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         (d / "stderr.txt").write_text(case.shown(stderr))
         (d / "requests.jsonl").write_text("".join(json.dumps({
             "target": ex.target, "method": ex.method, "path": ex.path, "status": ex.status,
+            "headers": sorted(ex.headers),  # names only: values may be the agent's login
             "body": case.shown(ex.body.decode("utf-8", "replace")),
             "reply": case.shown(ex.reply.decode("utf-8", "replace"))}) + "\n" for ex in tap.exchanges))
         (d / "workspace.json").write_text(json.dumps({case.shown(k): case.shown(v.decode("utf-8", "replace"))
