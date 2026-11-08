@@ -334,3 +334,54 @@ def test_antigravity_web_tools_keep_placeholders():
                        ("execute_browser_javascript", {"Script": f"fill('{ph}')"})]:
         assert ph in json.dumps(restore_tool(name, args, v, DEFAULT_POLICY, Counter())), name
     assert restore_tool("write_to_file", {"CodeContent": ph}, v, DEFAULT_POLICY, Counter()) == {"CodeContent": "hunter2-Xq9vL"}
+
+
+def test_antigravity_call_mcp_tool_is_decided_as_the_server_it_names():
+    """agy reaches an MCP server's lazily loaded tools through call_mcp_tool {ServerName, ToolName,
+    Arguments}. A value the server returned is credited to it (the result is matched to its call by
+    id), so it can go back to that server, and only there; a secret never goes."""
+    from keepmum.restore import DEFAULT_POLICY, restore_tool
+    from keepmum.tools import call_name
+
+    r = Redactor(Pipeline(RulesDetector(), pii=True), Vault(secrets.token_bytes(32)))
+    email = "margaret.thornbury@gmail.com"
+    found = {"ServerName": "notes", "ToolName": "lookup", "Arguments": {"name": "Margaret"}}
+    body = r.redact_gemini_request({"contents": [
+        {"role": "user", "parts": [{"text": "find Margaret, token ghp_" + "a1B2c3D4" * 4 + "Zz9q"}]},
+        {"role": "model", "parts": [{"functionCall": {"id": "c1", "name": "call_mcp_tool", "args": found}}]},
+        {"role": "user", "parts": [{"functionResponse": {"id": "c1", "name": "call_mcp_tool",
+                                                         "response": {"output": f"Margaret: {email}"}}}]}]})
+    text = json.dumps(body)
+    ph = next(m.group(0) for m in PLACEHOLDER.finditer(text) if m.group(0).startswith("KEEPMUM_EMAIL"))
+    tok = next(m.group(0) for m in PLACEHOLDER.finditer(text) if m.group(0).startswith("KEEPMUM_SECRET"))
+    assert call_name("call_mcp_tool", found) == "mcp__notes__lookup"
+
+    def call(server, args):
+        counts = Counter()
+        out = restore_tool("call_mcp_tool", {"ServerName": server, "ToolName": "send_note", "Arguments": args},
+                           r.vault, DEFAULT_POLICY, counts)
+        return out["Arguments"], counts
+
+    sent, counts = call("notes", {"text": f"reach {ph} with {tok}"})
+    assert sent["text"] == f"reach {email} with {tok}"  # its own value back; the token never
+    assert any(k[1] == "mcp__notes__send_note" for k in counts if isinstance(k, tuple))
+    assert call("slack", {"text": f"reach {ph}"})[0]["text"] == f"reach {ph}"  # another server: kept
+    assert call("bad__name", {"text": f"reach {ph}"})[0]["text"] == f"reach {ph}"  # no server read: kept
+
+
+def test_gemini_results_without_ids_are_credited_in_order():
+    """agy's gateway mode sends no call ids: results answer calls in order, as the Gemini API pairs
+    them. Two call_mcp_tool calls to two servers in one turn: each result is its own server's."""
+    from keepmum.redact import _gemini_results
+
+    def call(server):
+        return {"functionCall": {"name": "call_mcp_tool", "args": {"ServerName": server, "ToolName": "find", "Arguments": {}}}}
+
+    def result():
+        return {"functionResponse": {"name": "call_mcp_tool", "response": {"output": "x"}}}
+
+    first, second, shell = result(), result(), {"functionResponse": {"name": "run_command", "response": {}}}
+    contents = [{"role": "model", "parts": [call("gmail"), {"functionCall": {"name": "run_command", "args": {}}}, call("slack")]},
+                {"role": "user", "parts": [first, shell, second]}]
+    got = _gemini_results(contents)
+    assert (got[id(first)], got[id(second)], got[id(shell)]) == ("mcp__gmail__find", "mcp__slack__find", "run_command")

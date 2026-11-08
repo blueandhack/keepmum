@@ -73,8 +73,9 @@ Each run gets:
   can reach the network; the cases' values are synthetic. Scripted, it has no login and a HOME of its
   own: its gateway mode (`AGY_LLM_GATEWAY_URL`, a dummy key) sends its model calls to keepmum's
   `/gemini`, and it runs without `--sandbox`, which in a fresh HOME refuses every write to the
-  workspace (the commands are the case's own). No MCP case: agy takes MCP servers only from its global
-  config.
+  workspace (the commands are the case's own). MCP cases run scripted only: agy takes MCP servers
+  only from `~/.gemini/config/mcp_config.json`, which the harness writes only in a run's own HOME;
+  `mcp(*)` is allowed for the session, as headless agy denies MCP calls otherwise.
 - **A workspace** built from the case's `[files]`, snapshotted before and after.
 
 ### Two modes

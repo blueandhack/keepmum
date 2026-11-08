@@ -71,3 +71,6 @@
 "define_subagent" = "defines a sub-agent type (name, prompt) on this Mac: restored"
 "manage_subagents" = "lists or stops sub-agents: no values"
 "ask_question" = "asks the user multiple-choice questions: restored"
+"call_mcp_tool" = "calls an MCP server's tool (ServerName, ToolName, Arguments): decided as mcp__<server>__<tool> (tools.call_name), its result credited to that server"
+"list_resources" = "lists an MCP server's resources (ServerName): decided as that server's tool"
+"read_resource" = "reads a resource from the MCP server its ServerName names: decided as that server's tool"

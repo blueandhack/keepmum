@@ -48,6 +48,14 @@ def _halves(text: str) -> list[str]:
     return [p for p in (text[:cut], text[cut:]) if p]
 
 
+RAW = ("codex", "claude", "agy")  # a call with only one of these keys is that agent's alone
+
+
+def _calls(turn: dict, agent: str) -> list[dict]:
+    """The calls of a turn that `agent` makes."""
+    return [c for c in turn.get("calls", []) if not (len(c) == 1 and next(iter(c)) in RAW and agent not in c)]
+
+
 class ScriptedModel:
     def __init__(self, turns: list[dict], render):
         """`render(template, cwd)`: a script string as the model writes it (placeholders, cwd)."""
@@ -90,12 +98,12 @@ class ScriptedModel:
 
     # --- which turn ---------------------------------------------------------------
 
-    def _turn(self, outputs: int) -> tuple[int, dict]:
+    def _turn(self, outputs: int, agent: str) -> tuple[int, dict]:
         done = 0
         for i, turn in enumerate(self.turns):
             if done >= outputs:
                 return i, turn
-            done += len(turn.get("calls", []))
+            done += len(_calls(turn, agent))
         return len(self.turns), {"say": "Done."}
 
     @staticmethod
@@ -113,13 +121,13 @@ class ScriptedModel:
             return self._anthropic([{"type": "text", "text": "ok"}], body)
         outputs = sum(1 for m in body.get("messages") or [] if isinstance(m.get("content"), list)
                       for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_result")
-        index, turn = self._turn(outputs)
+        index, turn = self._turn(outputs, "claude")
         cwd = self._cwd(body)
         self.served.append({"api": "messages", "turn": index, "outputs": outputs, "cwd": cwd})
         blocks = []
         if turn.get("say"):
             blocks.append({"type": "text", "text": self.render(turn["say"], cwd)})
-        for i, call in enumerate(c for c in turn.get("calls", []) if set(c) not in ({"codex"}, {"agy"})):
+        for i, call in enumerate(_calls(turn, "claude")):
             name, args = self._claude_call(call, cwd)
             blocks.append({"type": "tool_use", "id": f"toolu_e2e_{index}_{i}", "name": name, "input": args})
         return self._anthropic(blocks, body)
@@ -190,7 +198,7 @@ class ScriptedModel:
         items = body.get("input") if isinstance(body.get("input"), list) else []
         outputs = sum(1 for i in items if isinstance(i, dict)
                       and i.get("type") in ("function_call_output", "custom_tool_call_output"))
-        index, turn = self._turn(outputs)
+        index, turn = self._turn(outputs, "codex")
         cwd = self._cwd(body)
         code_mode = "exec" in self._tool_names(body) and "apply_patch" not in {t.get("name") for t in body.get("tools") or []}
         self.served.append({"api": "responses", "turn": index, "outputs": outputs, "cwd": cwd, "code_mode": code_mode})
@@ -198,7 +206,7 @@ class ScriptedModel:
         if turn.get("say"):
             out_items.append({"type": "message", "id": f"msg_e2e_{index}", "role": "assistant", "status": "completed",
                               "content": [{"type": "output_text", "text": self.render(turn["say"], cwd), "annotations": []}]})
-        for i, call in enumerate(c for c in turn.get("calls", []) if set(c) not in ({"claude"}, {"agy"})):
+        for i, call in enumerate(_calls(turn, "codex")):
             out_items.append(self._codex_call(call, cwd, code_mode, f"{index}_{i}"))
         return self._openai(out_items)
 
@@ -273,13 +281,13 @@ class ScriptedModel:
             return self._gemini([{"text": "ok"}], stream)
         outputs = sum(1 for c in body.get("contents") or [] for part in c.get("parts") or []
                       if isinstance(part, dict) and "functionResponse" in part)
-        index, turn = self._turn(outputs)
+        index, turn = self._turn(outputs, "agy")
         cwd = self._cwd(body)
         self.served.append({"api": "gemini", "turn": index, "outputs": outputs, "cwd": cwd})
         parts = []
         if turn.get("say"):
             parts.append({"text": self.render(turn["say"], cwd)})
-        for i, call in enumerate(c for c in turn.get("calls", []) if set(c) not in ({"codex"}, {"claude"})):
+        for i, call in enumerate(_calls(turn, "agy")):
             name, args = self._agy_call(call, cwd)
             parts.append({"functionCall": {"id": f"call_e2e_{index}_{i}", "name": name, "args": args}})
         return self._gemini(parts, stream)

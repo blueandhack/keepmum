@@ -24,7 +24,7 @@ calls = [{ shell = "cat .env" }]
 
 [[script]]
 # Codex: one script, as a code-mode model writes it: the command, then the note, the token in a variable.
-# Claude Code: the same as two tool calls.
+# Claude Code and the Antigravity CLI: the same as two tool calls (agy's MCP tools go through call_mcp_tool).
 calls = [
   { shell = "printf 'DEPLOY_TOKEN=%s\\n' {{ph:tok}} > deploy.env", codex = """
 const tok = "{{ph:tok}}";
@@ -33,6 +33,7 @@ text(r);
 text(await tools.mcp__notes__send_note({text: `The deploy token is set up: ${tok}`}));
 """ },
   { claude = { name = "mcp__notes__send_note", input = { text = "The deploy token is set up: {{ph:tok}}" } } },
+  { agy = { name = "call_mcp_tool", args = { ServerName = "notes", ToolName = "send_note", Arguments = { text = "The deploy token is set up: {{ph:tok}}" } } } },
 ]
 
 [[script]]

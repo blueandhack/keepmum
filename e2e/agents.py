@@ -42,7 +42,7 @@ class Agent:
     binary = ""
     api = ""  # the provider route keepmum serves it on: anthropic, chatgpt, openai, antigravity
     modes = ("scripted", "live")  # scripted needs the scripted model to speak its provider's API
-    mcp = True  # it can be given the stub MCP server for one run
+    mcp_modes = ("scripted", "live")  # where it can be given the stub MCP server for one run
 
     def available(self) -> bool:
         return shutil.which(self.binary) is not None
@@ -182,23 +182,25 @@ class Antigravity(Agent):
     CLOUD_CODE_URL moves to keepmum's /antigravity; its conversations are kept in the user's
     ~/.gemini/antigravity-cli. Scripted: no login at all, its gateway mode (AGY_LLM_GATEWAY_URL, a
     dummy key) on keepmum's /gemini, in a HOME of its own. Both are set as `keepmum agy` sets them.
-    No MCP: agy takes MCP servers only from its global config, never for one session."""
+    MCP scripted only: agy takes MCP servers only from ~/.gemini/config, which only the scripted
+    run's own HOME lets the harness write."""
 
     name, binary, api = "agy", "agy", "antigravity"
+    MCP = frozenset({"call_mcp_tool", "list_resources", "read_resource"})  # the server is in the arguments
     # search_web asks Code Assist (generateContent, requestType web_search): back through keepmum.
     ROUTED = frozenset({"search_web"})
     # Fetched or done from this Mac: keepmum keeps placeholders in them (restore.DEFAULT_POLICY).
     NETWORK = frozenset({"read_url_content", "open_browser_url", "read_browser_page", "click_browser_pixel",
                          "execute_browser_javascript", "capture_browser_console_logs", "capture_browser_screenshot",
-                         "list_browser_pages", "call_mcp_tool"})  # and browser_*
-    mcp = False
+                         "list_browser_pages"})  # and browser_*
+    mcp_modes = ("scripted",)
 
     def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
         # Headless agy denies every command no rule allows. This rule holds for this session only
         # (--settings is never saved). Live, --sandbox restricts the terminal, as Claude Code's does.
         # Scripted, the commands are the case's own, and agy's sandbox, in a HOME of its own, would
         # refuse every write to the workspace.
-        settings = json.dumps({"permissions": {"allow": ["command(*)"]}})
+        settings = json.dumps({"permissions": {"allow": ["command(*)", *(["mcp(*)"] if mcp else [])]}})
         argv = [shutil.which(self.binary), "-p", prompt, "--output-format", "stream-json", "--mode", "accept-edits",
                 *(["--sandbox"] if mode == "live" else []), "--settings", settings,
                 *(["--model", model] if model else []), *extra]
@@ -210,6 +212,11 @@ class Antigravity(Agent):
             home.mkdir(exist_ok=True)
             env |= {"HOME": str(home), "AGY_LLM_GATEWAY_URL": "https://gateway.e2e.invalid",
                     "AGY_LLM_GATEWAY_API_KEY": "e2e-dummy-key"}
+            if mcp:
+                config = home / ".gemini" / "config"
+                config.mkdir(parents=True, exist_ok=True)
+                (config / "mcp_config.json").write_text(json.dumps({"mcpServers": {mcp["name"]: {
+                    "command": mcp["command"], "args": mcp["args"], "env": mcp["env"], "disabled": False}}}))
         return argv, antigravity_env(port, env)
 
     def transcript(self, stdout, out):
@@ -228,7 +235,7 @@ class Antigravity(Agent):
                 params = info.get("parameters") or {}
                 if info.get("name") == "run_command":
                     t.commands.append(str(params.get("CommandLine", "")))
-                elif str(info.get("name", "")).startswith("mcp"):
+                elif info.get("name") in self.MCP or str(info.get("name", "")).startswith("mcp"):
                     t.mcp_inputs.append(json.dumps(params, ensure_ascii=False))
                 elif info.get("name") in self.ROUTED:
                     t.web_calls += 1  # the search is a Code Assist call, scanned by keepmum like any other

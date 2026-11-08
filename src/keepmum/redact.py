@@ -10,7 +10,7 @@ from collections import Counter, OrderedDict
 from .detect import Span
 from .detect.merge import merge
 from .encode import json_strings
-from .tools import server_of
+from .tools import call_name, server_of
 from .vault import PLACEHOLDER, Vault
 
 # Signed or binary blocks are resent exactly as the API produced them.
@@ -137,6 +137,35 @@ def _caller(item: dict) -> str:
     if script.dynamic or len(servers) != 1 or script.calls & MCP_RESOURCE_CALLS or not next(iter(servers)).startswith("mcp__"):
         return name
     return f"{next(iter(servers))}__exec"
+
+def _gemini_results(contents) -> dict[int, str]:
+    """id() of each functionResponse part in contents -> the tool its call names (tools.call_name)."""
+    by_id: dict[str, str] = {}
+    pending: list[tuple[str, str]] = []  # (the name as called, the name decided), oldest first
+    out: dict[int, str] = {}
+    for c in contents if isinstance(contents, list) else []:
+        for part in (c.get("parts") or []) if isinstance(c, dict) else []:
+            if not isinstance(part, dict):
+                continue
+            call = part.get("functionCall") or part.get("function_call")
+            if isinstance(call, dict) and isinstance(call.get("name"), str):
+                decided = call_name(call["name"], call.get("args"))
+                if isinstance(call.get("id"), str):
+                    by_id[call["id"]] = decided
+                pending.append((call["name"], decided))
+            resp = part.get("functionResponse") or part.get("function_response")
+            if isinstance(resp, dict):
+                name = resp.get("name")
+                match = next((i for i, (n, _) in enumerate(pending) if n == name), None)
+                if isinstance(resp.get("id"), str) and resp["id"] in by_id:
+                    out[id(part)] = by_id[resp["id"]]
+                    match = next((i for i, (_, d) in enumerate(pending) if d == by_id[resp["id"]]), match)
+                elif match is not None:
+                    out[id(part)] = pending[match][1]
+                if match is not None:
+                    pending.pop(match)
+    return out
+
 
 class Redactor:
     def __init__(self, detector, vault: Vault, cache_size: int = 4096):
@@ -309,6 +338,11 @@ class Redactor:
         With `hint` (generateContent and streamGenerateContent only: countTokens and embeddings
         take no system instruction), the placeholder hint goes last in the system instruction."""
         out = dict(body)
+        # Each tool result, credited to the call it answers, as the call names its tool (Antigravity's
+        # call_mcp_tool names an MCP server: tools.call_name). By id when the parts carry one;
+        # otherwise in order, as the Gemini API pairs them: the earliest call of that name not yet
+        # answered (agy's gateway mode sends no ids).
+        self._gemini_results = _gemini_results(body.get("contents"))
         for key in ("request", "generateContentRequest", "generate_content_request"):
             if isinstance(out.get(key), dict):
                 out[key] = self.redact_gemini_request(out[key], hint)
@@ -363,7 +397,9 @@ class Redactor:
         for key in ("functionResponse", "function_response"):
             if isinstance(out.get(key), dict):
                 resp = out[key]
-                with self._result_of(resp.get("name") if isinstance(resp.get("name"), str) else None):
+                tool = getattr(self, "_gemini_results", {}).get(id(part)) \
+                    or (resp.get("name") if isinstance(resp.get("name"), str) else None)
+                with self._result_of(tool):
                     out[key] = {**resp, **{k: self._values(resp[k]) for k in ("response", "parts") if k in resp}}
         for key, field in (("executableCode", "code"), ("executable_code", "code"),
                            ("codeExecutionResult", "output"), ("code_execution_result", "output")):

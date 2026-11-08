@@ -27,6 +27,7 @@ import json
 import os
 import threading
 import time
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -49,6 +50,27 @@ def server_of(name: str) -> str:
         server = name[5:].split("__", 1)[0]
         if server:
             return f"mcp__{server}"
+    return name
+
+
+# Antigravity (agy 1.5.3) reaches an MCP server's lazily loaded tools and resources through tools
+# of its own that name the server in their arguments: call_mcp_tool {ServerName, ToolName,
+# Arguments}, list_resources and read_resource {ServerName, Uri}.
+SERVER_IN_ARGS = frozenset({"call_mcp_tool", "list_resources", "read_resource"})
+_SERVER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+
+
+def call_name(name: str, args) -> str:
+    """The name a tool call is decided by, and its result credited to: its own, or for a call that
+    names its MCP server in its arguments, that server's tool, `call_mcp_tool {ServerName: notes,
+    ToolName: send_note}` -> `mcp__notes__send_note`. A server name that would not read back as
+    one (`__` in it) leaves the call as it is: decided by its own name."""
+    if name in SERVER_IN_ARGS and isinstance(args, dict):
+        server = args.get("ServerName")
+        tool = args.get("ToolName") if name == "call_mcp_tool" else name
+        if isinstance(server, str) and _SERVER_NAME.fullmatch(server) and "__" not in server \
+                and isinstance(tool, str) and tool:
+            return f"mcp__{server}__{tool}"
     return name
 
 

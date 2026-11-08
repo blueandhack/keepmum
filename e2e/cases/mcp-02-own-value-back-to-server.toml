@@ -1,0 +1,48 @@
+id = "mcp-02-own-value-back-to-server"
+title = "An email an MCP server returned goes back to that server, real; the model sees a placeholder"
+why = """
+keepmum gives an MCP server back the values it returned itself ("own"): Gmail can open the thread
+it found. The model sees `KEEPMUM_EMAIL_…` for the address the server's lookup returned; the note
+sent back to the same server must hold the real address, or the user's message is useless. Codex
+reaches the server from its code-mode script, Claude Code by the tool's own name, and the
+Antigravity CLI through call_mcp_tool, which names the server only in its arguments: each must be
+credited to the server and decided as it.
+"""
+prompt = """
+Use the notes tool `lookup` to find Margaret Thornbury's email address, then use `send_note` to send
+the team a note that says exactly: Reach Margaret at <her email address>
+Do not ask questions.
+"""
+config = "[detect]\nmodel = false\npii = true\n"
+mcp = true
+mcp_reply = "Margaret Thornbury: {{v:email}}"
+
+[values]
+email = { text = "margaret.thornbury@gmail.com", kind = "EMAIL" }
+
+[files]
+"README.md" = "Team notes.\n"
+
+[[script]]
+calls = [
+  { codex = 'text(await tools.mcp__notes__lookup({name: "Margaret Thornbury"}));' },
+  { claude = { name = "mcp__notes__lookup", input = { name = "Margaret Thornbury" } } },
+  { agy = { name = "call_mcp_tool", args = { ServerName = "notes", ToolName = "lookup", Arguments = { name = "Margaret Thornbury" } } } },
+]
+
+[[script]]
+calls = [
+  { codex = 'text(await tools.mcp__notes__send_note({text: "Reach Margaret at {{ph:email}}"}));' },
+  { claude = { name = "mcp__notes__send_note", input = { text = "Reach Margaret at {{ph:email}}" } } },
+  { agy = { name = "call_mcp_tool", args = { ServerName = "notes", ToolName = "send_note", Arguments = { text = "Reach Margaret at {{ph:email}}" } } } },
+]
+
+[[script]]
+say = "Sent the note."
+
+[expect]
+masked = ["email"]
+mcp_calls_min = 2
+mcp_contains = ["Reach Margaret at {{v:email}}"]
+mcp_may_receive = ["email"]
+only_new = []

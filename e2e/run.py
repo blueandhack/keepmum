@@ -225,8 +225,8 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             if not agent.available():
                 reason = f"{agent.binary} is not installed"
-            elif case.mcp and not agent.mcp:
-                reason = f"{agent.name} takes MCP servers only from its global config"
+            elif case.mcp and args.mode not in agent.mcp_modes:
+                reason = f"{agent.name} takes MCP servers only from its global config (scripted runs give it its own)"
             elif case.model:
                 model_ok = model_ready() if model_ok is None else model_ok
                 if not model_ok:

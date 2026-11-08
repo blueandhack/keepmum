@@ -29,7 +29,8 @@ DEFAULT_POLICY = {
     # Antigravity (agy 1.5.3): its browser acts on web pages from this Mac, read_url_content fetches
     # from it, and call_mcp_tool reaches an MCP server without naming it in the tool's name, so the
     # server's own setting cannot apply. search_web and generate_image ask Code Assist through
-    # keepmum anyway; kept, they do not depend on that.
+    # keepmum anyway; kept, they do not depend on that. call_mcp_tool and the resource tools are
+    # decided as the MCP server they name (tools.call_name); kept when they name none.
     "browser_*": "keep",
     "open_browser_url": "keep",
     "read_browser_page": "keep",
@@ -43,6 +44,8 @@ DEFAULT_POLICY = {
     "generate_image": "keep",
     "search_marketplace": "keep",
     "call_mcp_tool": "keep",
+    "list_resources": "keep",
+    "read_resource": "keep",
     "mcp__*": "own",
     "mcp_*": "own",
 }
@@ -348,10 +351,13 @@ def restore_tool(name: str, value, vault: Vault, policy: dict, counts: Counter |
 
     if name in CODE_TOOLS and isinstance(tree, str):
         return _restore_script_tool(name, tree, vault, policy, counts)
-    only, decisions = tool_values(name, tree, vault, policy)
+    from .tools import call_name
+
+    decided = call_name(name, tree)  # Antigravity's call_mcp_tool: the MCP server it names
+    only, decisions = tool_values(decided, tree, vault, policy)
     if counts is not None:
         for action, reason, kind, n in decisions:
-            counts[(TOOL, name, action, reason, kind)] += n
+            counts[(TOOL, decided, action, reason, kind)] += n
     if only is not None and not only:
         return value  # nothing to put back: the input goes out exactly as the model wrote it
     if parse:
