@@ -58,7 +58,7 @@ Each run gets:
   (keepmum sends zstd to chatgpt.com), and every reply. The leak check reads it.
 - **The real agent binary** with the user's login but not their setup: `codex exec --ignore-user-config
   --ephemeral -s workspace-write`, and `claude -p --setting-sources project,local --strict-mcp-config`.
-  User config, MCP servers, hooks and plugins stay out. Codex still lists the user's skills, so
+  User config, MCP servers, hooks and plugins stay out; a case that needs an MCP server gets the stub one. Codex still lists the user's skills, so
   requests differ a little between Macs. The checks look only at the case's own values and files.
 - **A workspace** built from the case's `[files]`, snapshotted before and after.
 
@@ -74,7 +74,8 @@ Each run gets:
 
 The scripted model writes real tool calls in each agent's own wire format: Claude Code's `Bash`,
 `Write`, `Read` and `Edit`, and Codex 0.147's code mode (`exec` running `tools.exec_command` and
-`tools.apply_patch`, with plain `exec_command` and `apply_patch` when a Codex offers those). The
+`tools.apply_patch`, with plain `exec_command` and `apply_patch` when a Codex offers those; MCP
+tools from the script, `tools.mcp__notes__send_note(…)`, in a raw `codex` call). The
 agent runs them for real. The scripted model copies the placeholder it was actually shown, taken from
 the live vault, as a real model would. It splits each placeholder across two stream deltas.
 
@@ -108,6 +109,8 @@ modes = ["scripted", "live"]           # default: both
 plain = ["guard-20261104-231405.md"]   # must reach the provider unmasked
 workspace_dir = "ws"                   # the workspace folder's name (templates allowed)
 known_gap = "…"                        # or { codex = "…" }: see below
+mcp = true                             # give the agent the stub MCP server `notes` (below)
+mcp_reply = "…"                        # what its `lookup` tool returns (templates allowed)
 
 [values]                               # what keepmum must protect
 tok = { gen = "github-token", kind = "SECRET" }        # fresh every run: github-token, anthropic-key, stripe-key
@@ -136,7 +139,24 @@ residue_ok = []                                    # files where a kept placehol
 commands_may_keep = false                          # commands may hold placeholders (a kept token, a refusal)
 unresolved = 0                                     # placeholders keepmum is expected not to restore
 agent_may_fail = false
+mcp_calls_min = 1                                  # calls the MCP server must receive
+mcp_contains = []                                  # text it must receive (templates)
+mcp_may_receive = []                               # values it may get real (a type its setting allows)
 ```
+
+A script call can carry one form per agent, for a turn they make differently: `{ shell = "…", codex =
+"<script>" }` is the script for Codex and the command for Claude Code, and a call with only `codex` or
+only `claude` is made by that agent only.
+
+### The MCP server
+
+`mcp_notes.py` is a stdio MCP server, standard library only, with two tools: `send_note(text)` and
+`lookup(name)`. It stands in for a connector (Slack, Gmail): what it receives would leave the Mac. With
+`mcp = true`, Codex gets it through `-c mcp_servers.notes…` (its tools approved, as `codex exec` would
+cancel them otherwise) and Claude Code through `--mcp-config`. It writes each call's arguments to a
+log the oracle reads: a protected value in the log, or in the MCP call the agent's transcript shows
+(a call that failed shows its input too), is a `leak`, unless the case lists it in `mcp_may_receive`.
+Placeholders in an MCP call are not `residue`: keeping them there is the point.
 
 Templates: `{{v:x}}` is the real value (files, expectations). `{{ph:x}}` is the placeholder the model
 was shown for it (scripts). `{{ph:x|lower}}`, `|slug`, `|upper` and `|typo` give a placeholder as a

@@ -69,8 +69,9 @@ def forms(value: str) -> list[bytes]:
 
 def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, bytes], after: dict[str, bytes],
           transcript: Transcript, masked: dict[str, tuple[str, str]], keepmum: dict, exit_code: int | None,
-          served: list[dict] | None) -> list[Finding]:
-    """`masked`: placeholder -> (type, value) for every value keepmum masked in the run (its vault)."""
+          served: list[dict] | None, mcp_log: str | None = None) -> list[Finding]:
+    """`masked`: placeholder -> (type, value) for every value keepmum masked in the run (its vault).
+    `mcp_log`: what the stub MCP server received (case.mcp), one JSON line per call."""
     out: list[Finding] = []
     sent = [(i, ex) for i, ex in enumerate(exchanges)]
 
@@ -98,6 +99,28 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
             if sent_rest:
                 out.append(Finding("leak", f"{{{{v:{v.name}}}}} was masked only in part; {len(''.join(sent_rest))} of its "
                                            f"{len(v.text)} characters were sent", "requests"))
+
+    # leak, through a connector: what the stub MCP server received would have left the Mac, and
+    # what the agent called it with (a call that failed or was cancelled shows it too).
+    for inp in transcript.mcp_inputs:
+        got = inp.encode()
+        for v in case.values.values():
+            if v.must_mask and v.name not in case.expect.get("mcp_may_receive", []) and \
+                    any(f in got for f in forms(v.text) if len(f) >= 4):
+                out.append(Finding("leak", f"the agent called an MCP tool with {{{{v:{v.name}}}}}", "mcp"))
+    if mcp_log is not None:
+        may = set(case.expect.get("mcp_may_receive", []))
+        got = mcp_log.encode()
+        for v in case.values.values():
+            if v.must_mask and v.name not in may and any(f in got for f in forms(v.text) if len(f) >= 4):
+                out.append(Finding("leak", f"{{{{v:{v.name}}}}} reached the MCP server", "mcp"))
+        calls = sum(1 for line in mcp_log.splitlines() if line.strip())
+        if calls < case.expect.get("mcp_calls_min", 0):
+            out.append(Finding("task", f"the MCP server got {calls} call(s), not {case.expect['mcp_calls_min']}", "mcp"))
+        for want in case.expect.get("mcp_contains", []):
+            want = case.resolve(want, salt)
+            if not any(f in got for f in forms(want)):
+                out.append(Finding("task", f"the MCP server never received {case.shown(want)!r}", "mcp"))
 
     # residue: no placeholder in any spelling where a real value belongs. A case names the files
     # where a placeholder is right (expect.residue_ok): what a command sent to a wrong host.

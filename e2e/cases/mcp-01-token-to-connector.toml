@@ -1,0 +1,45 @@
+id = "mcp-01-token-to-connector"
+title = "A token goes into a file, and a note about it to a connector, in one step"
+why = """
+An MCP server is a network tool: what it receives leaves the Mac. keepmum gives a server only what
+it may receive (the `mcp__*` policy), so a token stays a placeholder in a note to a team chat while
+the file being written gets the real token. Codex 0.147 calls MCP tools from inside its code-mode
+`exec` script, with the commands, and keepmum restored every value in such a script: the token
+went to the connector. If this fails, a token the user asked to keep private is posted to Slack.
+"""
+prompt = """
+Read .env. Write the GitHub token into deploy.env as DEPLOY_TOKEN=<the token>, then send the team a
+note with the notes tool saying the deploy token is set up, quoting the token. Do not ask questions.
+"""
+mcp = true
+
+[values]
+tok = { gen = "github-token", kind = "SECRET" }
+
+[files]
+".env" = "GITHUB_TOKEN={{v:tok}}\nREGION=eu-west-1\n"
+
+[[script]]
+calls = [{ shell = "cat .env" }]
+
+[[script]]
+# Codex: one script, as a code-mode model writes it: the command, then the note, the token in a variable.
+# Claude Code: the same as two tool calls.
+calls = [
+  { shell = "printf 'DEPLOY_TOKEN=%s\\n' {{ph:tok}} > deploy.env", codex = """
+const tok = "{{ph:tok}}";
+const r = await tools.exec_command({cmd: "printf 'DEPLOY_TOKEN=%s\\\\n' " + tok + " > deploy.env"});
+text(r);
+text(await tools.mcp__notes__send_note({text: `The deploy token is set up: ${tok}`}));
+""" },
+  { claude = { name = "mcp__notes__send_note", input = { text = "The deploy token is set up: {{ph:tok}}" } } },
+]
+
+[[script]]
+say = "Done: deploy.env holds the token, and the team has a note."
+
+[expect]
+masked = ["tok"]
+files = { "deploy.env" = "DEPLOY_TOKEN={{v:tok}}\n", ".env" = "GITHUB_TOKEN={{v:tok}}\nREGION=eu-west-1\n" }
+only_new = ["deploy.env"]
+mcp_calls_min = 1

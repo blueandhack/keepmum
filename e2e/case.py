@@ -82,6 +82,7 @@ class Case:
     # The case shows a gap not fixed yet: reported, not counted as a regression. A string, or one
     # per agent ({codex = "…"}) when only some agents have it.
     known_gap: str | dict | None = None
+    mcp: bool = False  # the agent gets the stub MCP server `notes` (mcp_notes.py)
     timeout: int = 300
     raw: dict = field(default_factory=dict)
 
@@ -142,7 +143,8 @@ def load_case(path: Path) -> Case:
         config=config, model=bool(tomllib.loads(config).get("detect", {}).get("model", False)),
         prompt=raw.get("prompt", "").strip(), values=values, plain=raw.get("plain", []),
         files=raw.get("files", {}), workspace_dir=raw.get("workspace_dir", "ws"), script=raw.get("script", []),
-        expect=raw.get("expect", {}), known_gap=raw.get("known_gap"), timeout=raw.get("timeout", 300), raw=raw,
+        expect=raw.get("expect", {}), known_gap=raw.get("known_gap"),
+        mcp=bool(raw.get("mcp", False)), timeout=raw.get("timeout", 300), raw=raw,
     )
 
 

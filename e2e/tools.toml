@@ -8,17 +8,32 @@
 # tools, destinations.SHELL_TOOLS and codemode.CODE_TOOLS for commands), add a case if it can touch
 # disk or network, then list it here. A tool no longer offered is only reported.
 #
-# Checked against Codex 0.147.0 and Claude Code 2.1.310 on Nov 8, 2026.
+# Checked against Codex 0.147.0 and 0.167.0, Claude Code 2.1.310 and 2.1.319 on Nov 8, 2026, with the
+# e2e stub MCP server configured (mcp-01). Tools a personal login adds (ChatGPT's image generation and
+# connectors, claude.ai's) are not in CI and not listed.
+#
+# MCP tools are not listed: an agent names them `mcp__<server>__<tool>`, and keepmum holds every one
+# to the server's [restore] setting ("own" by default). Codex's code mode does not even declare them
+# to the model (they are "deferred": on the `tools` object, and in `ALL_TOOLS`).
 
 [codex]
-"exec" = "code mode: a JavaScript script calling the exec:* tools; its string literals are read as commands (codemode.py), its patches as file text, values escaped for JavaScript"
+"exec" = "code mode: a JavaScript script calling the exec:* and MCP tools; each string literal gets what the nested tool it is passed to may receive, one it is not passed to straight only what every network tool the script calls may (codemode.py); values escaped for JavaScript"
 "exec:exec_command" = "runs a shell command, from an exec script: destinations and commands checks, values quoted for the shell"
 "exec:write_stdin" = "types into a running command, from an exec script: its text is read as a command"
 "exec:apply_patch" = "writes files, from an exec script: values restored into the patch text"
-"exec:update_plan" = "the plan the user sees: restored as text"
+"exec:update_plan" = "the plan the user sees (gone in 0.167): restored as text"
 "exec:view_image" = "opens a local image by path: restored"
+"exec:list_mcp_resources" = "lists an MCP server's resources: decided as that server's tool (no values in practice)"
+"exec:list_mcp_resource_templates" = "lists an MCP server's resource templates: decided as that server's tool"
+"exec:read_mcp_resource" = "reads a resource from the MCP server its `server` argument names: decided as that server's tool"
+"exec:clock__curr_time" = "the current time (0.167): no values"
+"exec:create_goal" = "starts Codex's goal for this thread, which the user sees (0.167): restored as text"
+"exec:get_goal" = "reads that goal (0.167): no values"
+"exec:update_goal" = "sets the goal's status (0.167): restored as text"
 "wait" = "waits on a running exec script: no values"
 "request_user_input" = "asks the user a question: restored"
+"request_user_input_async" = "asks the user a question without waiting for the answer (0.167): restored"
+"sleep" = "waits up to 12 hours or until new input (0.167): no values"
 "spawn_agent" = "starts a sub-agent on this Mac, whose own requests go through keepmum: restored"
 "send_message" = "a message to a sub-agent on this Mac: restored"
 "followup_task" = "more work for a sub-agent on this Mac: restored"
