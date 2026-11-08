@@ -21,7 +21,7 @@ import json
 import re
 import shlex
 
-from .destinations import SHELL_TOOLS
+from .destinations import COMMAND_KEYS, SHELL_TOOLS
 
 _SHELL = r"(?:sudo\s+(?:-\S+\s+)*)?(?:env\s+\S+=\S*\s+)*(?:/\S*/)?(?:ba|z|da|k|fi|c|tc)?sh\b"
 _INTERPRETER = rf"(?:{_SHELL}|(?:/\S*/)?(?:python[0-9.]*|perl|ruby|node|php|osascript)\b)"
@@ -95,7 +95,7 @@ def refusal(name: str, value, labels: list[str], message: str | None = None):
 
     def swap(v, key=None):
         if isinstance(v, dict):
-            return {k: (swap(x, k) if k in ("command", "cmd", "commands", "args", "argv") else x) for k, x in v.items()}
+            return {k: (swap(x, k) if k in COMMAND_KEYS | {"args", "argv"} else x) for k, x in v.items()}
         if isinstance(v, list) and v and all(isinstance(x, str) for x in v):
             return ["sh", "-c", script]
         if isinstance(v, str):

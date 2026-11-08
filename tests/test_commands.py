@@ -86,6 +86,8 @@ def test_a_refusal_keeps_the_inputs_shape_and_only_fails():
     run = subprocess.run(["sh", "-c", line], capture_output=True, text=True)
     assert run.returncode == 1 and "keepmum refused this command: deleting your home folder" in run.stderr
     assert check(line) == []  # the refusal itself breaks no rule
+    agy = refusal("run_command", {"CommandLine": "rm -rf ~", "toolSummary": "clean up"}, labels)
+    assert agy["CommandLine"].startswith("printf") and agy["toolSummary"] == "clean up"
 
 
 # --- Through the proxy: the reply's tool call, streamed or whole, on every API -----------------

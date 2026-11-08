@@ -141,6 +141,26 @@ def test_observe_mode_sends_gemini_requests_as_they_came(tmp_path):
     assert canary in b"".join(anyio.run(go).received).decode()
 
 
+def test_antigravity_is_scanned_and_only_its_known_setup_calls_pass():
+    canary = selftest.make_canary()
+
+    async def go():
+        mock, client, _ = make(None)
+        chat = await client.post("/antigravity/v1internal:streamGenerateContent?alt=sse",
+                                 json={"model": "m", "project": "p", "request": gbody(canary)})
+        setup = await client.post("/antigravity/v1internal:fetchUserInfo", json={"project": "p"})
+        unknown = await client.post("/antigravity/v1internal:recordTrajectoryAnalytics", json={"text": canary})
+        # Antigravity's setup calls are not Gemini CLI's: /codeassist still refuses them.
+        gemini_cli = await client.post("/codeassist/v1internal:fetchUserInfo", json={"project": "p"})
+        return mock, chat, setup, unknown, gemini_cli
+
+    mock, chat, setup, unknown, gemini_cli = anyio.run(go)
+    assert chat.status_code == 200 and canary in chat.text
+    assert setup.status_code == 200
+    assert unknown.status_code == 403 and gemini_cli.status_code == 403
+    assert canary not in b"".join(mock.received).decode()
+
+
 def test_gemini_env_points_every_sign_in_at_keepmum_and_keeps_a_gateway():
     env = launch.gemini_env(7788, {"PATH": "/bin", "GOOGLE_GEMINI_BASE_URL": "https://gw.example.com"})
     assert env["GOOGLE_GEMINI_BASE_URL"] == "http://127.0.0.1:7788/gemini"

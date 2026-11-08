@@ -25,9 +25,13 @@ from pathlib import PurePosixPath
 
 # The tools that run a shell command: Claude Code, Codex (function, local and hosted shells, and
 # code mode's `exec`, whose script runs commands through nested tools: codemode.py), pi and
-# opencode, Gemini CLI.
+# opencode, Gemini CLI, Antigravity (`run_command`).
 SHELL_TOOLS = frozenset({"Bash", "bash", "shell", "local_shell", "exec_command", "shell_command", "run_shell_command",
-                         "exec"})
+                         "exec", "run_command"})
+# The fields of a shell tool's input that hold a command line (Antigravity's is `CommandLine`).
+COMMAND_KEYS = frozenset({"command", "cmd", "commands", "script", "CommandLine"})
+# Fields that only describe the call: never commands.
+DESCRIPTION_KEYS = frozenset({"description", "toolSummary"})
 
 # Issuer rule (rules.toml id) -> the hosts its tokens are used at; each matches itself and its
 # subdomains. An empty tuple: a key that is never sent anywhere, so any host is the wrong one.

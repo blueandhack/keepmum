@@ -257,6 +257,7 @@ def _command_texts(value, name: str | None = None):
     list is also read as one command line, so `["curl", "host"]` is still curl and its host. A
     code-mode script (codemode.py) gives its string literals, not the patches it applies."""
     from .codemode import CODE_TOOLS, script_strings
+    from .destinations import DESCRIPTION_KEYS
 
     if name in CODE_TOOLS and isinstance(value, str):
         yield from script_strings(value)
@@ -270,7 +271,7 @@ def _command_texts(value, name: str | None = None):
             yield from _command_texts(x)
     elif isinstance(value, dict):
         for k, v in value.items():
-            if k != "description":
+            if k not in DESCRIPTION_KEYS:
                 yield from _command_texts(v)
 
 
@@ -496,7 +497,7 @@ def _tool_values(name: str, value, vault: Vault, counts: Counter | None, only: s
     """A tool's input with its real values, each encoded for where its placeholder sits (encode.py):
     quoted for the shell in a command, escaped in a code-mode script's literals or in a JSON
     document being written, and as it is everywhere else."""
-    from .destinations import SHELL_TOOLS
+    from .destinations import COMMAND_KEYS, SHELL_TOOLS
     from .encode import restore_command, restore_json_text
 
     def swap(m):
@@ -518,7 +519,7 @@ def _tool_values(name: str, value, vault: Vault, counts: Counter | None, only: s
 
     def walk(v, key=None):
         if isinstance(v, str):
-            if shell and key in ("command", "cmd", "commands", "script"):
+            if shell and key in COMMAND_KEYS:
                 return restore_command(v, swap)
             doc = restore_json_text(v, swap) if PLACEHOLDER.search(v) else None
             return doc if doc is not None else plain(v)

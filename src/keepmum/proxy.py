@@ -16,10 +16,13 @@ One proxy serves every provider, chosen by path prefix:
     /chatgpt/backend-api/codex/responses OpenAI through a ChatGPT login (Codex, pi)
     /gemini/v1beta/models/<m>:generateContent...   the Gemini API, with an API key (Gemini CLI)
     /codeassist/v1internal:generateContent...      Code Assist, "Sign in with Google" (Gemini CLI)
+    /antigravity/v1internal:streamGenerateContent  Code Assist for the Antigravity CLI (agy), signed in with
+                                                   Google: its own host, daily-cloudcode-pa
 
 Code Assist also takes setup and metrics calls (`CODE_ASSIST_METADATA`): their bodies, read in
 Gemini CLI 0.66, hold project ids, client metadata, counts and statuses, never conversation
-text, so they pass through unscanned; any other Code Assist method is blocked. Vertex AI is not
+text, so they pass through unscanned; so do Antigravity's own (`ANTIGRAVITY_METADATA`, read in
+agy 1.5.3: a project id or a trajectory id). Any other Code Assist method is blocked. Vertex AI is not
 scanned: `keepmum gemini` points it at /vertex, which refuses every request.
 
 opencode keeps one OpenAI base URL for both logins, so an /openai/v1 request that carries a
@@ -69,6 +72,7 @@ OPENAI_UPSTREAM = "https://api.openai.com"
 CHATGPT_UPSTREAM = "https://chatgpt.com"
 GEMINI_UPSTREAM = "https://generativelanguage.googleapis.com"
 CODE_ASSIST_UPSTREAM = "https://cloudcode-pa.googleapis.com"
+ANTIGRAVITY_UPSTREAM = "https://daily-cloudcode-pa.googleapis.com"
 # Gemini API methods keepmum scans. generateContent and streamGenerateContent get the placeholder
 # hint ("gemini"); countTokens and embeddings take no system instruction ("gemini-plain").
 _GEMINI_METHOD = re.compile(r"^/v1[a-z0-9]*/(?:tunedModels|models)/[^/:]+:(generateContent|streamGenerateContent"
@@ -77,6 +81,9 @@ _CODE_ASSIST_METHOD = re.compile(r"^/v1[a-z0-9]*:([A-Za-z]+)$")
 # Code Assist setup and metrics: no conversation text, forwarded as they are (see above).
 CODE_ASSIST_METADATA = frozenset({"loadCodeAssist", "onboardUser", "listExperiments", "retrieveUserQuota",
                                   "fetchAdminControls", "setCodeAssistGlobalUserSetting", "recordCodeAssistMetrics"})
+ANTIGRAVITY_METADATA = CODE_ASSIST_METADATA | {"fetchUserInfo", "fetchAvailableModels", "retrieveUserQuotaSummary",
+                                               "writeTrajectoryAcls"}
+GOOGLE_PREFIXES = ("/gemini", "/codeassist", "/antigravity")
 MESSAGES = frozenset({"/v1/messages", "/v1/messages/count_tokens"})
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
 # Not forwarded upstream; accept-encoding is replaced so responses arrive uncompressed, and
@@ -144,14 +151,15 @@ def api_of(path: str, prefix: str = "") -> str | None:
         if m is None:
             return None
         return "gemini" if m.group(1) in ("generateContent", "streamGenerateContent") else "gemini-plain"
-    if prefix == "/codeassist":
+    if prefix in ("/codeassist", "/antigravity"):
         m = _CODE_ASSIST_METHOD.match(path)
         method = m.group(1) if m else ""
         if method in ("generateContent", "streamGenerateContent"):
             return "gemini"
         if method == "countTokens":
             return "gemini-plain"
-        return "metadata" if method in CODE_ASSIST_METADATA else None
+        metadata = ANTIGRAVITY_METADATA if prefix == "/antigravity" else CODE_ASSIST_METADATA
+        return "metadata" if method in metadata else None
     if path in MESSAGES:
         return "messages"
     if path.endswith("/responses") or path.endswith("/responses/compact"):
@@ -186,7 +194,7 @@ class Proxy:
                  info: dict | None = None, observe=None, openai_upstream: str = OPENAI_UPSTREAM,
                  chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
                  gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM,
-                 tools=None, guards=None, commands=None, local=None):
+                 tools=None, guards=None, commands=None, local=None, antigravity_upstream: str = ANTIGRAVITY_UPSTREAM):
         self.redactor = redactor
         # The checks on a request's texts (guard.Guard): "injection" on tool results, "harm" on what
         # the user typed. Warn-mode checks run after the request is sent, in `_background`.
@@ -202,7 +210,8 @@ class Proxy:
         self._background: set = set()
         self.upstream = upstream.rstrip("/")
         self.prefixed = {"/openai": openai_upstream.rstrip("/"), "/chatgpt": chatgpt_upstream.rstrip("/"),
-                         "/gemini": gemini_upstream.rstrip("/"), "/codeassist": code_assist_upstream.rstrip("/")}
+                         "/gemini": gemini_upstream.rstrip("/"), "/codeassist": code_assist_upstream.rstrip("/"),
+                         "/antigravity": antigravity_upstream.rstrip("/")}
         # Other gateways keepmum forwards to (config [gateways], gateway.py): name -> URL.
         self.gateways: dict[str, str] = {}
         # The servers seen in agents' tool lists (tools.ToolRegistry); None: no fingerprints, no counts.
@@ -253,7 +262,7 @@ class Proxy:
         for prefix, base in self.prefixed.items():
             if path.startswith(prefix + "/"):
                 rest = path[len(prefix):]
-                provider = "google" if prefix in ("/gemini", "/codeassist") else "openai"
+                provider = "google" if prefix in GOOGLE_PREFIXES else "openai"
                 return Target(provider, base, rest, api_of(rest, prefix))
         return Target(provider_of(self.upstream), self.upstream, path, "messages" if path in MESSAGES else None)
 
