@@ -216,14 +216,21 @@ def tool_values(name: str, value, vault: Vault, policy: dict) -> tuple[set[str] 
             return None, [("restore", "local", ph.split("_")[1], n) for ph, n in found.items()]
         return set(found) - set(wrong), [("keep" if ph in wrong else "restore", "destination" if ph in wrong else "local",
                                           ph.split("_")[1], n) for ph, n in found.items()]
+    choices = _network_choices(name, action, found, vault, policy)
+    allowed = {ph for ph, (a, _) in choices.items() if a == "restore"}
+    return allowed, [(a, r, ph.split("_")[1], found[ph]) for ph, (a, r) in choices.items()]
+
+
+def _network_choices(name: str, action, found, vault: Vault, policy: dict) -> dict[str, tuple[str, str]]:
+    """For a tool that is not "restore": each placeholder's (action, reason)."""
     from .tools import BULK, server_of
 
     server = server_of(name)
     registry = getattr(policy, "registry", None)
     types = set(action) if isinstance(action, (list, tuple)) else set()
     paused = action != "keep" and registry is not None and registry.paused(server)
-    allowed, decisions = set(), []
-    for ph, n in found.items():
+    out = {}
+    for ph in found:
         kind = ph.split("_")[1]
         if action == "keep":
             reason = "placeholders"
@@ -237,15 +244,12 @@ def tool_values(name: str, value, vault: Vault, policy: dict) -> tuple[set[str] 
             reason = "allowed"
         else:
             reason = "not_allowed"
-        if reason in ("own", "allowed"):
-            allowed.add(ph)
-        decisions.append(("restore" if reason in ("own", "allowed") else "keep", reason, kind, n))
-    if len(allowed) > BULK:
-        allowed = set()
-        decisions = [("keep", "too_many" if a == "restore" else r, k, n) for a, r, k, n in decisions]
+        out[ph] = ("restore" if reason in ("own", "allowed") else "keep", reason)
+    if sum(a == "restore" for a, _ in out.values()) > BULK:
+        out = {ph: ("keep", "too_many" if a == "restore" else r) for ph, (a, r) in out.items()}
     if registry is not None:
-        registry.note_kept(server, [k for a, r, k, n in decisions if r == "not_allowed"])
-    return allowed, decisions
+        registry.note_kept(server, [ph.split("_")[1] for ph, (_, r) in out.items() if r == "not_allowed"])
+    return out
 
 
 def _command_texts(value, name: str | None = None):
@@ -322,6 +326,10 @@ def restore_tool(name: str, value, vault: Vault, policy: dict, counts: Counter |
     review = getattr(policy, "review", None)
     if review is not None and (replaced := review(name, tree)) is not None:
         return json.dumps(replaced, ensure_ascii=False) if parse else replaced  # a refused command: no values go in
+    from .codemode import CODE_TOOLS
+
+    if name in CODE_TOOLS and isinstance(tree, str):
+        return _restore_script_tool(name, tree, vault, policy, counts)
     only, decisions = tool_values(name, tree, vault, policy)
     if counts is not None:
         for action, reason, kind, n in decisions:
@@ -331,6 +339,126 @@ def restore_tool(name: str, value, vault: Vault, policy: dict, counts: Counter |
     if parse:
         return json.dumps(_tool_values(name, tree, vault, counts, only), ensure_ascii=False)
     return _tool_values(name, value, vault, counts, only)
+
+
+def _found(text: str, vault: Vault) -> Counter:
+    """The placeholders in text that the vault knows, with how often each appears."""
+    found = Counter()
+    for m in PLACEHOLDER.finditer(text):
+        ph, real, _ = resolve(m, vault)
+        if real is not None:
+            found[ph] += 1
+    return found
+
+
+def _restore_script_tool(name: str, source: str, vault: Vault, policy: dict, counts: Counter | None) -> str:
+    """A code-mode script with real values put back literal by literal, each held to the nested
+    tool it is passed to (codemode.py): a command's and a patch's get them, as `exec` would; an MCP
+    server's only what that server may receive. A literal not passed straight to a tool, and code
+    outside the literals, get only what every network tool the script names may receive, and
+    nothing when the script can reach a tool it does not name."""
+    from .codemode import SHELL_CALLS, _unescape, parse
+    from .encode import restore_script, shell_contexts, shell_quote
+
+    script = parse(source)
+    network = script.network(source, lambda n: rule_for(n, policy)[1])
+    wrong = _wrong_destinations(name, source, _found(source, vault), vault, policy)
+
+    # One decision per target: a call (its literals together), or "free" (everything else).
+    def target(lit):
+        if lit is None or lit.call is None:
+            return None
+        return script.tool_name(lit, source), lit.call_span
+
+    texts: dict = {}
+    pos = 0
+    for lit in script.literals:
+        texts.setdefault(None, []).append(source[pos:lit.start - 1])
+        texts.setdefault(target(lit), []).append(_unescape(source[lit.start:lit.end]))
+        pos = lit.end + 1
+    texts.setdefault(None, []).append(source[pos:])
+
+    choices: dict = {}  # target -> {ph: (tool, action, reason)}
+    for key, parts in texts.items():
+        found = _found("\n".join(parts), vault)
+        if not found:
+            continue
+        if key is not None and rule_for(key[0], policy)[1] != "restore":
+            got = _network_choices(key[0], rule_for(key[0], policy)[1], found, vault, policy)
+            choice = {ph: (key[0], a, r) for ph, (a, r) in got.items()}
+        elif key is None and script.dynamic:
+            choice = {ph: (name, "keep", "script") for ph in found}
+        elif key is None and network:
+            choice = {ph: (name, "restore", "local") for ph in found}
+            for tool in sorted(network):
+                got = _network_choices(tool, rule_for(tool, policy)[1], found, vault, policy)
+                for ph, (a, r) in got.items():
+                    if choice[ph][1] == "restore":
+                        choice[ph] = (tool, a, r)
+        else:
+            choice = {ph: (name, "restore", "local") for ph in found}
+        # A script caught sending a token to a host its issuer does not use gets it nowhere.
+        for ph in found:
+            if ph in wrong and choice[ph][1] == "restore":
+                choice[ph] = (name, "keep", "destination")
+        choices[key] = choice
+        if counts is not None:
+            for ph, n in found.items():
+                tool, a, r = choice[ph]
+                counts[(TOOL, tool, a, r, ph.split("_")[1])] += n
+
+    # A name bound once to a literal (`const tok = "…"`) and passed to a command where the literal
+    # itself keeps a placeholder (the script also sends it to a network tool): that use gets the
+    # literal with the real values the command may receive, written in its place.
+    edits = []
+    bound = script.bindings(source) if network and not script.dynamic else {}
+    free = choices.get(None, {})
+    for ref in script.refs:
+        lit = bound.get(ref.name)
+        if lit is None or ref.call is None or rule_for(script.tool_name(ref, source), policy)[1] != "restore":
+            continue
+        raw = source[lit.start:lit.end]
+        if not any(free.get(resolve(m, vault)[0], ("", "keep"))[1] != "restore" for m in PLACEHOLDER.finditer(raw)):
+            continue
+        text = _unescape(raw)
+        matches = list(PLACEHOLDER.finditer(text))
+        ctx = shell_contexts(text, [m.start() for m in matches]) if ref.call in SHELL_CALLS else {}
+        pieces, last = [], 0
+        for m in matches:
+            ph, real, suffix = resolve(m, vault)
+            pieces.append(text[last:m.start()])
+            if real is None or ph in wrong:
+                pieces.append(m.group(0))
+            else:
+                pieces.append((shell_quote(real, ctx[m.start()]) if ctx else real) + suffix)
+                if counts is not None:
+                    counts[(TOOL, name, "restore", "local", ph.split("_")[1])] += 1
+                    counts[ph.split("_")[1]] += 1
+            last = m.end()
+        pieces.append(text[last:])
+        value = json.dumps("".join(pieces), ensure_ascii=False)
+        edits.append((ref.start, ref.end, f"{ref.name}: {value}" if ref.shorthand else value))
+
+    def swap_for(lit):
+        choice = choices.get(target(lit), {})
+
+        def swap(m):
+            ph, real, suffix = resolve(m, vault)
+            if real is None:
+                if counts is not None:
+                    counts[UNRESOLVED] += 1
+                return None
+            if choice.get(ph, ("", "keep"))[1] != "restore":
+                return None
+            if counts is not None:
+                counts[ph.split("_")[1]] += 1
+            return real + suffix
+
+        # A free literal may be a command when the script runs one.
+        return swap, lit is not None and (lit.shell or (lit.call is None and commands))
+
+    commands = script.dynamic or bool(script.calls & SHELL_CALLS)
+    return restore_script(source, swap_for, edits)
 
 
 def _canonical_tree(value, vault: Vault):
@@ -368,9 +496,8 @@ def _tool_values(name: str, value, vault: Vault, counts: Counter | None, only: s
     """A tool's input with its real values, each encoded for where its placeholder sits (encode.py):
     quoted for the shell in a command, escaped in a code-mode script's literals or in a JSON
     document being written, and as it is everywhere else."""
-    from .codemode import CODE_TOOLS
     from .destinations import SHELL_TOOLS
-    from .encode import restore_command, restore_json_text, restore_script
+    from .encode import restore_command, restore_json_text
 
     def swap(m):
         ph, real, suffix = resolve(m, vault)
@@ -387,8 +514,6 @@ def _tool_values(name: str, value, vault: Vault, counts: Counter | None, only: s
     def plain(text: str) -> str:
         return PLACEHOLDER.sub(lambda m: v if (v := swap(m)) is not None else m.group(0), text)
 
-    if name in CODE_TOOLS and isinstance(value, str):
-        return restore_script(value, swap)
     shell = name in SHELL_TOOLS
 
     def walk(v, key=None):
