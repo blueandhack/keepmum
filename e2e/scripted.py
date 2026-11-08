@@ -111,7 +111,7 @@ class ScriptedModel:
         blocks = []
         if turn.get("say"):
             blocks.append({"type": "text", "text": self.render(turn["say"], cwd)})
-        for i, call in enumerate(turn.get("calls", [])):
+        for i, call in enumerate(c for c in turn.get("calls", []) if set(c) != {"codex"}):  # codex-only: skipped
             name, args = self._claude_call(call, cwd)
             blocks.append({"type": "tool_use", "id": f"toolu_e2e_{index}_{i}", "name": name, "input": args})
         return self._anthropic(blocks, body)
@@ -190,7 +190,7 @@ class ScriptedModel:
         if turn.get("say"):
             out_items.append({"type": "message", "id": f"msg_e2e_{index}", "role": "assistant", "status": "completed",
                               "content": [{"type": "output_text", "text": self.render(turn["say"], cwd), "annotations": []}]})
-        for i, call in enumerate(turn.get("calls", [])):
+        for i, call in enumerate(c for c in turn.get("calls", []) if set(c) != {"claude"}):  # claude-only: skipped
             out_items.append(self._codex_call(call, cwd, code_mode, f"{index}_{i}"))
         return self._openai(out_items)
 

@@ -106,7 +106,12 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         server = launch.BackgroundServer(proxy)
         server.start()
         servers.append(server)
-        argv, env = agent.command(ws, server.port, case.resolve(case.prompt, salt), REAL_HOME, out, model, extra)
+        mcp = None
+        if case.mcp:
+            mcp = {"name": "notes", "command": sys.executable, "args": [str(Path(__file__).parent / "mcp_notes.py")],
+                   "env": {"KEEPMUM_E2E_MCP_LOG": str(out / "mcp.jsonl"),
+                           "KEEPMUM_E2E_MCP_REPLY": case.resolve(case.raw.get("mcp_reply", "no record"), salt)}}
+        argv, env = agent.command(ws, server.port, case.resolve(case.prompt, salt), REAL_HOME, out, model, extra, mcp)
         try:
             done = subprocess.run(argv, env=env, cwd=ws, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                   timeout=case.timeout)
@@ -127,8 +132,9 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         os.environ["HOME"] = REAL_HOME
     after = oracle.snapshot(ws)
     transcript = agent.transcript(stdout, out)
+    mcp_log = (out / "mcp.jsonl").read_text() if (out / "mcp.jsonl").exists() else ("" if case.mcp else None)
     findings = oracle.judge(case, salt, tap.exchanges, before, after, transcript, masked, keepmum, code,
-                            scripted.served if scripted else None)
+                            scripted.served if scripted else None, mcp_log)
     failed = [f for f in findings if f.failing()]
     # The provider refused to answer (a usage limit): the run says nothing about keepmum.
     limited = any(e["status"] == 429 for e in keepmum["errors"]) and not any(f.cls == "leak" for f in findings)
@@ -153,6 +159,8 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
             "headers": sorted(ex.headers),  # names only: values may be the agent's login
             "body": case.shown(ex.body.decode("utf-8", "replace")),
             "reply": case.shown(ex.reply.decode("utf-8", "replace"))}) + "\n" for ex in tap.exchanges))
+        if mcp_log:
+            (d / "mcp.jsonl").write_text(case.shown(mcp_log))
         (d / "workspace.json").write_text(json.dumps({case.shown(k): case.shown(v.decode("utf-8", "replace"))
                                                       for k, v in after.items()}, indent=1))
         result["kept"] = str(d)
