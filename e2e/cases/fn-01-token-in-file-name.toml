@@ -1,0 +1,36 @@
+id = "fn-01-token-in-file-name"
+title = "A file whose name holds a token is renamed, and its old name written down"
+why = """
+The model sees `backup-KEEPMUM_SECRET_….txt` in the listing. Its `mv` and the line it writes must
+both be restored, so the right file moves and MOVED.md names the real old file, not a placeholder.
+"""
+
+prompt = """
+There is one file in this folder whose name starts with "backup-". Rename it to backup.txt without
+changing its contents. Then create MOVED.md containing exactly one line: the file's old name. Do not
+ask questions.
+"""
+
+[values]
+tok = { gen = "github-token", kind = "SECRET" }
+
+[files]
+"backup-{{v:tok}}.txt" = "nightly backup\n"
+"README.md" = "Backups live here.\n"
+
+
+[[script]]
+calls = [{ shell = "ls" }]
+[[script]]
+calls = [{ shell = "mv backup-{{ph:tok}}.txt backup.txt" }]
+[[script]]
+calls = [{ write = "MOVED.md", content = "backup-{{ph:tok}}.txt\n" }]
+[[script]]
+say = "Renamed backup-{{ph:tok}}.txt to backup.txt and wrote MOVED.md."
+
+[expect]
+masked = ["tok"]
+files = { "backup.txt" = "nightly backup\n", "MOVED.md" = { regex = "^backup-{{v:tok}}\\.txt\\n?$" } }
+absent = ["backup-{{v:tok}}.txt"]
+only_new = ["backup.txt", "MOVED.md"]
+others_unchanged = true

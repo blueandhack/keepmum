@@ -1,0 +1,25 @@
+id = "fn-06-lowered-placeholder"
+title = "A placeholder the model lowercased in a file name"
+why = """
+Models slugify names: `notes-keepmum_secret_1a2b3c4d.md`. keepmum restores only exact placeholders,
+so the file is created under the placeholder's name, and nothing counts it as unresolved.
+"""
+prompt = "Create a notes file named after the backup's token. Do not ask questions."
+modes = ["scripted"]
+
+[values]
+tok = { gen = "github-token", kind = "SECRET" }
+
+[files]
+"backup-{{v:tok}}.txt" = "nightly backup\n"
+
+[[script]]
+calls = [{ shell = "ls" }]
+[[script]]
+calls = [{ write = "notes-{{ph:tok|lower}}.md", content = "notes\n" }]
+[[script]]
+say = "Done."
+
+[expect]
+files = { "notes-{{v:tok}}.md" = "notes\n" }
+only_new = ["notes-{{v:tok}}.md"]

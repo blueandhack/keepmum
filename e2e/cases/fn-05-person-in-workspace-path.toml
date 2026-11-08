@@ -1,0 +1,29 @@
+id = "fn-05-person-in-workspace-path"
+title = "The project sits in a folder named after a person; files land in the real folder"
+why = """
+Absolute paths hold the folder's name, so every path the model writes holds a placeholder. One
+restore missed and the agent creates a `KEEPMUM_PERSON_…` folder beside the real one.
+"""
+prompt = """
+Create notes/today.md in this project containing the line "standup at 10", and write the absolute
+path of this project folder into WHERE.md. Do not ask questions.
+"""
+config = "[detect]\nmodel = true\npii = true\n"
+workspace_dir = "Margaret Thornbury/project"
+
+[values]
+person = { text = "Margaret Thornbury", kind = "PERSON", must_mask = false }
+
+[files]
+"README.md" = "Margaret's project.\n"
+
+[[script]]
+calls = [{ write = "{{cwd}}/notes/today.md", content = "standup at 10\n" }]
+[[script]]
+calls = [{ write = "{{cwd}}/WHERE.md", content = "{{cwd}}\n" }]
+[[script]]
+say = "Done."
+
+[expect]
+files = { "notes/today.md" = "standup at 10\n", "WHERE.md" = { contains = "Margaret Thornbury/project" } }
+only_new = ["notes/today.md", "WHERE.md"]

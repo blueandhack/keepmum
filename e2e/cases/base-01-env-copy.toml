@@ -1,0 +1,32 @@
+id = "base-01-env-copy"
+title = "A token is copied from .env into a new config file, exactly"
+why = """
+The baseline every other case builds on: the model only ever sees a placeholder, and the file the
+agent writes holds the real token, byte for byte.
+"""
+
+prompt = """
+Copy the GITHUB_TOKEN line from .env into a new file config/github.env, exactly as it is, followed
+by a second line REGION=eu. Do not change .env. Do not ask questions.
+"""
+
+
+[values]
+tok = { gen = "github-token", kind = "SECRET" }
+
+[files]
+".env" = "GITHUB_TOKEN={{v:tok}}\nLOG_LEVEL=info\n"
+
+
+[[script]]
+calls = [{ read = ".env" }]
+[[script]]
+calls = [{ write = "config/github.env", content = "GITHUB_TOKEN={{ph:tok}}\nREGION=eu\n" }]
+[[script]]
+say = "Created config/github.env with GITHUB_TOKEN={{ph:tok}} and REGION=eu."
+
+[expect]
+masked = ["tok"]
+files = { "config/github.env" = "GITHUB_TOKEN={{v:tok}}\nREGION=eu\n" }
+only_new = ["config/github.env"]
+others_unchanged = true

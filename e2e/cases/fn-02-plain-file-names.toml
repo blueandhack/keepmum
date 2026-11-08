@@ -1,0 +1,33 @@
+id = "fn-02-plain-file-names"
+title = "File names that look random or dated reach the model as they are"
+why = """
+Dated, hashed and high-entropy file names are not secrets. If keepmum masks one, the model works
+with a placeholder for a plain name, and the Logs page fills with noise (fixed in f3369bb for
+names with an extension; this case keeps it fixed).
+"""
+prompt = """
+List every file in this folder and its subfolders, then create INDEX.md with one line per file: its
+path relative to this folder, sorted. Do not include INDEX.md itself. Do not ask questions.
+"""
+plain = ["guard-20261104-231405.md", "bench/results/PHASE0.md", "reports/Q3-a3f9c2e17b4d9e8f.csv",
+         "Ab3dEf9GhJ2kLm4NpQ7r.md", "notes/2026-11-07_9f86d081884c.json", "build/app-7f3a9c2e.min.js"]
+
+[files]
+"guard-20261104-231405.md" = "guard results\n"
+"bench/results/PHASE0.md" = "phase 0\n"
+"reports/Q3-a3f9c2e17b4d9e8f.csv" = "q,v\n"
+"Ab3dEf9GhJ2kLm4NpQ7r.md" = "notes\n"
+"notes/2026-11-07_9f86d081884c.json" = "{}\n"
+"build/app-7f3a9c2e.min.js" = "x\n"
+
+[[script]]
+calls = [{ shell = "find . -type f | sort" }]
+[[script]]
+calls = [{ write = "INDEX.md", content = "{{seen:Ab3dEf9GhJ2kLm4NpQ7r.md\nbench/results/PHASE0.md\nbuild/app-7f3a9c2e.min.js\nguard-20261104-231405.md\nnotes/2026-11-07_9f86d081884c.json\nreports/Q3-a3f9c2e17b4d9e8f.csv\n}}" }]
+[[script]]
+say = "Wrote INDEX.md with 6 files."
+
+[expect]
+files = { "INDEX.md" = { contains = ["guard-20261104-231405.md", "bench/results/PHASE0.md", "reports/Q3-a3f9c2e17b4d9e8f.csv", "Ab3dEf9GhJ2kLm4NpQ7r.md", "notes/2026-11-07_9f86d081884c.json", "build/app-7f3a9c2e.min.js"] } }
+only_new = ["INDEX.md"]
+others_unchanged = true

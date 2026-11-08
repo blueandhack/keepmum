@@ -35,3 +35,6 @@ sparkle-private-key*
 
 # wrangler dev only: opens /stats without Cloudflare Access (worker/README.md)
 .dev.vars
+
+# e2e runs: transcripts and requests can hold what an agent sent (e2e/README.md)
+e2e/results/
