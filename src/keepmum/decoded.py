@@ -77,8 +77,9 @@ def _od_c(line: str) -> str | None:
     m = _OD_C.search(line)
     if m and m.start() <= 40:
         rest, bare = line[m.end() + 1:], False
-    elif line.startswith(" " * 8) and line.strip():
-        rest, bare = line[8:], True  # where the 7-digit offset and its space would be
+    elif line.startswith("   ") and line.strip():
+        # BSD od pads where the 7-digit offset and its space would be; GNU od starts the fields.
+        rest, bare = (line[8:] if line.startswith(" " * 8) else line), True
     else:
         return None
     out, i, fields = [], 0, 0

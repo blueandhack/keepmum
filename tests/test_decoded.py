@@ -53,11 +53,30 @@ def wrapped(s: str, n: int) -> str:
     return "\n".join(s[i:i + n] for i in range(0, len(s), n)) + "\n"
 
 
+def gnu_od_an_c(data: bytes) -> str:
+    """GNU od -An -c (Linux): no offset, no padding where it would be."""
+    esc = {10: "\\n", 9: "\\t", 13: "\\r", 0: "\\0"}
+    return "\n".join("".join(f"{esc.get(b, chr(b)):>4}" for b in data[o:o + 16]) for o in range(0, len(data), 16)) + "\n"
+
+
+def gnu_od_an_tx1c(data: bytes) -> str:
+    """GNU od -An -tx1c: a hex line, then its characters, per 16 bytes."""
+    esc = {10: "\\n", 9: "\\t", 13: "\\r", 0: "\\0"}
+    out = []
+    for o in range(0, len(data), 16):
+        chunk = data[o:o + 16]
+        out.append("".join(f"  {b:02x}" for b in chunk))
+        out.append("".join(f"{esc.get(b, chr(b)):>4}" for b in chunk))
+    return "\n".join(out) + "\n"
+
+
 FORMATS = {
     "xxd": xxd(ENV),
     "hexdump -C": hexdump_c(ENV),
     "od -c": od_c(ENV),
     "xxd -p": wrapped(ENV.hex(), 60),
+    "GNU od -An -c": gnu_od_an_c(ENV),
+    "GNU od -An -tx1c": gnu_od_an_tx1c(ENV),
     "base64": wrapped(base64.b64encode(ENV).decode(), 76),
     "base64 inline": "the file is " + base64.b64encode(ENV).decode() + " (base64)",
 }
