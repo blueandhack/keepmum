@@ -333,3 +333,29 @@ def test_a_url_flagged_for_the_name_inside_it_masks_only_the_name():
     url = "see https://intranet.example/private/x"
     r3 = Redactor(Fixed(lambda t: [Span(4, len(t), "URL", 0.9, "pf-serve")]), Vault(bytes(range(32))))
     assert r3.redact_text(url).startswith("see KEEPMUM_URL_")
+
+
+@pytest.mark.parametrize("line", ["GITHUB_TOKEN={tok}$\nLOG_LEVEL=info$\n", "grep '^GITHUB_TOKEN={tok}$' .env"])
+def test_a_lines_dollar_is_not_masked_with_the_token_before_it(line):
+    """`sed -n l` and `cat -A` end each line with `$`, as a grep anchor does: the generic KEY=value
+    match ran one `$` past the token, and the model got a placeholder for both (live, DeepSeek)."""
+    v = Vault(bytes(range(32)))
+    r = Redactor(Pipeline(RulesDetector()), v)
+    out = r.redact_text(line.format(tok=FAKE_TOKEN))
+    ph = r.redact_text(f"GITHUB_TOKEN={FAKE_TOKEN}\n").split("=")[1].strip()
+    assert f"{ph}$" in out and FAKE_TOKEN not in out
+
+
+def test_a_url_and_the_name_in_it_found_together_mask_only_the_name():
+    """The pipeline merges overlaps: a URL and the name inside it, both found, were one placeholder."""
+    name = "Margaret Thornbury"
+    url = f"https://html.duckduckgo.com/html/?q={name}"
+    text = f'curl -sL "{url}"'
+
+    class Both:
+        def detect(self, t, *a, **k):
+            return [Span(t.index(url), t.index(url) + len(url), "URL", 0.9, "pf-serve"),
+                    Span(t.index(name), t.index(name) + len(name), "PERSON", 0.9, "pf-serve")]
+
+    out = Redactor(Pipeline(RulesDetector(), Both(), pii=True), Vault(bytes(range(32)))).redact_text(text)
+    assert out.startswith('curl -sL "https://html.duckduckgo.com/html/?q=KEEPMUM_PERSON_') and name not in out

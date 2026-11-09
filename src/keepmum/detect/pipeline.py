@@ -13,7 +13,7 @@ import threading
 from collections import Counter, OrderedDict
 
 from . import Span
-from .merge import merge
+from .merge import merge, narrow
 from .rules import RulesDetector, shannon_entropy
 
 _PIECE = re.compile(r"\S+")
@@ -110,6 +110,7 @@ class Pipeline:
         spans = [s for s in spans if not (s.source in GUESSES and (
             s.type == "SECRET" and (is_file_name(text, s.start, s.end) or is_path(text[s.start:s.end]))
             or s.type == "EMAIL" and "@" not in text[s.start:s.end]))]
+        spans = narrow(spans, text)
         refined = len(spans)
         # Counted per value, after overlapping hits merge: three rules on one token are one secret.
         for s in merge(spans):
