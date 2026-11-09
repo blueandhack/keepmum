@@ -7,6 +7,51 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a5</title>
+      <pubDate>Mon, 09 Nov 2026 09:00:14 GMT</pubDate>
+      <sparkle:version>10005</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a5</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The fifth alpha of keepmum protects the Antigravity CLI, notices what other apps add to your coding agents, and closes several ways a secret could leave your Mac in a form keepmum did not recognize. Each fix below was found by running real agents through keepmum.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a5.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2, 0.1.0a3 or 0.1.0a4:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a5.dmg.sha256`
+
+## What's new
+
+- **The Antigravity CLI.** `keepmum agy` starts it with every request scanned, signed in with Google or through its gateway mode. Its web tools keep placeholders, and an MCP tool it calls gets only the values that server may receive.
+- **What other apps add to your agents.** keepmum watches the plugins, hooks, MCP servers, skills and global instructions of Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI and opencode. When something changes, the menu bar says so (for example "Codex changed: postman@postman"). **Settings › Extensions** lists what is new, with Keep and Remove; removals and keeps appear on the Audit page.
+- **Secrets printed encoded are masked.** Hex dumps (`xxd`, `hexdump -C`, `od` in any layout), `od -c`, plain hex and base64 in a command's output are decoded and scanned. A block that holds a secret is masked whole, so `xxd .env` or `base64 &lt; .env` cannot carry a key out in hex or in pieces.
+- **A warning for Codex scripts keepmum cannot check.** When a Codex script runs a command and hands a value it works out to a network tool, Codex shows a `keepmum: …` note after the call, the menu bar lights a dot, and macOS shows a notification. The script still runs; the hit is on the Logs page and in the audit log.
+- **Start, stop and restart from the menu bar.** A Background service row says what the service is doing, with Start, Stop, Restart, and Allow when Login Items needs your approval.
+- **The Live flow draws requests as they happen:** a request sets off as it leaves your Mac and waits at its provider until the reply arrives.
+- **Python 3.15.** The app's engine runs on Python 3.15.2 (was 3.12).
+- **Update checks and downloads go through keepmum.app**, which counts them by version and keeps no addresses. To leave your Mac out of the counts: Settings › General › Updates › Count this Mac. Updates work the same either way.
+
+## Fixes
+
+- **Codex scripts.** Codex 0.147 and later run commands from a JavaScript `exec` script. Its commands are now checked like any shell command, and an MCP tool the script calls gets only what its server may receive.
+- **opencode's Code Mode.** opencode 2.x reaches MCP servers and the web (`fetch`) from scripts, which keepmum did not know: a token could reach any MCP server or URL. Scripts now follow the same rules as Codex's.
+- **A password with spaces or quotes was sent in the agent's history.** keepmum puts a value back escaped for the shell (`'p@ss w0rd '\''x'\''`), and the agent sends the command it ran back to the model; that escaped form was not recognized, so it went out as it read. Every escaped form now maps back to its placeholder, and the model sees the command it wrote.
+- **Commands wrapped in `bash -lc '…'`.** A value is now quoted for the inner shell too. Before, a name with a space was split in two, and its halves went out in error messages; a password's `$…` was expanded.
+- **Masking that hid too much.** A search URL with a name in it is masked as the name only. A line's trailing `$` (`cat -A`, `sed -n l`, a grep anchor) is no longer masked with the token before it. In `grep '^GITHUB_TOKEN=' .env`, the quote after `=` is no longer read as the start of a secret.
+- **The Antigravity CLI's commands** get values quoted for the shell (a password with `"` broke them).
+- **Shutdown** no longer spins at full CPU when every warn-mode check has already finished.
+- **The menu panel** keeps its window to its height when a row appears or goes away.</description>
+      <enclosure url="https://keepmum.app/update/v0.1.0a5/Keepmum-0.1.0a5.dmg" length="37659913" type="application/octet-stream" sparkle:edSignature="cgOjpVqhB6No2+XVRsJ+dHJpwsUx6PVRR+sVhLtJwJBp+sDFLeFgPFXhGr4nQvOSwgeXB0xbq+DMUbrXaNqzDw=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a4</title>
       <pubDate>Fri, 06 Nov 2026 09:03:03 GMT</pubDate>
       <sparkle:version>10004</sparkle:version>
@@ -149,6 +194,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: Sy1JSyQn9q0IqHCuyzxTEEaEtV6I6twBAQlReHvdm8DJqw8Osm1lGcLzhFKQniU5Ss8hixodBKe26e0zOSZMAQ==
-length: 12885
+edSignature: g+kOp2MDjG/A7hekD00OcJbjBgSfA5+FAHbNsLunE0fJWhWNzm2yIF8kMxbAx7AJ5HguA8D81QTAYYAdG7uzDw==
+length: 18136
 -->
