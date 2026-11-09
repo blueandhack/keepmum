@@ -31,7 +31,7 @@ from .servers import decode_body
 
 # The workspace path as the agent tells the model (spaces and all): Codex's <cwd>, Claude Code's
 # environment section. Searched in the request as JSON text, where a line ends in an escaped \n.
-_CWD = (re.compile(r"<cwd>([^<]+)</cwd>"),
+_CWD = (re.compile(r"<cwd>(?:\\n)?([^<]+?)(?:\\n)?</cwd>"),  # pi 1.x puts it on a line of its own
         re.compile(r"(?:Primary working directory|[Ww]orking directory): *(/.+?)(?:\\n|\\u|\"|$)"),
         re.compile(r"Active Workspaces:\\n- (/.+?)(?:\\n|\\u|\"|$)"))  # Antigravity
 
@@ -48,7 +48,7 @@ def _halves(text: str) -> list[str]:
     return [p for p in (text[:cut], text[cut:]) if p]
 
 
-RAW = ("codex", "claude", "agy")  # a call with only one of these keys is that agent's alone
+RAW = ("codex", "claude", "agy", "pi", "opencode")  # a call with only one of these keys is that agent's alone
 
 
 def _calls(turn: dict, agent: str) -> list[dict]:
@@ -121,16 +121,61 @@ class ScriptedModel:
             return self._anthropic([{"type": "text", "text": "ok"}], body)
         outputs = sum(1 for m in body.get("messages") or [] if isinstance(m.get("content"), list)
                       for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_result")
-        index, turn = self._turn(outputs, "claude")
+        agent = self._messages_agent(body)
+        index, turn = self._turn(outputs, agent)
         cwd = self._cwd(body)
-        self.served.append({"api": "messages", "turn": index, "outputs": outputs, "cwd": cwd})
+        self.served.append({"api": "messages", "agent": agent, "turn": index, "outputs": outputs, "cwd": cwd})
         blocks = []
         if turn.get("say"):
             blocks.append({"type": "text", "text": self.render(turn["say"], cwd)})
-        for i, call in enumerate(_calls(turn, "claude")):
-            name, args = self._claude_call(call, cwd)
+        for i, call in enumerate(_calls(turn, agent)):
+            name, args = {"pi": self._pi_call, "opencode": self._opencode_call}.get(agent, self._claude_call)(call, cwd)
             blocks.append({"type": "tool_use", "id": f"toolu_e2e_{index}_{i}", "name": name, "input": args})
         return self._anthropic(blocks, body)
+
+    @staticmethod
+    def _messages_agent(body: dict) -> str:
+        """Which agent speaks the Messages API here, by the tools it offers: Claude Code (Bash),
+        pi (bash, and an edit that takes a list of edits) or opencode (shell, with a workdir)."""
+        tools = {t.get("name"): (t.get("input_schema") or {}).get("properties") or {}
+                 for t in body.get("tools") or [] if isinstance(t, dict)}
+        if "shell" in tools and "workdir" in tools["shell"]:
+            return "opencode"
+        if "bash" in tools and "edits" in tools.get("edit", {}):
+            return "pi"
+        return "claude"
+
+    def _absolute(self, p: str, cwd: str) -> str:
+        p = self.render(p, cwd)
+        return p if p.startswith("/") else f"{cwd.rstrip('/')}/{p}"
+
+    def _pi_call(self, call: dict, cwd: str) -> tuple[str, dict]:
+        if "pi" in call:  # a raw call: {pi = {name, input}}
+            return call["pi"]["name"], json.loads(self.render(json.dumps(call["pi"]["input"]), cwd))
+        if "shell" in call:
+            return "bash", {"command": self.render(call["shell"], cwd)}
+        if "write" in call:
+            return "write", {"path": self._absolute(call["write"], cwd), "content": self.render(call.get("content", ""), cwd)}
+        if "read" in call:
+            return "read", {"path": self._absolute(call["read"], cwd)}
+        if "edit" in call:
+            return "edit", {"path": self._absolute(call["edit"], cwd),
+                            "edits": [{"oldText": self.render(call["old"], cwd), "newText": self.render(call["new"], cwd)}]}
+        raise ValueError(f"unknown call {call}")
+
+    def _opencode_call(self, call: dict, cwd: str) -> tuple[str, dict]:
+        if "opencode" in call:  # a raw call: {opencode = {name, input}}
+            return call["opencode"]["name"], json.loads(self.render(json.dumps(call["opencode"]["input"]), cwd))
+        if "shell" in call:
+            return "shell", {"command": self.render(call["shell"], cwd), "workdir": cwd}
+        if "write" in call:
+            return "write", {"path": self._absolute(call["write"], cwd), "content": self.render(call.get("content", ""), cwd)}
+        if "read" in call:
+            return "read", {"path": self._absolute(call["read"], cwd)}
+        if "edit" in call:
+            return "edit", {"path": self._absolute(call["edit"], cwd), "oldString": self.render(call["old"], cwd),
+                            "newString": self.render(call["new"], cwd)}
+        raise ValueError(f"unknown call {call}")
 
     def _claude_call(self, call: dict, cwd: str) -> tuple[str, dict]:
         def absolute(p):

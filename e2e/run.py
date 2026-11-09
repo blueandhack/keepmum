@@ -115,6 +115,9 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
                    "env": {"KEEPMUM_E2E_MCP_LOG": str(out / "mcp.jsonl"),
                            "KEEPMUM_E2E_MCP_REPLY": case.resolve(case.raw.get("mcp_reply", "no record"), salt)}}
         argv, env = agent.command(ws, server.port, case.resolve(case.prompt, salt), REAL_HOME, out, model, extra, mcp, mode)
+        # Where the agent works: some take it from PWD, which is the harness's own folder otherwise
+        # (opencode read this repository as its project before this was set).
+        env["PWD"] = str(ws)
         try:
             done = subprocess.run(argv, env=env, cwd=ws, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                   timeout=case.timeout)
@@ -228,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
             if not agent.available():
                 reason = f"{agent.binary} is not installed"
             elif case.mcp and args.mode not in agent.mcp_modes:
-                reason = f"{agent.name} takes MCP servers only from its global config (scripted runs give it its own)"
+                reason = f"{agent.name} gets no MCP server in {args.mode} runs"
             elif case.model:
                 model_ok = model_ready() if model_ok is None else model_ok
                 if not model_ok:

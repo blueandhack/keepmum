@@ -257,4 +257,148 @@ class Antigravity(Agent):
         return t
 
 
-AGENTS: dict[str, Agent] = {a.name: a for a in (Codex(), Claude(), Antigravity())}
+DUMMY_ANTHROPIC_KEY = "sk-ant-api03-e2e-dummy-not-a-key-" + "0" * 60 + "AA"
+
+
+class Pi(Agent):
+    """pi, pointed at keepmum as `keepmum protect` points it: a models.json giving its providers
+    keepmum's base URLs (clients.pi_providers), in an agent folder of the run's own
+    (PI_CODING_AGENT_DIR), so the user's pi setup stays out. Scripted, it speaks Anthropic with a
+    dummy key. Live, it uses the user's own login (/login in pi; Claude here): the run's folder
+    links auth.json to the user's, which pi rewrites in place under a lock, so a refreshed token
+    lands in the user's file; a copy could rotate the refresh token away from it."""
+
+    name, binary, api = "pi", "pi", "anthropic"
+    mcp_modes = ()
+    MODEL = "claude-opus-4-5"
+    # The login the live run uses: anthropic (a Claude login) or openai-codex (ChatGPT).
+    LIVE_PROVIDER = os.environ.get("KEEPMUM_E2E_PI_PROVIDER", "anthropic")
+    LIVE_MODEL = {"anthropic": "claude-sonnet-5-5", "openai-codex": "gpt-5.5"}.get(LIVE_PROVIDER)
+
+    def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
+        from keepmum.clients import pi_providers
+
+        live = mode == "live"
+        agent = out / "pi-agent"
+        agent.mkdir(exist_ok=True)
+        (agent / "models.json").write_text(json.dumps({"providers": {
+            name: {"baseUrl": url, "headers": {"x-keepmum-client": "pi"}} for name, url in pi_providers(port).items()}}))
+        if live:
+            real = Path(os.environ.get("PI_CODING_AGENT_DIR") or Path(real_home) / ".pi" / "agent") / "auth.json"
+            (agent / "auth.json").symlink_to(real)
+        argv = [shutil.which(self.binary), "-p", "--mode", "json", "--no-session", "--no-extensions", "--no-skills",
+                "--no-prompt-templates", "--no-themes", "--offline",
+                "--provider", self.LIVE_PROVIDER if live else "anthropic",
+                "--model", model or (self.LIVE_MODEL if live else self.MODEL), *extra, prompt]
+        env = {**_clean_env(real_home), "PI_CODING_AGENT_DIR": str(agent), "PI_OFFLINE": "1"}
+        if not live:
+            env["ANTHROPIC_API_KEY"] = DUMMY_ANTHROPIC_KEY
+        return argv, env
+
+    def transcript(self, stdout, out):
+        t = Transcript()
+        for line in stdout.splitlines():
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            kind = ev.get("type")
+            if kind == "tool_execution_start":
+                args = ev.get("args") or {}
+                if ev.get("toolName") == "bash":
+                    t.commands.append(str(args.get("command", "")))
+                else:
+                    t.tool_inputs.append(json.dumps({"tool": ev.get("toolName"), **args}, ensure_ascii=False))
+            elif kind == "tool_execution_end":
+                for c in ((ev.get("result") or {}).get("content") or []):
+                    if isinstance(c, dict) and c.get("type") == "text":
+                        t.shown.append(c.get("text", ""))
+            elif kind == "message_end" and (ev.get("message") or {}).get("role") == "assistant":
+                text = "".join(c.get("text", "") for c in ev["message"].get("content") or []
+                               if isinstance(c, dict) and c.get("type") == "text")
+                if text:
+                    t.shown.append(text)
+                    t.final = text
+                if ev["message"].get("stopReason") == "error" or ev["message"].get("errorMessage"):
+                    t.errors.append(json.dumps(ev["message"], ensure_ascii=False)[:2000])
+        return t
+
+
+class OpenCode(Agent):
+    """opencode, pointed at keepmum as `keepmum protect` points it: an opencode.json giving its
+    providers keepmum's base URLs (clients.opencode_providers), in config, cache and state folders of
+    the run's own (XDG_*), so the user's setup stays out. Scripted, its data folder is the run's own
+    too and it speaks Anthropic with a dummy key. Live, it uses the user's data folder, where its
+    ChatGPT login is stored (a copy could rotate the refresh token away), so each run is kept in the
+    user's session list; OPENAI_API_KEY is left out, so the login, not a key, is what is tested."""
+
+    name, binary, api = "opencode", "opencode", "anthropic"
+    NETWORK = frozenset({"webfetch", "websearch"})  # sent from this Mac, or by the provider
+    MODEL = "anthropic/claude-opus-4-5"
+    LIVE_MODEL = "openai/gpt-6.1-sol"
+
+    def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
+        from keepmum.clients import opencode_providers
+
+        live = mode == "live"
+        xdg = {k: out / f"opencode-{k.split('_')[1].lower()}" for k in
+               ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME")
+               if not (live and k == "XDG_DATA_HOME")}
+        for d in xdg.values():
+            d.mkdir(exist_ok=True)
+        config = xdg["XDG_CONFIG_HOME"] / "opencode"
+        config.mkdir(exist_ok=True)
+        (config / "opencode.json").write_text(json.dumps({
+            "$schema": "https://opencode.ai/config.json", "autoupdate": False, "share": "disabled",
+            # --auto approves what is not denied, but a web search still asks (headless, it is cancelled).
+            "permission": {"websearch": "allow", "webfetch": "allow"},
+            "provider": {name: {"options": {"baseURL": url, "headers": {"x-keepmum-client": "opencode"}}}
+                         for name, url in opencode_providers(port).items()},
+            **({"mcp": {mcp["name"]: {"type": "local", "command": [mcp["command"], *mcp["args"]],
+                                      "environment": mcp["env"], "enabled": True}}} if mcp else {})}))
+        argv = [shutil.which(self.binary), "run", "--format", "json", "--auto", "--standalone",
+                "-m", model or (self.LIVE_MODEL if live else self.MODEL), *extra, prompt]
+        env = {**_clean_env(real_home), **{k: str(v) for k, v in xdg.items()}}
+        if live:
+            env.pop("OPENAI_API_KEY", None)
+        else:
+            env["ANTHROPIC_API_KEY"] = DUMMY_ANTHROPIC_KEY
+        return argv, env
+
+    def transcript(self, stdout, out):
+        t = Transcript()
+        for line in stdout.splitlines():
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            part = ev.get("part") or {}
+            if ev.get("type") == "tool_use":
+                state = part.get("state") or {}
+                inp = state.get("input") or {}
+                tool = part.get("tool")
+                if tool == "shell":
+                    t.commands.append(str(inp.get("command", "")))
+                elif tool == "execute":  # Code Mode: reaches MCP servers and, with fetch, the web
+                    t.mcp_inputs.append(json.dumps(inp, ensure_ascii=False))
+                    if "fetch(" in str(inp.get("code", "")):
+                        t.network_inputs.append(json.dumps(inp, ensure_ascii=False))
+                        t.web_calls += 1
+                elif tool in self.NETWORK:
+                    t.network_inputs.append(json.dumps({"tool": tool, **inp}, ensure_ascii=False))
+                    t.web_calls += 1
+                else:
+                    t.tool_inputs.append(json.dumps({"tool": tool, **inp}, ensure_ascii=False))
+                if state.get("output"):
+                    t.shown.append(str(state["output"]))
+                if state.get("status") == "error":
+                    t.shown.append(str(state.get("error", "")))
+            elif ev.get("type") == "text" and part.get("text"):
+                t.shown.append(part["text"])
+                t.final = part["text"]
+            elif ev.get("type") == "error":
+                t.errors.append(json.dumps(ev, ensure_ascii=False)[:2000])
+        return t
+
+
+AGENTS: dict[str, Agent] = {a.name: a for a in (Codex(), Claude(), Antigravity(), Pi(), OpenCode())}

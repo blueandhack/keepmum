@@ -139,7 +139,7 @@ def load_case(path: Path) -> Case:
         raise ValueError(f"{path.name}: no top-level prompt (is it below a [table]?)")
     return Case(
         id=raw["id"], title=raw["title"], why=raw.get("why", "").strip(), path=path,
-        agents=raw.get("agents", ["codex", "claude", "agy"]), modes=raw.get("modes", ["scripted", "live"]),
+        agents=raw.get("agents", ["codex", "claude", "agy", "pi", "opencode"]), modes=raw.get("modes", ["scripted", "live"]),
         config=config, model=bool(tomllib.loads(config).get("detect", {}).get("model", False)),
         prompt=raw.get("prompt", "").strip(), values=values, plain=raw.get("plain", []),
         files=raw.get("files", {}), workspace_dir=raw.get("workspace_dir", "ws"), script=raw.get("script", []),

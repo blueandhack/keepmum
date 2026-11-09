@@ -22,7 +22,7 @@ jobs:
       - run: uv run --frozen pytest -q
 
   agents:
-    # The e2e suite (e2e/README.md): the real Codex, Claude Code and Antigravity CLI through keepmum,
+    # The e2e suite (e2e/README.md): the real Codex, Claude Code, Antigravity CLI, pi and opencode through keepmum,
     # answered by a scripted model and signed in with dummy keys, so no secret is needed (e2e/ci.sh). The agents
     # are pinned: an update can change how they call tools, which should arrive as its own change,
     # not as a failure on an unrelated one. Cases that need the model skip themselves.
@@ -31,6 +31,10 @@ jobs:
     env:
       CODEX_VERSION: 0.147.0
       CLAUDE_CODE_VERSION: 2.1.310
+      PI_VERSION: 0.84.2
+      # opencode 2.x is not on npm: its GitHub release, checked against the digest GitHub records.
+      OPENCODE_VERSION: 2.2.6
+      OPENCODE_SHA256: 15491608f6b0bc4debe5eac35eab629a2b07ea9a1fbac68ad53bcea59fcc4b45
       # The Antigravity CLI's own installer only installs the latest: the release is pinned by its
       # URL (from https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/darwin_arm64.json)
       # and that manifest's SHA-512.
@@ -45,7 +49,8 @@ jobs:
         run: |
           node --version
           npm install --no-fund --no-audit --prefix "$RUNNER_TEMP/agents" \
-            "@openai/codex@$CODEX_VERSION" "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+            "@openai/codex@$CODEX_VERSION" "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" \
+            "@earendil-works/pi-coding-agent@$PI_VERSION"
           echo "$RUNNER_TEMP/agents/node_modules/.bin" >> "$GITHUB_PATH"
           curl -fsSL -o "$RUNNER_TEMP/agy.tar.gz" "$AGY_URL"
           echo "$AGY_SHA512  $RUNNER_TEMP/agy.tar.gz" | shasum -a 512 -c -
@@ -54,6 +59,13 @@ jobs:
           mv "$RUNNER_TEMP/agy/antigravity" "$RUNNER_TEMP/agy/agy"
           echo "$RUNNER_TEMP/agy" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/agy/agy" --version | grep -qx "$AGY_VERSION"
+          curl -fsSL -o "$RUNNER_TEMP/opencode.zip" \
+            "https://github.com/anomalyco/opencode/releases/download/v$OPENCODE_VERSION/opencode-darwin-arm64.zip"
+          echo "$OPENCODE_SHA256  $RUNNER_TEMP/opencode.zip" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/opencode"
+          unzip -q "$RUNNER_TEMP/opencode.zip" -d "$RUNNER_TEMP/opencode"
+          echo "$RUNNER_TEMP/opencode" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/opencode/opencode" --version | grep -q "$OPENCODE_VERSION"
       - run: e2e/ci.sh
 
   mac-app:

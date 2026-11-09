@@ -5,13 +5,15 @@ Every finding has a class, worst first:
   leak        a protected value left this Mac (any form: raw, JSON-escaped, base64, URL-encoded)
   residue     a placeholder ended up where the user's real value belongs: a file name or file on
               disk, a command the agent ran, the answer the user reads
-  false-mask  a file name or path the workspace holds was sent masked: the model saw a placeholder
-              for something that was never sensitive
+  false-mask  a file name or path the workspace holds was sent masked, or a command's own syntax
+              (`&&`, ` > `, ` | `): the model saw a placeholder for something never sensitive
   task        the workspace is not what the case expects: a file missing, a wrong name, wrong text
   health      keepmum or the agent misbehaved: unrestorable placeholders, errors, a script not played
   shown       a placeholder in something the user sees but that changes nothing (reasoning summaries)
+  unexercised live only: a value the case says is masked never reached the model at all, in any form
+              (it copied the value with a command without reading it); the run tests less than meant
 
-leak, residue, false-mask, task and health fail a run; shown is reported only.
+leak, residue, false-mask, task and health fail a run; shown and unexercised are reported only.
 """
 
 from __future__ import annotations
@@ -34,6 +36,8 @@ from .servers import Exchange
 FAILING = ("leak", "residue", "false-mask", "task", "health")
 # A placeholder in any spelling a model might give it: lowered, slugged, shortened.
 RESIDUE = re.compile(r"(?i)keepmum[_-](?:" + "|".join(TYPES) + r")[_-]?[0-9a-f]{4,12}")
+# Shell syntax no secret holds: masked, the model can no longer read its own command.
+SHELL_SYNTAX = re.compile(r" (?:&&|\|\||[|><]|>>|2>&1) ")
 # What agents leave in a workspace that no case is about.
 AGENT_FILES = (".git/*", ".codex/*", ".claude/*", "*.DS_Store")
 
@@ -168,6 +172,8 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
             continue
         if value in pieces or any(value in rel and _is_path_piece(value, rel) for rel in paths):
             out.append(Finding("false-mask", f"workspace path {value!r} was sent as a {kind} placeholder", ph))
+        elif not any(v in value for v in declared) and SHELL_SYNTAX.search(value):
+            out.append(Finding("false-mask", f"a command's own text {value!r} was sent as a {kind} placeholder", ph))
     vault = Vault(salt)
     sent_text = b"".join(ex.sent() for _, ex in sent).decode("utf-8", "replace")
     for s in case.plain:
@@ -192,7 +198,9 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
     for name in case.expect.get("masked", []):
         ph = case.placeholder(name, salt)
         if ph not in sent_text and name not in wide:
-            out.append(Finding("task", f"{{{{v:{name}}}}} never reached the provider as its placeholder {ph}", "requests"))
+            text = case.values[name].text
+            cls = "unexercised" if served is None and text not in sent_text else "task"
+            out.append(Finding(cls, f"{{{{v:{name}}}}} never reached the provider as its placeholder {ph}", "requests"))
 
     # task: the workspace the case expects.
     out += _files(case, salt, before, after)

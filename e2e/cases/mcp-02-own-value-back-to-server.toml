@@ -28,6 +28,7 @@ calls = [
   { codex = 'text(await tools.mcp__notes__lookup({name: "Margaret Thornbury"}));' },
   { claude = { name = "mcp__notes__lookup", input = { name = "Margaret Thornbury" } } },
   { agy = { name = "call_mcp_tool", args = { ServerName = "notes", ToolName = "lookup", Arguments = { name = "Margaret Thornbury" } } } },
+  { opencode = { name = "execute", input = { code = 'return await tools.notes.lookup({name: "Margaret Thornbury"});' } } },
 ]
 
 [[script]]
@@ -35,6 +36,7 @@ calls = [
   { codex = 'text(await tools.mcp__notes__send_note({text: "Reach Margaret at {{ph:email}}"}));' },
   { claude = { name = "mcp__notes__send_note", input = { text = "Reach Margaret at {{ph:email}}" } } },
   { agy = { name = "call_mcp_tool", args = { ServerName = "notes", ToolName = "send_note", Arguments = { text = "Reach Margaret at {{ph:email}}" } } } },
+  { opencode = { name = "execute", input = { code = 'return await tools.notes.send_note({text: "Reach Margaret at {{ph:email}}"});' } } },
 ]
 
 [[script]]

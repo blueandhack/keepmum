@@ -34,6 +34,8 @@ text(await tools.mcp__notes__send_note({text: `The deploy token is set up: ${tok
 """ },
   { claude = { name = "mcp__notes__send_note", input = { text = "The deploy token is set up: {{ph:tok}}" } } },
   { agy = { name = "call_mcp_tool", args = { ServerName = "notes", ToolName = "send_note", Arguments = { text = "The deploy token is set up: {{ph:tok}}" } } } },
+  # opencode 2.x reaches MCP servers only from its Code Mode `execute` script, as tools.<server>.<tool>.
+  { opencode = { name = "execute", input = { code = 'await tools.notes.send_note({text: "The deploy token is set up: {{ph:tok}}"});' } } },
 ]
 
 [[script]]

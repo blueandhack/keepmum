@@ -1,7 +1,7 @@
 # End-to-end cases with real agents
 
 The unit tests check keepmum's functions. These cases check what the user ends up with: a real
-Codex, Claude Code or the Antigravity CLI (`agy`), running real tools on a real folder, through keepmum. The questions they answer:
+Codex, Claude Code, the Antigravity CLI (`agy`), pi or opencode, running real tools on a real folder, through keepmum. The questions they answer:
 
 - Did any protected value leave the Mac, whole or in part?
 - Does every file the agent creates or renames carry the real name, never `KEEPMUM_…`?
@@ -76,6 +76,18 @@ Each run gets:
   workspace (the commands are the case's own). MCP cases run scripted only: agy takes MCP servers
   only from `~/.gemini/config/mcp_config.json`, which the harness writes only in a run's own HOME;
   `mcp(*)` is allowed for the session, as headless agy denies MCP calls otherwise.
+- **pi and opencode**, pointed at keepmum as `keepmum protect` points them: a `models.json` in an agent
+  folder of the run's own (`PI_CODING_AGENT_DIR`) for pi, an `opencode.json` in config, cache and
+  state folders of the run's own (`XDG_*`) for opencode, each with keepmum's base URLs. Scripted, they
+  speak Anthropic with a dummy key, and opencode's data folder is the run's own too. Live, both use
+  the user's own login. pi's is from its `/login`: Claude (`anthropic`, the default) or ChatGPT
+  (`KEEPMUM_E2E_PI_PROVIDER=openai-codex`, through keepmum's `/chatgpt`), with the run's `auth.json` linked to the user's (pi rewrites it in place under a lock, so a refreshed token
+  lands in the user's file, where a copy could rotate it away). opencode uses its stored ChatGPT login, from the
+  user's own data folder (so each live run is kept in the user's session list), with
+  `OPENAI_API_KEY` left out so the login is what is tested. opencode gets the stub MCP server in that
+  `opencode.json`; its MCP tools are called from its Code Mode `execute` script
+  (`tools.notes.send_note(…)`). The suite gives pi no MCP server yet (pi 1.5 has `pi mcp`). Every
+  agent runs with `PWD` set to the workspace: opencode takes its project from it.
 - **A workspace** built from the case's `[files]`, snapshotted before and after.
 
 ### Two modes
@@ -104,10 +116,11 @@ Whatever a case asks, `oracle.py` checks these, worst first:
 |---|---|
 | `leak` | any form of a protected value (raw, JSON-escaped once or twice, base64, URL-encoded) is in a request, or a value was masked only in part and the rest was sent; or it went into an MCP call or a web tool that sends from the Mac (WebFetch, a browser) |
 | `residue` | a placeholder, in any spelling (`keepmum_secret_…`, `keepmum-secret-…`), is in a file name or file on disk, a command the agent ran, a tool's input, or the final answer |
-| `false-mask` | a workspace path or name, or a string the case lists in `plain`, was sent as a placeholder; or a protected value was masked together with the text around it |
+| `false-mask` | a workspace path or name, or a string the case lists in `plain`, was sent as a placeholder; a command's own syntax (` && `, ` > `, a pipe) was; or a protected value was masked together with the text around it |
 | `task` | the workspace is not what the case expects: a missing file, a wrong name, wrong content, an unexpected new file |
 | `health` | the agent failed or timed out, keepmum met a placeholder it could not restore, keepmum answered with an error, or the script stopped early |
 | `shown` | (reported, not failing) a placeholder in something the user sees but that changes nothing, such as a reasoning summary |
+| `unexercised` | (reported, not failing; live only) a value the case says is masked never reached the model in any form: it copied the value with a command it did not read the output of, so the run tested less than the case means |
 
 ## Writing a case
 
@@ -121,7 +134,7 @@ title = "A file whose name holds a token is renamed, and its old name written do
 why = "What breaks for the user if this fails."
 prompt = "The task, for live mode. Say 'Do not ask questions.'"
 config = "[detect]\nmodel = false\n"   # keepmum's config.toml (default: rules only)
-agents = ["codex", "claude", "agy"]    # default: all three
+agents = ["codex", "claude"]           # default: all five (codex, claude, agy, pi, opencode)
 modes = ["scripted", "live"]           # default: both
 plain = ["guard-20261104-231405.md"]   # must reach the provider unmasked
 workspace_dir = "ws"                   # the workspace folder's name (templates allowed)
@@ -166,7 +179,7 @@ warn_shown = true                                  # the agent must show the use
 
 A script call can carry one form per agent, for a turn they make differently: `{ shell = "…", codex =
 "<script>" }` is the script for Codex and the command for Claude Code and agy, and a call with only
-`codex`, only `claude` or only `agy` is made by that agent only.
+`codex`, `claude`, `agy`, `pi` or `opencode` is made by that agent only.
 
 ### The MCP server
 
@@ -192,7 +205,8 @@ was shown for it (scripts). `{{ph:x|lower}}`, `|slug`, `|upper` and `|typo` give
 careless model rewrites it. `{{seen:text}}` is text as the model saw it, with every masked value
 replaced; use it for a name the model copies from a listing. `{{cwd}}` is the workspace path as the
 agent told the model. Script calls: `shell`, `write` + `content`, `read`, `edit` + `old` + `new`,
-and raw `codex = "<JavaScript>"`, `claude = {name, input}` or `agy = {name, args}`.
+and raw `codex = "<JavaScript>"`, `claude = {name, input}`, `agy = {name, args}`, `pi = {name, input}` or
+`opencode = {name, input}`.
 
 Results never hold a case's values: everything written shows them as `{{v:name}}`. `--keep` also
 writes the requests, which hold whatever else the agent sent (paths, skill lists). Do not share them.

@@ -7,6 +7,10 @@ web_search runs at OpenAI, and Antigravity's search_web is a Code Assist call ke
 each, a masked name is searched as its placeholder, never as the name. The note the
 agent writes on disk still gets the real name.
 """
+# The agents with a web search: pi has none (a model asked to search runs curl, a shell command
+# keepmum gives real values, as any command run on this Mac), and opencode 2.x searches only through a
+# provider the user sets up (none: it asks, and a headless run cancels). opencode's fetch is web-02.
+agents = ["codex", "claude", "agy"]
 modes = ["live"]
 prompt = """
 clients/brief.md names our new client. Search the web for that person's name to find a public

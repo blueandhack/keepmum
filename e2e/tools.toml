@@ -8,8 +8,8 @@
 # tools, destinations.SHELL_TOOLS and codemode.CODE_TOOLS for commands), add a case if it can touch
 # disk or network, then list it here. A tool no longer offered is only reported.
 #
-# Checked against Codex 0.147.0 and 0.167.0, Claude Code 2.1.310 and 2.1.319, and the Antigravity CLI
-# 1.5.3 on Nov 8, 2026, with the e2e stub MCP server configured (mcp-01). Tools a personal login adds (ChatGPT's image generation and
+# Checked against Codex 0.147.0 and 0.167.0, Claude Code 2.1.310 and 2.1.319, the Antigravity CLI
+# 1.5.3, pi 0.84.2 and opencode 2.2.6 on Nov 8, 2026, with the e2e stub MCP server configured (mcp-01). Tools a personal login adds (ChatGPT's image generation and
 # connectors, claude.ai's) are not in CI and not listed.
 #
 # MCP tools are not listed: an agent names them `mcp__<server>__<tool>`, and keepmum holds every one
@@ -74,3 +74,26 @@
 "call_mcp_tool" = "calls an MCP server's tool (ServerName, ToolName, Arguments): decided as mcp__<server>__<tool> (tools.call_name), its result credited to that server"
 "list_resources" = "lists an MCP server's resources (ServerName): decided as that server's tool"
 "read_resource" = "reads a resource from the MCP server its ServerName names: decided as that server's tool"
+
+[pi]
+"bash" = "runs a shell command: destinations and commands checks, values quoted for the shell"
+"read" = "reads a local file by path: restored"
+"write" = "writes a local file (path, content): restored"
+"edit" = "replaces text in a local file (edits: oldText, newText): restored"
+
+# opencode 2.x reaches MCP servers only from `execute` (tools.<server>.<tool>), so MCP tools are
+# never in its list; they are held to the server's setting there (codemode.py).
+[opencode]
+"shell" = "runs a shell command (command, workdir): destinations and commands checks, values quoted for the shell"
+"read" = "reads a local file by path: restored"
+"write" = "writes a local file (path, content): restored"
+"edit" = "replaces text in a local file (oldString, newString): restored"
+"glob" = "finds files by pattern on this Mac: restored"
+"grep" = "searches files on this Mac: restored"
+"execute" = "Code Mode: JavaScript calling MCP tools (tools.<server>.<tool>) and fetch; each literal gets what the call it is passed to may receive (mcp__<server>__<tool>, webfetch keeps placeholders), one passed to none only what every network call there may"
+"webfetch" = "fetches a URL from this Mac: placeholders kept"
+"websearch" = "a web search: placeholders kept"
+"subagent" = "starts a sub-agent on this Mac, whose own requests go through keepmum: restored"
+"question" = "asks the user questions: restored"
+"skill" = "loads a skill by id: restored"
+"experimental_image_generate" = "makes an image from a prompt at a service that may be reached around keepmum: placeholders kept"

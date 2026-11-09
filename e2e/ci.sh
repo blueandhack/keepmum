@@ -1,6 +1,6 @@
 #!/bin/sh
-# The scripted e2e suite as CI runs it: real Codex, Claude Code and Antigravity CLI, signed in with
-# dummy API keys.
+# The scripted e2e suite as CI runs it: real Codex, Claude Code, Antigravity CLI, pi and opencode,
+# signed in with dummy API keys.
 #
 # In scripted mode nothing reaches a provider: keepmum forwards to the tap, and the tap to the
 # scripted model, which never reads a credential. The agents only need one to start, so a dummy
