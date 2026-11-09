@@ -14,7 +14,7 @@ permissions:
 jobs:
   python:
     # No ML packages: tests that need pf-serve and the model skip themselves. Linux: nothing it tests
-    # is macOS-only (the Mac app is mac-app's), and Linux runners are free for public repositories.
+    # is macOS-only (the Mac app builds in mac-app.yml), and Linux runners are free for public repositories.
     runs-on: ubuntu-24.04-arm
     env:
       UV_PYTHON: "3.15"  # the newest Python; keepmum supports 3.12 and later (pyproject.toml)
@@ -81,14 +81,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - run: e2e/ci.sh
-
-  mac-app:
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-      # The whole app with its bundled engine, signed ad-hoc: catches bundling breakage on every change.
-      - run: ./build-app.sh
-        working-directory: mac
-      - run: build/Keepmum.app/Contents/Resources/keepmum --help
-        working-directory: mac

@@ -1,0 +1,66 @@
+name: Mac app
+
+# The whole app with its bundled engine, signed ad-hoc: catches bundling breakage. It is the one job
+# that needs macOS and the slowest, so it runs only when something it builds from changed (the app,
+# keepmum's code and dependencies, the native runtimes), and reuses what it built before.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mac/**"
+      - "src/**"
+      - "native/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/mac-app.yml"
+      - "!**/*.md"
+      - "!mac/docs/**"
+      - "!mac/appcast.xml"
+  pull_request:
+    paths:
+      - "mac/**"
+      - "src/**"
+      - "native/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/mac-app.yml"
+      - "!**/*.md"
+      - "!mac/docs/**"
+      - "!mac/appcast.xml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mac-app:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          cache-python: true  # the CPython build-app.sh bundles
+      # The engine (Python, keepmum, pf-serve, llama-server). bundle-runtime.sh reuses it when what it
+      # is built from is unchanged; this key hashes the same inputs, so a hit is a reuse.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: mac/build/runtime-cache
+          key: mac-runtime-${{ hashFiles('mac/bundle-runtime.sh', 'pyproject.toml', 'uv.lock', 'src/**', 'native/pf-serve/**', 'native/llama-server/**', '!native/*/.work/**', '!**/__pycache__/**') }}
+      # When the engine is rebuilt (keepmum's code changed), the native runtimes' sources and build
+      # folders: their compile (about 3.5 minutes from scratch) only redoes what changed.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            native/pf-serve/.work
+            native/llama-server/.work
+          key: mac-native-${{ hashFiles('native/pf-serve/**', 'native/llama-server/**', '!native/*/.work/**') }}
+          restore-keys: mac-native-
+      # Swift packages (Sparkle) as SwiftPM downloads them.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: mac-swiftpm-${{ hashFiles('mac/Package.resolved') }}
+      - run: ./build-app.sh
+        working-directory: mac
+      - run: build/Keepmum.app/Contents/Resources/keepmum --help
+        working-directory: mac

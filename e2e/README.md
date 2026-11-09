@@ -52,8 +52,8 @@ The `agents` job in `.github/workflows/ci.yml` runs the scripted suite on every 
 arm64 runner (`ubuntu-24.04-arm`, Python 3.15), with each agent's Linux build pinned to the version
 this suite was last checked against (`CODEX_VERSION`, `CLAUDE_CODE_VERSION`, `PI_VERSION`,
 `OPENCODE_VERSION`, `AGY_VERSION`). Claude Code's and Codex's sandboxes use bubblewrap there, which
-Ubuntu 24.04 allows only with `kernel.apparmor_restrict_unprivileged_userns=0`. Only `mac-app`, which
-builds the Mac app, runs on macOS. The job calls `e2e/ci.sh`, which you can run yourself:
+Ubuntu 24.04 allows only with `kernel.apparmor_restrict_unprivileged_userns=0`. Only the Mac app's build
+(`.github/workflows/mac-app.yml`) runs on macOS, and only when something it builds from changes. The job calls `e2e/ci.sh`, which you can run yourself:
 
 ```sh
 e2e/ci.sh                  # every case; e2e/ci.sh fn- for some
