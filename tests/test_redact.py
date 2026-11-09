@@ -305,3 +305,31 @@ def test_lone_surrogates_do_not_crash_or_shift_offsets(tmp_path):
     pf._read = fake_read
     spans = pf.detect(text)
     assert len(spans) == 1 and text[spans[0].start:spans[0].end] == FAKE_TOKEN
+
+
+def test_a_url_flagged_for_the_name_inside_it_masks_only_the_name():
+    """The model tags a search URL with a name in it as one URL (a live pi run, web-01): the name is
+    masked, and the command around it stays readable."""
+    name = "Margaret Thornbury"
+    cmd = f'curl -sL "https://html.duckduckgo.com/html/?q={name}" | head -c 600'
+
+    def spans(text):
+        out = []
+        if name in text and "https://" in text:
+            a = text.index("https://")
+            out.append(Span(a, text.index(name) + len(name), "URL", 0.9, "pf-serve"))
+        if name in text:
+            out.append(Span(text.index(name), text.index(name) + len(name), "PERSON", 0.9, "pf-serve"))
+        return out
+
+    r = Redactor(Fixed(spans), Vault(bytes(range(32))))
+    out = r.redact_text(cmd)
+    assert out.startswith('curl -sL "https://html.duckduckgo.com/html/?q=KEEPMUM_PERSON_') and name not in out
+    # Seen before (known), with only the URL flagged now: the same.
+    r2 = Redactor(Fixed(lambda t: spans(t)[:1]), r.vault)
+    r2.redact_text(f"Client: {name}")
+    assert r2.redact_text(cmd) == out
+    # A URL with nothing narrower inside is masked whole, as before.
+    url = "see https://intranet.example/private/x"
+    r3 = Redactor(Fixed(lambda t: [Span(4, len(t), "URL", 0.9, "pf-serve")]), Vault(bytes(range(32))))
+    assert r3.redact_text(url).startswith("see KEEPMUM_URL_")

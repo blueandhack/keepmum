@@ -123,6 +123,21 @@ def detector_of(source: str) -> tuple[str, str]:
 
 
 
+def _narrow_urls(spans: list[Span]) -> list[Span]:
+    """A URL the model flags for the value inside it gives way to that value's own span.
+
+    `curl "https://html.duckduckgo.com/html/?q=Margaret Thornbury"` was masked whole, as one
+    placeholder (a live pi run, web-01): the model could no longer read the command it ran, and the
+    placeholder stood for a URL, not the name. The value inside is masked as it always is; the host
+    and path around it were never what made the URL private.
+    """
+    inner = [s for s in spans if s.type != "URL"]
+    if not inner or not any(s.type == "URL" for s in spans):
+        return spans
+    return [s for s in spans if not (s.type == "URL" and any(
+        s.start <= i.start and i.end <= s.end and (i.end - i.start) < (s.end - s.start) for i in inner))]
+
+
 def _caller(item: dict) -> str:
     """The tool a Responses call's output comes from (script_caller). A custom tool call (Codex's
     exec) holds its script in `input`; a function call (opencode's execute) in `arguments`, a JSON
@@ -246,7 +261,7 @@ class Redactor:
             spans += [Span(m.start(), m.end(), kind, 1.0, "known") for m in known.finditer(text)
                       if (kind := self.vault.kind_of(m.group())) not in passed
                       and not (released and released(m.group(), self.vault.sources_of(m.group()), kind))]
-        return merge(spans), seen
+        return merge(_narrow_urls(spans)), seen
 
     def redact_text(self, text: str) -> str:
         if not text:
