@@ -3,16 +3,18 @@
 //     swift docs/video/flow.swift docs/video/keepmum-flow.mp4
 //
 // Every frame is drawn with SwiftUI (ImageRenderer) and encoded with AVFoundation, so it needs
-// nothing beyond macOS and Xcode's command line tools. Every value shown is synthetic.
+// nothing beyond macOS and Xcode's command line tools. Every value shown is synthetic. It is set in
+// the website's typefaces (site/fonts) and the app's colors: coral for keepmum, amber for a real
+// value, blue for a placeholder (masked) and green for a value restored.
 
 import AVFoundation
 import SwiftUI
 
 let W: CGFloat = 1920, H: CGFloat = 1080
 let FPS: Int32 = 30
-let DURATION = 59.0
+let DURATION = 67.0
 
-// MARK: - Palette (the app's light theme)
+// MARK: - Palette (the app's light theme, Tokens.swift) and type (the website's)
 
 extension Color {
     init(hex: UInt32, alpha: Double = 1) {
@@ -22,17 +24,56 @@ extension Color {
 }
 
 enum C {
-    static let background = Color(hex: 0xF5F6F8)
+    static let background = Color(hex: 0xF4F4F5)
     static let surface = Color.white
     static let border = Color(hex: 0x000000, alpha: 0.09)
-    static let text = Color(hex: 0x16181D)
-    static let secondary = Color(hex: 0x6B7280)
+    static let text = Color(hex: 0x1D1D1F)
+    static let secondary = Color(hex: 0x6E6E73)
     static let faint = Color(hex: 0x000000, alpha: 0.05)
-    static let accent = Color(hex: 0x4F5BD5)
-    static let accentSoft = Color(hex: 0x4F5BD5, alpha: 0.12)
-    static let real = Color(hex: 0xE8590C)  // a real value
-    static let realSoft = Color(hex: 0xE8590C, alpha: 0.14)
-    static let success = Color(hex: 0x16A34A)
+    /// keepmum itself: its steps, its node, its scan.
+    static let accent = Color(hex: 0xC93F17)
+    static let accentSoft = Color(hex: 0xC93F17, alpha: 0.10)
+    /// A placeholder: the app's "masked".
+    static let masked = Color(hex: 0x0B63CE)
+    static let maskedSoft = Color(hex: 0x0B63CE, alpha: 0.12)
+    /// A real value.
+    static let real = Color(hex: 0xA15C00)
+    static let realSoft = Color(hex: 0xA15C00, alpha: 0.14)
+    /// Restored, and safe: the app's "restored".
+    static let success = Color(hex: 0x16834A)
+}
+
+/// The website's typefaces, from site/fonts, for this process only.
+let fonts: Void = {
+    let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "../../site/fonts")
+    for name in ["bricolage-grotesque.woff2", "jetbrains-mono.woff2"] {
+        CTFontManagerRegisterFontsForURL(dir.appending(path: name) as CFURL, .process, nil)
+    }
+}()
+
+/// Both are variable fonts, which SwiftUI's `.custom(_:size:).weight(_:)` does not vary: the weight
+/// (and Bricolage's optical size) is set on its axes instead.
+func variable(_ postscriptName: String, _ size: CGFloat, _ weight: Font.Weight, opticalSize: Bool) -> NSFont {
+    _ = fonts
+    let wght: CGFloat = switch weight {
+    case .medium: 500
+    case .semibold: 600
+    case .bold: 700
+    default: 400
+    }
+    guard let base = NSFont(name: postscriptName, size: size) else { fatalError("no font \(postscriptName); run from the repository") }
+    var axes: [UInt32: CGFloat] = [0x7767_6874: wght]  // 'wght'
+    if opticalSize { axes[0x6F70_737A] = min(96, max(12, size)) }  // 'opsz'
+    let descriptor = base.fontDescriptor.addingAttributes([.variation: axes])
+    return NSFont(descriptor: descriptor, size: size) ?? base
+}
+
+func sans(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+    Font(variable("BricolageGrotesque96ptExtraBold-Regular", size, weight, opticalSize: true))
+}
+
+func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+    Font(variable("JetBrainsMono-Regular", size, weight, opticalSize: false))
 }
 
 // MARK: - Timing
@@ -85,7 +126,9 @@ let reply: [[Piece]] = [
 ]
 
 let codeSize: CGFloat = 23
-let charWidth: CGFloat = ("0" as NSString).size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: codeSize, weight: .regular)]).width
+let charWidth: CGFloat = {
+    ("0" as NSString).size(withAttributes: [.font: variable("JetBrainsMono-Regular", codeSize, .regular, opticalSize: false)]).width
+}()
 
 // MARK: - The frame at time t
 
@@ -99,7 +142,8 @@ struct Frame {
             C.background
             diagram.opacity(p(t, 3.6, 4.6) * (1 - p(t, 53, 54)))
             intro.opacity(1 - p(t, 3.4, 4.2))
-            outro.opacity(p(t, 53.6, 54.6))
+            more.opacity(window(t, 53.6, 61, fade: 0.6))
+            outro.opacity(p(t, 61.2, 62.2))
         }
         .frame(width: W, height: H))
     }
@@ -110,8 +154,8 @@ struct Frame {
         AnyView({
         VStack(spacing: 22) {
             badge(96)
-            Text("How keepmum keeps secrets on your Mac").font(.system(size: 64, weight: .semibold)).foregroundStyle(C.text)
-            Text("Detect · Mask · Send · Restore · Guard").font(.system(size: 30)).foregroundStyle(C.secondary)
+            Text("How keepmum keeps secrets on your Mac").font(sans(64, .semibold)).foregroundStyle(C.text)
+            Text("Detect · Mask · Send · Restore · Guard").font(sans(30)).foregroundStyle(C.secondary)
         }
         .frame(width: W, height: H)
         .offset(y: lerp(0, -20, p(t, 0, 3.4)))
@@ -122,11 +166,17 @@ struct Frame {
         AnyView({
         VStack(spacing: 22) {
             badge(96)
-            Text("keepmum").font(.system(size: 72, weight: .semibold)).foregroundStyle(C.text)
-            Text("Secrets and personal data stay on your Mac.").font(.system(size: 36)).foregroundStyle(C.text)
+            Text("Keep mum.").font(sans(84, .bold)).foregroundStyle(C.text)
+            Text("Secrets and personal data stay on your Mac.").font(sans(36)).foregroundStyle(C.text)
             Text("Detection, masking and restoring all run locally. The provider sees placeholders, and a token goes back only where it belongs.")
-                .font(.system(size: 26)).foregroundStyle(C.secondary)
-            Text("github.com/blueandhack/keepmum").font(.system(size: 26, design: .monospaced)).foregroundStyle(C.accent).padding(.top, 16)
+                .font(sans(26)).foregroundStyle(C.secondary)
+            HStack(spacing: 28) {
+                Text("keepmum.app").font(sans(30, .semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 30).padding(.vertical, 14)
+                    .background(Capsule().fill(C.accent))
+                Text("github.com/blueandhack/keepmum").font(mono(24)).foregroundStyle(C.secondary)
+            }
+            .padding(.top, 20)
         }
         .frame(width: W, height: H)
         }())
@@ -159,6 +209,46 @@ struct Frame {
         }())
     }
 
+    /// After the flow: what else keepmum does, on the same Mac.
+    var more: AnyView {
+        AnyView({
+        let items: [(String, String, String)] = [
+            ("checkmark.shield", "Checks, if you want them",
+             "Prompt injection in what tools bring back, harmful requests, and risky shell commands: warn, block, or answer with a model on your Mac."),
+            ("number", "Encoded secrets",
+             "A hex dump or base64 of your .env is decoded and scanned, so a key cannot leave in hex or in pieces."),
+            ("puzzlepiece.extension", "What other apps add to your agents",
+             "A plugin, hook or MCP server that another app slips into your agents shows up in the menu bar, to keep or remove."),
+        ]
+        return VStack(alignment: .leading, spacing: 44) {
+            Text("Also on your Mac").font(sans(56, .semibold)).foregroundStyle(C.text)
+                .opacity(p(t, 54, 54.6))
+            HStack(alignment: .top, spacing: 36) {
+                ForEach(Array(items.enumerated()), id: \.offset) { i, item in
+                    let shown = p(t, 54.6 + Double(i) * 0.9, 55.3 + Double(i) * 0.9)
+                    VStack(alignment: .leading, spacing: 18) {
+                        Image(systemName: item.0).font(.system(size: 40, weight: .medium)).foregroundStyle(C.accent)
+                            .frame(width: 76, height: 76)
+                            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(C.accentSoft))
+                        Text(item.1).font(sans(32, .semibold)).foregroundStyle(C.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(item.2).font(sans(25)).foregroundStyle(C.secondary).lineSpacing(5)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(40)
+                    .frame(width: 560, height: 420, alignment: .topLeading)
+                    .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(C.surface)
+                        .shadow(color: .black.opacity(0.06), radius: 16, y: 6))
+                    .opacity(shown)
+                    .offset(y: lerp(24, 0, shown))
+                }
+            }
+        }
+        .frame(width: W, height: H)
+        }())
+    }
+
     // MARK: The diagram
 
     var diagram: AnyView {
@@ -166,7 +256,7 @@ struct Frame {
         ZStack(alignment: .topLeading) {
             header
             macBoundary
-            node(x: 330, title: "Your coding agent", detail: "Claude Code, Codex, Gemini CLI, pi, opencode", icon: "terminal")
+            node(x: 330, title: "Your coding agent", detail: "Claude Code, Codex, Gemini CLI, Antigravity, pi, opencode", icon: "terminal")
             node(x: 880, title: "keepmum", detail: "a proxy on 127.0.0.1", icon: nil)
             node(x: 1600, title: "Model provider", detail: "Anthropic, OpenAI, Google, or your gateway", icon: "cloud")
             arrows
@@ -182,14 +272,14 @@ struct Frame {
         AnyView({
         HStack(spacing: 16) {
             badge(44)
-            Text("How a request travels through keepmum").font(.system(size: 28, weight: .semibold)).foregroundStyle(C.text)
+            Text("How a request travels through keepmum").font(sans(28, .semibold)).foregroundStyle(C.text)
             Spacer()
             ForEach(Array(["Detect", "Mask", "Send", "Restore", "Guard"].enumerated()), id: \.offset) { i, name in
                 let on = stepOn(i)
                 HStack(spacing: 8) {
-                    Text("\(i + 1)").font(.system(size: 18, weight: .bold)).foregroundStyle(on > 0.5 ? .white : C.secondary)
+                    Text("\(i + 1)").font(sans(18, .bold)).foregroundStyle(on > 0.5 ? .white : C.secondary)
                         .frame(width: 30, height: 30).background(Circle().fill(on > 0.5 ? C.accent : C.faint))
-                    Text(name).font(.system(size: 22, weight: on > 0.5 ? .semibold : .regular))
+                    Text(name).font(sans(22, on > 0.5 ? .semibold : .regular))
                         .foregroundStyle(on > 0.5 ? C.accent : C.secondary)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
@@ -211,7 +301,7 @@ struct Frame {
             .strokeBorder(C.secondary.opacity(0.45), style: StrokeStyle(lineWidth: 2, dash: [10, 8]))
             .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(C.faint.opacity(0.5)))
             .overlay(alignment: .topLeading) {
-                Label("Your Mac", systemImage: "laptopcomputer").font(.system(size: 20, weight: .medium)).foregroundStyle(C.secondary)
+                Label("Your Mac", systemImage: "laptopcomputer").font(sans(20, .medium)).foregroundStyle(C.secondary)
                     .padding(.leading, 24).padding(.top, 14)
             }
             .frame(width: 1110, height: 230)
@@ -225,13 +315,13 @@ struct Frame {
             + window(t, 42.6, 53.2, fade: 0.4) : 0
         return HStack(spacing: 16) {
             if let icon {
-                Image(systemName: icon).font(.system(size: 30)).foregroundStyle(C.secondary).frame(width: 44)
+                Image(systemName: icon).font(sans(30)).foregroundStyle(C.secondary).frame(width: 44)
             } else {
                 badge(48)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.system(size: 26, weight: .semibold)).foregroundStyle(C.text)
-                Text(detail).font(.system(size: 18)).foregroundStyle(C.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                Text(title).font(sans(26, .semibold)).foregroundStyle(C.text)
+                Text(detail).font(sans(18)).foregroundStyle(C.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
         }
@@ -261,13 +351,13 @@ struct Frame {
         }())
     }
 
-    /// The request or reply in flight: orange while it carries real values, indigo when masked.
+    /// The request or reply in flight: amber while it carries real values, blue when masked.
     var packet: AnyView {
         AnyView({
         let legs: [(Double, Double, CGFloat, CGFloat, CGFloat, Color, String)] = [
             (10, 11.8, 530, 680, 266, C.real, "real values"),
-            (24.4, 27.2, 1080, 1400, 266, C.accent, "placeholders only"),
-            (29, 31.4, 1400, 1080, 302, C.accent, "placeholders only"),
+            (24.4, 27.2, 1080, 1400, 266, C.masked, "placeholders only"),
+            (29, 31.4, 1400, 1080, 302, C.masked, "placeholders only"),
             (39.2, 40.8, 680, 530, 302, C.real, "real values"),
         ]
         return ZStack(alignment: .topLeading) {
@@ -280,7 +370,7 @@ struct Frame {
                     Circle().fill(leg.5).frame(width: 22, height: 22)
                 }
                 .overlay(alignment: .top) {
-                    Text(leg.6).font(.system(size: 17, weight: .medium)).foregroundStyle(leg.5).fixedSize().offset(y: leg.4 < 280 ? -34 : 40)
+                    Text(leg.6).font(sans(17, .medium)).foregroundStyle(leg.5).fixedSize().offset(y: leg.4 < 280 ? -34 : 40)
                 }
                 .position(x: x, y: leg.4)
                 .opacity(shown)
@@ -295,8 +385,8 @@ struct Frame {
         switch t {
         case ..<10.6: ("In your coding agent", C.real)
         case ..<24.6: ("In keepmum, on your Mac", C.text)
-        case ..<28.6: ("What the provider receives", C.accent)
-        case ..<31.2: ("The provider's reply", C.accent)
+        case ..<28.6: ("What the provider receives", C.masked)
+        case ..<31.2: ("The provider's reply", C.masked)
         case ..<39.6: ("In keepmum, on your Mac", C.text)
         default: ("Back in your coding agent", C.success)
         }
@@ -309,14 +399,14 @@ struct Frame {
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Circle().fill(tint).frame(width: 12, height: 12)
-                Text(label).font(.system(size: 22, weight: .semibold)).foregroundStyle(C.text)
+                Text(label).font(sans(22, .semibold)).foregroundStyle(C.text)
                 Spacer()
                 if providerView > 0 {
-                    Label("0 real values", systemImage: "checkmark.shield.fill").font(.system(size: 20, weight: .semibold))
+                    Label("0 real values", systemImage: "checkmark.shield.fill").font(sans(20, .semibold))
                         .foregroundStyle(C.success).opacity(providerView)
                 }
                 if t > 39.8 {
-                    Label("ran with the real values", systemImage: "checkmark.circle.fill").font(.system(size: 20, weight: .semibold))
+                    Label("ran with the real values", systemImage: "checkmark.circle.fill").font(sans(20, .semibold))
                         .foregroundStyle(C.success).opacity(p(t, 40.6, 41.2) * (1 - p(t, 42.6, 43.2)))
                 }
             }
@@ -333,7 +423,7 @@ struct Frame {
         .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(C.surface)
             .shadow(color: .black.opacity(0.06), radius: 16, y: 6))
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .strokeBorder(C.accent.opacity(providerView), lineWidth: 3))
+            .strokeBorder(C.masked.opacity(providerView), lineWidth: 3))
         .offset(x: 50, y: 420)
         .opacity(p(t, 5.6, 6.3))
         }())
@@ -377,7 +467,7 @@ struct Frame {
                         }
                     }
                 }
-                .font(.system(size: codeSize, design: .monospaced))
+                .font(mono(codeSize))
                 .fixedSize()
                 .opacity(p(t, appear[r], appear[r] + 0.5))
                 .offset(x: lerp(-16, 0, p(t, appear[r], appear[r] + 0.5)))
@@ -392,22 +482,22 @@ struct Frame {
         let m = masked(i, phase)
         let width = lerp(CGFloat(v.real.count) * charWidth, CGFloat(v.placeholder.count) * charWidth, m)
         let glow = highlight(i, phase)
-        let tint = m > 0.5 ? C.accent : C.real
+        let tint = m > 0.5 ? C.masked : C.real
         return ZStack(alignment: .leading) {
             Text(v.real).foregroundStyle(C.real).opacity(1 - m)
-            Text(v.placeholder).foregroundStyle(C.accent).opacity(m)
+            Text(v.placeholder).foregroundStyle(C.masked).opacity(m)
         }
         .fixedSize()
         .frame(width: width, alignment: .leading)
         .clipped()
         .padding(.horizontal, 4)
-        .background(RoundedRectangle(cornerRadius: 6).fill((m > 0.5 ? C.accentSoft : C.realSoft).opacity(min(1, glow * 1.6))))
+        .background(RoundedRectangle(cornerRadius: 6).fill((m > 0.5 ? C.maskedSoft : C.realSoft).opacity(min(1, glow * 1.6))))
         .overlay(alignment: .topLeading) {
             if phase == .request {
-                Text(v.tag).font(.system(size: 15, weight: .semibold)).foregroundStyle(tint)
+                Text(v.tag).font(sans(15, .semibold)).foregroundStyle(tint)
                     .fixedSize().offset(y: -24).opacity(glow)
             } else {
-                Text("restored from the vault").font(.system(size: 15, weight: .semibold)).foregroundStyle(C.real)
+                Text("restored from the vault").font(sans(15, .semibold)).foregroundStyle(C.real)
                     .fixedSize().offset(y: -24).opacity(window(t, 33.4 + Double(i) * 1.4, 36 + Double(i) * 1.4, fade: 0.4))
             }
         }
@@ -418,13 +508,13 @@ struct Frame {
     func keptView(_ i: Int, _ why: String, at start: Double) -> AnyView {
         AnyView({
         let glow = p(t, start, start + 0.6)
-        return Text(values[i].placeholder).foregroundStyle(C.accent)
+        return Text(values[i].placeholder).foregroundStyle(C.masked)
             .fixedSize()
             .padding(.horizontal, 4)
-            .background(RoundedRectangle(cornerRadius: 6).fill(C.accentSoft.opacity(glow)))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(C.accent.opacity(glow), lineWidth: 2))
+            .background(RoundedRectangle(cornerRadius: 6).fill(C.maskedSoft.opacity(glow)))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(C.masked.opacity(glow), lineWidth: 2))
             .overlay(alignment: .topLeading) {
-                Label(why, systemImage: "lock.fill").font(.system(size: 15, weight: .semibold)).foregroundStyle(C.accent)
+                Label(why, systemImage: "lock.fill").font(sans(15, .semibold)).foregroundStyle(C.masked)
                     .fixedSize().offset(y: -24).opacity(glow)
             }
         }())
@@ -436,21 +526,21 @@ struct Frame {
         AnyView({
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "lock.fill").font(.system(size: 22)).foregroundStyle(C.accent)
-                Text("Vault").font(.system(size: 24, weight: .semibold)).foregroundStyle(C.text)
+                Image(systemName: "lock.fill").font(sans(22)).foregroundStyle(C.accent)
+                Text("Vault").font(sans(24, .semibold)).foregroundStyle(C.text)
             }
             Text("In keepmum's memory only. Never sent, cleared when keepmum exits.")
-                .font(.system(size: 17)).foregroundStyle(C.secondary).padding(.top, 6).padding(.bottom, 26)
+                .font(sans(17)).foregroundStyle(C.secondary).padding(.top, 6).padding(.bottom, 26)
                 .fixedSize(horizontal: false, vertical: true)
             ForEach(0..<values.count, id: \.self) { i in
                 let shown = p(t, 18.6 + Double(i) * 1.3, 19.2 + Double(i) * 1.3) * (1 - p(t, 53, 53.6))
                 let restoring = window(t, 33.4 + Double(i) * 1.4, 35.6 + Double(i) * 1.4, fade: 0.4)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(values[i].placeholder).font(.system(size: 19, design: .monospaced)).foregroundStyle(C.accent)
+                    Text(values[i].placeholder).font(mono(19)).foregroundStyle(C.masked)
                     HStack(spacing: 8) {
-                        Image(systemName: "arrow.turn.down.right").font(.system(size: 15)).foregroundStyle(C.secondary)
-                        Text(String(repeating: "●", count: 10)).font(.system(size: 12)).foregroundStyle(C.real.opacity(0.75))
-                        Text("the real value").font(.system(size: 16)).foregroundStyle(C.secondary)
+                        Image(systemName: "arrow.turn.down.right").font(sans(15)).foregroundStyle(C.secondary)
+                        Text(String(repeating: "●", count: 10)).font(sans(12)).foregroundStyle(C.real.opacity(0.75))
+                        Text("the real value").font(sans(16)).foregroundStyle(C.secondary)
                     }
                 }
                 .padding(14)
@@ -490,7 +580,7 @@ struct Frame {
         ]
         return ZStack {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, c in
-                Text(c.2).font(.system(size: 32, weight: .medium)).foregroundStyle(C.text).opacity(window(t, c.0, c.1, fade: 0.35))
+                Text(c.2).font(sans(32, .medium)).foregroundStyle(C.text).opacity(window(t, c.0, c.1, fade: 0.35))
             }
         }
         .frame(width: W).offset(y: 952)
