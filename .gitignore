@@ -38,3 +38,5 @@ sparkle-private-key*
 
 # e2e runs: transcripts and requests can hold what an agent sent (e2e/README.md)
 e2e/results/
+# Your own copy of e2e/keys.env.example: 1Password references to the live-run API keys.
+e2e/keys.env

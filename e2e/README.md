@@ -14,10 +14,37 @@ Codex, Claude Code, the Antigravity CLI (`agy`), pi or opencode, running real to
 .venv/bin/python -m e2e run fn- --agent codex         # cases by id prefix, one agent
 .venv/bin/python -m e2e run --mode live --repeat 3    # the real model, three runs per case
 .venv/bin/python -m e2e run base-01 --keep            # keep transcripts and requests in e2e/results/
+op run --env-file e2e/keys.env -- .venv/bin/python -m e2e run --mode live --auth keys --cheap
+                                                      # live on API keys (below), the smallest models
 ```
 
 The exit code is 0 when nothing regressed. Results go to `e2e/results/<mode>-<time>/summary.md`
 (not committed).
+
+### Live on API keys
+
+`--auth keys` runs live on an OpenAI and an Anthropic API key in place of the user's logins: Codex,
+opencode and pi on `KEEPMUM_OPENAI_API_KEY`, Claude Code on `KEEPMUM_CLAUDE_API_KEY`; agy, which signs
+in with Google, is skipped. The keys come from 1Password, through its CLI:
+
+```sh
+cp e2e/keys.env.example e2e/keys.env      # git ignores it; point each line at your own item
+op run --env-file e2e/keys.env -- .venv/bin/python -m e2e run --mode live --auth keys --cheap
+```
+
+`e2e/keys.env` holds secret references (`op://Develop/KEEPMUM_OPENAI_API_KEY/credential`), never a
+key; `op run` resolves them into the run's environment only. Each agent gets only the key it uses,
+under the name it reads (Codex through its provider's `env_key`, so no key is written to its auth
+file). Claude Code gets a config folder of its own and opencode a data folder of its own, so no
+login is there to prefer; a key in the user's shell (`OPENAI_API_KEY`) reaches no agent in any mode.
+
+`--cheap` picks each agent's smallest model (gpt-6-luna; Claude Haiku 5.5 for Claude Code); without
+it, Codex, opencode and pi use gpt-6.1-sol and Claude Code its own default. Most of a run's cost is
+each agent's own system prompt and tool list, sent again on every call, not the case: measured on
+Nov 8, 2026, a full pass of the four cost $0.15 on the cheapest models (Codex $0.09 of it) and about
+$2 on the default ones. A cheap model is a harder test, not a weaker one: it copies placeholders
+less faithfully, and its first full pass found that a value keepmum put back escaped came back in
+the agent's history unrecognized (val-04).
 
 ### In CI
 

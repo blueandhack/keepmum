@@ -201,6 +201,10 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--mode", choices=["scripted", "live"], default="scripted")
     r.add_argument("--repeat", type=int, default=1, help="runs per case and agent (live: measures flakiness)")
     r.add_argument("--model", help="the agent's model (live)")
+    r.add_argument("--auth", choices=["login", "keys"], default="login",
+                   help="live: the user's logins, or API keys from KEEPMUM_OPENAI_API_KEY and KEEPMUM_CLAUDE_API_KEY "
+                        "(op run --env-file e2e/keys.env -- ...)")
+    r.add_argument("--cheap", action="store_true", help="--auth keys: each agent's smallest model")
     r.add_argument("--agent-arg", action="append", default=[], help="extra argument for the agent, repeatable")
     r.add_argument("--keep", action="store_true", help="keep transcripts and requests (values shown as {{v:name}})")
     r.add_argument("--check-tools", action="store_true",
@@ -217,9 +221,13 @@ def main(argv: list[str] | None = None) -> int:
     out = RESULTS / f"{args.mode}-{stamp}"
     keep = out if args.keep else None
     agents = [AGENTS[a] for a in (args.agent or AGENTS)]
+    if args.cmd == "run" and args.mode == "live":
+        from . import agents as agents_mod
+        agents_mod.AUTH.update(mode=args.auth, cheap=args.cheap)
     model_ok = None
     results = []
-    print(f"keepmum e2e, {args.mode}: " + ", ".join(f"{a.name} {a.version()}" for a in agents if a.available()))
+    how = f" ({'API keys' + (', cheapest models' if args.cheap else '')})" if args.mode == "live" and args.auth == "keys" else ""
+    print(f"keepmum e2e, {args.mode}{how}: " + ", ".join(f"{a.name} {a.version()}" for a in agents if a.available()))
     for case in cases:
         for agent in agents:
             base = {"case": case.id, "agent": agent.name, "mode": args.mode, "rep": 0}
@@ -230,6 +238,8 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             if not agent.available():
                 reason = f"{agent.binary} is not installed"
+            elif args.mode == "live" and args.auth == "keys" and not agent.key_auth:
+                reason = f"{agent.name} signs in with Google, not an OpenAI or Anthropic key"
             elif case.mcp and args.mode not in agent.mcp_modes:
                 reason = f"{agent.name} gets no MCP server in {args.mode} runs"
             elif case.model:

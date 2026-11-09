@@ -28,11 +28,33 @@ class Transcript:
     errors: list[str] = field(default_factory=list)
 
 
+# Live runs sign in as the user does (their logins), or with API keys (`--auth keys`), read from the
+# run's environment under these names, as `op run --env-file e2e/keys.env` puts them there (copy
+# e2e/keys.env.example). Codex, opencode and pi use the OpenAI key, Claude Code the Anthropic one. Each
+# agent gets only the key it uses, under the name it reads; no key is written to disk.
+AUTH = {"mode": "login", "cheap": False}
+KEY_VARS = {"openai": "KEEPMUM_OPENAI_API_KEY", "anthropic": "KEEPMUM_CLAUDE_API_KEY"}
+# Provider keys never reach an agent unless its run sets one: a key in the user's shell (or a
+# template value) would decide which account an agent uses, and its shell commands could read it.
+_PROVIDER_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", *KEY_VARS.values())
+
+
+def keys() -> bool:
+    return AUTH["mode"] == "keys"
+
+
+def api_key(provider: str) -> str:
+    value = os.environ.get(KEY_VARS[provider])
+    if not value:
+        raise RuntimeError(f"--auth keys: {KEY_VARS[provider]} is not set (run under `op run --env-file e2e/keys.env --`)")
+    return value
+
+
 def _clean_env(real_home: str) -> dict[str, str]:
     """The environment of the user's terminal: none of the variables a host agent (this one) set."""
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("CLAUDE_CODE_", "CLAUDECODE", "CLAUDE_AGENT_SDK", "CLAUDE_PID", "CLAUDE_EFFORT"))
-           and k not in ("ANTHROPIC_BASE_URL", "KEEPMUM_PF_SERVE", "HF_HOME")}
+           and k not in ("ANTHROPIC_BASE_URL", "KEEPMUM_PF_SERVE", "HF_HOME", *_PROVIDER_KEYS)}
     env["HOME"] = real_home
     return env
 
@@ -43,6 +65,7 @@ class Agent:
     api = ""  # the provider route keepmum serves it on: anthropic, chatgpt, openai, antigravity
     modes = ("scripted", "live")  # scripted needs the scripted model to speak its provider's API
     mcp_modes = ("scripted", "live")  # where it can be given the stub MCP server for one run
+    key_auth = True  # can run live on an OpenAI or Anthropic API key (--auth keys)
 
     def available(self) -> bool:
         return shutil.which(self.binary) is not None
@@ -72,7 +95,9 @@ class Codex(Agent):
     def api(self) -> str:
         from keepmum.clients import codex_auth_mode
 
-        return "openai" if codex_auth_mode() == "apikey" else "chatgpt"
+        return "openai" if keys() or codex_auth_mode() == "apikey" else "chatgpt"
+
+    KEY_MODELS = ("gpt-6.1-sol", "gpt-6-luna")  # --auth keys: (default, --cheap)
 
     def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
         from keepmum.clients import codex_args
@@ -83,10 +108,19 @@ class Codex(Agent):
             env = ",".join(f"{k}={json.dumps(v)}" for k, v in mcp["env"].items())
             servers = ["-c", f"{key}.command={json.dumps(mcp['command'])}", "-c", f"{key}.args={json.dumps(mcp['args'])}",
                        "-c", f"{key}.env={{{env}}}", "-c", f'{key}.default_tools_approval_mode="approve"']
+        env, provider = _clean_env(real_home), None
+        if mode == "live" and keys():
+            # keepmum's provider as `keepmum protect` writes it for an API key, the key read from
+            # the environment (env_key) so it is never written to Codex's auth file.
+            provider = {"name": "keepmum", "base_url": f"http://127.0.0.1:{port}/openai/v1", "wire_api": "responses",
+                        "env_key": "OPENAI_API_KEY", "supports_websockets": False,
+                        "http_headers": {"x-keepmum-client": "codex"}}
+            env["OPENAI_API_KEY"] = api_key("openai")
+            model = model or self.KEY_MODELS[AUTH["cheap"]]
         argv = [shutil.which(self.binary), "exec", "--json", "--skip-git-repo-check", "--ephemeral",
                 "--ignore-user-config", "-s", "workspace-write", "-C", str(ws), "-o", str(out / "final.txt"),
-                *codex_args(port), *servers, *(["-m", model] if model else []), *extra, prompt]
-        return argv, _clean_env(real_home)
+                *codex_args(port, provider), *servers, *(["-m", model] if model else []), *extra, prompt]
+        return argv, env
 
     def transcript(self, stdout, out):
         t = Transcript()
@@ -127,7 +161,11 @@ class Codex(Agent):
 class Claude(Agent):
     name, binary, api = "claude", "claude", "anthropic"
 
+    KEY_MODELS = (None, "claude-haiku-5-5")  # --auth keys: (default: Claude Code's own, --cheap)
+
     def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
+        if mode == "live" and keys():
+            model = model or self.KEY_MODELS[AUTH["cheap"]]
         # Claude Code's own sandbox, as Codex runs in workspace-write: commands run without a prompt
         # but cannot write outside the workspace or reach the network; file edits are accepted.
         sandbox = json.dumps({"sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True,
@@ -139,7 +177,15 @@ class Claude(Agent):
                     "command": mcp["command"], "args": mcp["args"], "env": mcp["env"]}}}),
                    "--allowedTools", f"mcp__{mcp['name']}"] if mcp else []),
                 *(["--model", model] if model else []), *extra, "--", prompt]
-        return argv, {**_clean_env(real_home), "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}"}
+        env = {**_clean_env(real_home), "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}"}
+        if mode == "scripted":  # the scripted model takes any key; no login is used
+            env["ANTHROPIC_API_KEY"] = DUMMY_ANTHROPIC_KEY
+        elif keys():
+            # A config folder of the run's own, so the user's Claude login is not there to prefer.
+            config = out / "claude-config"
+            config.mkdir(exist_ok=True)
+            env.update(ANTHROPIC_API_KEY=api_key("anthropic"), CLAUDE_CONFIG_DIR=str(config))
+        return argv, env
 
     def transcript(self, stdout, out):
         t = Transcript()
@@ -195,6 +241,7 @@ class Antigravity(Agent):
                          "list_browser_pages"})  # and browser_*
     mcp_modes = ("scripted",)
 
+    key_auth = False  # it signs in with Google: --auth keys covers OpenAI and Anthropic
     def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
         # Headless agy denies every command no rule allows. This rule holds for this session only
         # (--settings is never saved). Live, --sandbox restricts the terminal, as Claude Code's does.
@@ -274,6 +321,7 @@ class Pi(Agent):
     # The login the live run uses: anthropic (a Claude login) or openai-codex (ChatGPT).
     LIVE_PROVIDER = os.environ.get("KEEPMUM_E2E_PI_PROVIDER", "anthropic")
     LIVE_MODEL = {"anthropic": "claude-sonnet-5-5", "openai-codex": "gpt-5.5"}.get(LIVE_PROVIDER)
+    KEY_MODELS = ("gpt-6.1-sol", "gpt-6-luna")  # --auth keys, OpenAI: (default, --cheap)
 
     def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
         from keepmum.clients import pi_providers
@@ -283,16 +331,21 @@ class Pi(Agent):
         agent.mkdir(exist_ok=True)
         (agent / "models.json").write_text(json.dumps({"providers": {
             name: {"baseUrl": url, "headers": {"x-keepmum-client": "pi"}} for name, url in pi_providers(port).items()}}))
-        if live:
-            real = Path(os.environ.get("PI_CODING_AGENT_DIR") or Path(real_home) / ".pi" / "agent") / "auth.json"
-            (agent / "auth.json").symlink_to(real)
-        argv = [shutil.which(self.binary), "-p", "--mode", "json", "--no-session", "--no-extensions", "--no-skills",
-                "--no-prompt-templates", "--no-themes", "--offline",
-                "--provider", self.LIVE_PROVIDER if live else "anthropic",
-                "--model", model or (self.LIVE_MODEL if live else self.MODEL), *extra, prompt]
         env = {**_clean_env(real_home), "PI_CODING_AGENT_DIR": str(agent), "PI_OFFLINE": "1"}
+        provider = "anthropic"
         if not live:
             env["ANTHROPIC_API_KEY"] = DUMMY_ANTHROPIC_KEY
+            model = model or self.MODEL
+        elif keys():
+            env["OPENAI_API_KEY"] = api_key("openai")
+            provider, model = "openai", model or self.KEY_MODELS[AUTH["cheap"]]
+        else:
+            real = Path(os.environ.get("PI_CODING_AGENT_DIR") or Path(real_home) / ".pi" / "agent") / "auth.json"
+            (agent / "auth.json").symlink_to(real)
+            provider, model = self.LIVE_PROVIDER, model or self.LIVE_MODEL
+        argv = [shutil.which(self.binary), "-p", "--mode", "json", "--no-session", "--no-extensions", "--no-skills",
+                "--no-prompt-templates", "--no-themes", "--offline", "--provider", provider, "--model", model,
+                *extra, prompt]
         return argv, env
 
     def transcript(self, stdout, out):
@@ -336,14 +389,16 @@ class OpenCode(Agent):
     NETWORK = frozenset({"webfetch", "websearch"})  # sent from this Mac, or by the provider
     MODEL = "anthropic/claude-opus-4-5"
     LIVE_MODEL = "openai/gpt-6.1-sol"
+    KEY_MODELS = ("openai/gpt-6.1-sol", "openai/gpt-6-luna")  # --auth keys, OpenAI: (default, --cheap)
 
     def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
         from keepmum.clients import opencode_providers
 
         live = mode == "live"
+        login = live and not keys()  # the user's stored login: their data folder
         xdg = {k: out / f"opencode-{k.split('_')[1].lower()}" for k in
                ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME")
-               if not (live and k == "XDG_DATA_HOME")}
+               if not (login and k == "XDG_DATA_HOME")}
         for d in xdg.values():
             d.mkdir(exist_ok=True)
         config = xdg["XDG_CONFIG_HOME"] / "opencode"
@@ -357,12 +412,13 @@ class OpenCode(Agent):
             **({"mcp": {mcp["name"]: {"type": "local", "command": [mcp["command"], *mcp["args"]],
                                       "environment": mcp["env"], "enabled": True}}} if mcp else {})}))
         argv = [shutil.which(self.binary), "run", "--format", "json", "--auto", "--standalone",
-                "-m", model or (self.LIVE_MODEL if live else self.MODEL), *extra, prompt]
+                "-m", model or (self.KEY_MODELS[AUTH["cheap"]] if live and keys() else self.LIVE_MODEL if live
+                                else self.MODEL), *extra, prompt]
         env = {**_clean_env(real_home), **{k: str(v) for k, v in xdg.items()}}
-        if live:
-            env.pop("OPENAI_API_KEY", None)
-        else:
+        if not live:
             env["ANTHROPIC_API_KEY"] = DUMMY_ANTHROPIC_KEY
+        elif keys():
+            env["OPENAI_API_KEY"] = api_key("openai")
         return argv, env
 
     def transcript(self, stdout, out):
