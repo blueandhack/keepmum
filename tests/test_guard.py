@@ -791,3 +791,23 @@ def test_harm_sensitivity_is_a_level_that_follows_the_model(tmp_path, monkeypatc
     assert cli.invoke(app, ["guard", "sensitivity", "commands", "low"]).exit_code == 2
     assert config_changes({"harm_sensitivity": "medium"}, {"harm_sensitivity": "low"})[0]["weakens"] is True
     assert config_changes({"harm_sensitivity": "medium"}, {"harm_sensitivity": "high"})[0]["weakens"] is False
+
+
+def test_settle_returns_when_every_check_has_already_finished():
+    """Waiting on the set alone spun forever when its tasks were all done: gather over finished tasks
+    returns without yielding, so their done callbacks never ran (two runs in three, on Linux)."""
+    import asyncio
+
+    async def go():
+        _, _, _, proxy = make("warn")
+
+        async def done():
+            return None
+
+        task = asyncio.get_running_loop().create_task(done())
+        await asyncio.sleep(0)  # it finishes; its done callback is scheduled but has not run
+        proxy._background.add(task)
+        await asyncio.wait_for(proxy.settle(), 2)
+        assert not proxy._background
+
+    anyio.run(go)

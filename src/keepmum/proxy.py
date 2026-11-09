@@ -701,8 +701,13 @@ class Proxy:
         """Wait for checks still running after their requests were sent (tests, shutdown)."""
         import asyncio
 
+        # A finished task leaves the set only through its done callback, which the loop runs later;
+        # gather over tasks that are all finished returns without yielding to the loop, so waiting
+        # on the set alone spun forever (on Linux, where the checks often finish first).
         while self._background:
-            await asyncio.gather(*list(self._background), return_exceptions=True)
+            self._background -= {t for t in self._background if t.done()}
+            if self._background:
+                await asyncio.gather(*list(self._background), return_exceptions=True)
 
     @staticmethod
     def _prompt(texts: dict | None) -> str | None:
