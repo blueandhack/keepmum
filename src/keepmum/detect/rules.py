@@ -97,6 +97,23 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
     return i
 
 
+def closes_a_string(text: str, at: int, quote: str) -> bool:
+    """Whether the quote at `at`, right after `KEY=`, closes a string the same word opened.
+
+    In `grep '^GITHUB_TOKEN=' .env > out && echo 'REGION=eu'` the quote after `=` ends the grep
+    pattern; read as the start of a value, ` .env > out && echo ` was masked as a secret (a live
+    Claude Code run, base-01). Only the word the key is in is counted, so an apostrophe elsewhere on
+    the line ("don't") changes nothing, and a quoted key (`"API_KEY": "…"`) is balanced.
+    """
+    word = at
+    while word > 0 and not text[word - 1].isspace():
+        word -= 1
+    before = text[word:at]
+    if len(quote) == 1:
+        before = before.replace("\\" + quote, "")
+    return before.count(quote) % 2 == 1
+
+
 class Allowlist:
     def __init__(self, strings=(), patterns=()):
         self._builtin = (frozenset(strings), [re.compile(p) for p in patterns])
@@ -286,8 +303,10 @@ class RulesDetector:
                 continue
             for m in rule.regex.finditer(text):
                 if rule.scan == "assignment":
-                    start = m.end()
-                    end = assignment_value(text, start, m.group("open") or "", m.group("key"))
+                    start, opening = m.end(), m.group("open") or ""
+                    if opening and closes_a_string(text, start - len(opening), opening):
+                        continue
+                    end = assignment_value(text, start, opening, m.group("key"))
                     if end is None or end - start < 6:
                         continue
                 else:

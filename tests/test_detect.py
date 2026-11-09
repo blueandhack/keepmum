@@ -279,6 +279,9 @@ def _assigned(rules, text):
     ('echo "DB_PASSWORD=Xk9$mQ2vL7pZw4" >> .env', "Xk9$mQ2vL7pZw4"),
     ('{"password":"abc123XYZ","user":"bob"}', "abc123XYZ"),
     ('conn = "Server=x;Password=s3cr3tPw!;User=y"', "s3cr3tPw!"),
+    # A quote opened in another word, or an apostrophe in prose, does not hide a value.
+    ("don't forget: export DB_PASSWORD='hunter2xyz9'", "hunter2xyz9"),
+    ('{"env": "API_TOKEN=\'Zq8vLm2pXw4k\'"}', "Zq8vLm2pXw4k"),
 ])
 def test_assignment_values_are_masked_whole(rules, text, value):
     assert _assigned(rules, text) == [value]
@@ -305,6 +308,10 @@ def test_a_value_ends_at_an_escaped_new_line():
     'password: "${{ secrets.DB_PASSWORD }}"',
     'if password == "hunter22x":',
     'f"PASSWORD={pw}"',
+    # The quote after `=` closes a pattern the word opened (a live Claude Code command, base-01).
+    "mkdir -p config && grep '^GITHUB_TOKEN=' .env > config/github.env && echo 'REGION=eu' >> config/github.env",
+    'grep "^API_KEY=" .env | cut -d= -f2 > "out file"',
+    '{"command": "grep \\"^DB_PASSWORD=\\" .env > x && echo \\"done\\""}',
 ])
 def test_assignment_text_that_is_not_a_secret(rules, text):
     assert _assigned(rules, text) == []
