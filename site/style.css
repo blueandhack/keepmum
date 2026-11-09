@@ -117,6 +117,9 @@ a { color: var(--ink); }
 .steps { display: flex; flex-direction: column; gap: 48px; padding-top: 32px; }
 .steps h2 { max-width: 720px; }
 .steps .cols { gap: 40px 32px; }
+.video { margin: 0; display: flex; flex-direction: column; gap: 14px; }
+.video video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 20px; background: #F4F4F5; border: 1px solid rgba(26, 15, 11, 0.08); box-shadow: 0 40px 80px -40px rgba(26, 15, 11, 0.35); }
+.video figcaption { font-size: 15px; color: var(--muted); }
 .step { display: flex; flex-direction: column; gap: 12px; padding-top: 20px; border-top: 3px solid var(--ink); }
 .step .n { font-family: var(--mono); font-size: 14px; font-weight: 500; color: var(--number); }
 .step h3 { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }

@@ -8,6 +8,7 @@
 //                  what the feed points updates at: redirects to that DMG on GitHub; counted as an
 //                  update to <version>
 //   /stats         the dashboard (dashboard.js), only behind Cloudflare Access
+//   /video/<file>  the flow video and the like, from the keepmum-media R2 bucket; not counted
 //
 // Every six hours (cron), GitHub's download count for each release's DMG is noted, so downloads
 // straight from GitHub show up too.
@@ -46,6 +47,8 @@ export default {
       if (counted) ctx.waitUntil(count(env, "update", update[1]));
       return Response.redirect(`${RELEASES}/download/v${update[1]}/${update[2]}`, 302);
     }
+    const file = url.pathname.match(/^\/video\/([A-Za-z0-9._-]{1,100}\.(?:mp4|webm|vtt))$/);
+    if (file && (request.method === "GET" || request.method === "HEAD")) return media(request, env, file[1]);
     if (url.pathname === "/stats" || url.pathname === "/stats.json") {
       const who = await accessUser(request, env);
       if (!who) return denied();
@@ -67,6 +70,47 @@ export default {
     ctx.waitUntil(snapshotGitHub(env));
   },
 };
+
+/**
+ * A file from the media bucket, with byte ranges (a browser seeks a video with them). Names carry a
+ * hash of the content (keepmum-flow-<hash>.mp4), so a file never changes and is cached for a year.
+ */
+async function media(request, env, key) {
+  let object;
+  try {
+    object = request.method === "HEAD" ? await env.MEDIA.head(key)
+      : await env.MEDIA.get(key, { range: request.headers, onlyIf: request.headers });
+  } catch {
+    return new Response(null, { status: 416 }); // a range past the end
+  }
+  if (!object) return new Response("Not found\n", { status: 404 });
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+  headers.set("accept-ranges", "bytes");
+  headers.set("cache-control", "public, max-age=31536000, immutable");
+  headers.set("x-content-type-options", "nosniff");
+  if (request.method === "HEAD") {
+    headers.set("content-length", String(object.size));
+    return new Response(null, { headers });
+  }
+  if (!object.body) return new Response(null, { status: 304, headers }); // If-None-Match matched
+  // R2 answers a range that starts past the end with the whole file; HTTP says 416.
+  const start = request.headers.get("range")?.match(/^bytes=(\d+)-/);
+  if (start && Number(start[1]) >= object.size) {
+    return new Response(null, { status: 416, headers: { "content-range": `bytes */${object.size}` } });
+  }
+  const range = request.headers.has("range") ? object.range : undefined;
+  if (range) {
+    const offset = "suffix" in range ? object.size - range.suffix : (range.offset ?? 0);
+    const length = "suffix" in range ? range.suffix : (range.length ?? object.size - offset);
+    headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${object.size}`);
+    headers.set("content-length", String(length));
+    return new Response(object.body, { status: 206, headers });
+  }
+  headers.set("content-length", String(object.size));
+  return new Response(object.body, { headers });
+}
 
 /** The request asks not to be counted: the app's own opt-out, or the browser's. */
 function optedOut(request) {

@@ -13,6 +13,7 @@ routes = [
   { pattern = "keepmum.app/download*", zone_name = "keepmum.app" },
   { pattern = "keepmum.app/update/*", zone_name = "keepmum.app" },
   { pattern = "keepmum.app/stats*", zone_name = "keepmum.app" },
+  { pattern = "keepmum.app/video/*", zone_name = "keepmum.app" },
 ]
 
 # GitHub's download count of each release, noted every six hours.
@@ -24,6 +25,12 @@ crons = ["17 */6 * * *"]
 [vars]
 ACCESS_TEAM_DOMAIN = "blueandhack.cloudflareaccess.com"
 ACCESS_AUD = "3100cf44ed30789ea4d0396f6584445bddff4baa22061d79d2bbc8ebe6a18ff9"
+
+# /video/: the flow video (docs/video/flow.swift), too big to keep in git. From
+# `npx wrangler r2 bucket create keepmum-media` (worker/README.md, "Video").
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "keepmum-media"
 
 [[d1_databases]]
 binding = "DB"

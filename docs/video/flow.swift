@@ -594,6 +594,8 @@ struct Frame {
 func render(to url: URL) throws {
     try? FileManager.default.removeItem(at: url)
     let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+    // Its index first, so a browser starts playing before the whole file has arrived.
+    writer.shouldOptimizeForNetworkUse = true
     let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
         AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: Int(W), AVVideoHeightKey: Int(H),
         AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 8_000_000, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel],

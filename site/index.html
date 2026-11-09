@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; media-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>keepmum: keep secrets on your Mac while you use coding agents</title>
 <meta name="description" content="A local proxy for Claude Code, Codex, Gemini CLI, the Antigravity CLI, pi and opencode. It masks API keys, tokens, passwords and personal data before a request leaves your Mac, and restores them in the answer.">
@@ -88,6 +88,13 @@
 
   <section id="how" class="wrap section steps" aria-labelledby="how-title">
     <h2 id="how-title">Four steps, all on your Mac.</h2>
+    <figure id="video" class="video">
+      <video controls preload="none" playsinline poster="img/flow-poster.webp" width="1920" height="1080" aria-describedby="video-caption">
+        <source src="/video/keepmum-flow-1b4b44f951.mp4" type="video/mp4">
+        <a href="/video/keepmum-flow-1b4b44f951.mp4">Watch the video (MP4, 10 MB)</a>
+      </video>
+      <figcaption id="video-caption">How a request travels through keepmum, in 67 seconds: detect, mask, send, restore, guard. No sound; the captions are in the picture.</figcaption>
+    </figure>
     <div class="cols">
       <div class="step">
         <span class="n">01</span>

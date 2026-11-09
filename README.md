@@ -10,6 +10,10 @@ Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned
 
 > **Status: alpha.** The latest release is [0.1.0 alpha 6](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a6) (Nov 9, 2026); the first, 0.1.0 alpha 1, came out on Nov 3. keepmum works end to end, but it has not been audited, and things will change. Treat it as a safety layer, not a guarantee. See [Limitations](#limitations).
 
+[![Watch how a request travels through keepmum: detect, mask, send, restore, guard (67 seconds, no sound)](site/img/flow-poster.webp)](https://keepmum.app/video/keepmum-flow-1b4b44f951.mp4)
+
+▶ [Watch the 67-second video](https://keepmum.app/video/keepmum-flow-1b4b44f951.mp4) of how a request travels through keepmum, or see it on [keepmum.app](https://keepmum.app/#video).
+
 ![The keepmum dashboard: requests out and replies back, per coding agent](mac/docs/overview-light.png)
 
 ## How it works

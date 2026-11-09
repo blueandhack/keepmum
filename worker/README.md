@@ -8,6 +8,7 @@ A Cloudflare Worker on a few paths of keepmum.app. The rest of the site is GitHu
 | `/download` | Redirects to the newest DMG in that feed. The website's download buttons link here. | `download` |
 | `/update/v<version>/Keepmum-<version>.dmg` | Redirects to that DMG on GitHub. The feed points updates here (`mac/appcast.py`), from 0.1.0a5 on. | `update`, per version updated to |
 | `/stats` | The dashboard, behind Cloudflare Access (below). `/stats.json` is its data. | |
+| `/video/<file>` | The flow video, from the `keepmum-media` R2 bucket, with byte ranges for seeking (below). | not counted |
 
 Every six hours a cron notes GitHub's download count of each release's DMG (`releases` table), so downloads straight from GitHub show up too.
 
@@ -38,6 +39,20 @@ npx wrangler deploy
 5. In `wrangler.toml`, set `ACCESS_TEAM_DOMAIN = "<team>.cloudflareaccess.com"` and `ACCESS_AUD = "<the tag>"`, then `npx wrangler deploy`.
 
 Optional: GitHub's API allows 60 unauthenticated requests an hour per address, shared on Cloudflare's network. If the cron's log shows 403s, give it a token with read access to public repositories: `npx wrangler secret put GITHUB_TOKEN`.
+
+## Video
+
+The website's flow video (`docs/video/flow.swift`) is too big for git, so it lives in an R2 bucket and the Worker serves it at `keepmum.app/video/`. Its name carries a hash of its content, so a new render gets a new name and each one can be cached for a year.
+
+```sh
+npx wrangler r2 bucket create keepmum-media                     # once
+swift docs/video/flow.swift docs/video/keepmum-flow.mp4         # from the repository root
+H=$(shasum -a 256 docs/video/keepmum-flow.mp4 | cut -c1-10)
+cd worker && npx wrangler r2 object put "keepmum-media/keepmum-flow-$H.mp4" --remote \
+  --file ../docs/video/keepmum-flow.mp4 --content-type video/mp4
+```
+
+Then point `site/index.html` at `/video/keepmum-flow-$H.mp4`, and refresh the poster (`site/img/flow-poster.webp`, a still from `swift docs/video/flow.swift --frames`). R2's free tier covers 10 GB stored and charges nothing for what is downloaded.
 
 ## Read the counts without the dashboard
 
