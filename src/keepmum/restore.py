@@ -44,6 +44,8 @@ DEFAULT_POLICY = {
     "generate_image": "keep",
     "search_marketplace": "keep",
     "call_mcp_tool": "keep",
+    # opencode 2.x: an image made from a prompt by a service, which may be reached around keepmum.
+    "experimental_image_generate": "keep",
     "list_resources": "keep",
     "read_resource": "keep",
     "mcp__*": "own",
@@ -276,11 +278,11 @@ def _command_texts(value, name: str | None = None):
     """The strings of a shell tool's input that could be commands (not its description). An argv
     list is also read as one command line, so `["curl", "host"]` is still curl and its host. A
     code-mode script (codemode.py) gives its string literals, not the patches it applies."""
-    from .codemode import CODE_TOOLS, script_strings
+    from .codemode import CODE_TOOLS, script_of, script_strings
     from .destinations import DESCRIPTION_KEYS
 
-    if name in CODE_TOOLS and isinstance(value, str):
-        yield from script_strings(value)
+    if name in CODE_TOOLS and (code := script_of(value)) is not None:
+        yield from script_strings(code)
         return
     if isinstance(value, str):
         yield value
@@ -351,6 +353,9 @@ def restore_tool(name: str, value, vault: Vault, policy: dict, counts: Counter |
 
     if name in CODE_TOOLS and isinstance(tree, str):
         return _restore_script_tool(name, tree, vault, policy, counts)
+    if name in CODE_TOOLS and isinstance(tree, dict) and isinstance(tree.get("code"), str):  # opencode's {code}
+        restored = {**tree, "code": _restore_script_tool(name, tree["code"], vault, policy, counts)}
+        return json.dumps(restored, ensure_ascii=False) if parse else restored
     from .tools import call_name
 
     decided = call_name(name, tree)  # Antigravity's call_mcp_tool: the MCP server it names

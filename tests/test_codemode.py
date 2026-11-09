@@ -227,3 +227,58 @@ def test_what_a_script_returns_from_one_server_can_go_back_to_it(script, own):
     assert ph in json.dumps(out) and vault.origins_of("margaret.thornbury@gmail.com") == ({"mcp__notes"} if own else {"exec"})
     sent = run(f'await tools.mcp__notes__send_note({{text: "reply to {ph}"}});', vault)
     assert ("margaret.thornbury@gmail.com" in sent) == own
+
+
+# --- opencode's Code Mode: execute {code}, tools.SERVER.TOOL and fetch ------------------------------
+
+def run_opencode(code: str, vault) -> str:
+    out = restore_tool("execute", {"code": code}, vault, DEFAULT_POLICY, Counter())
+    assert set(out) == {"code"}
+    return out["code"]
+
+
+def test_opencode_names_a_servers_tool_in_two_parts_and_fetch_is_a_web_fetch():
+    script = parse('await tools.notes.send_note({text: "x"});\nawait tools["my-srv"]["do-it"]({a: 1});\n'
+                   'const r = await fetch("https://x.example/");\nreturn r.status;')
+    assert script.calls == {"mcp__notes__send_note", "mcp__my-srv__do-it", "webfetch"}
+    assert not script.dynamic
+    # Codex's one-part names are as they were.
+    assert parse('await tools.mcp__notes__send_note({text: "x"});').calls == {"mcp__notes__send_note"}
+
+
+def test_opencode_execute_holds_each_literal_to_the_tool_it_is_passed_to(v):
+    ph = v.ph
+    out = run_opencode(f'await tools.notes.send_note({{text: "token {ph["tok"]}"}});', v)
+    assert ph["tok"] in out and TOKEN not in out  # an MCP server never gets a secret
+    assert "ops@notes.example" in run_opencode(f'await tools.notes.send_note({{text: "{ph["own"]}"}});', v)  # its own value
+    out = run_opencode(f'const r = await fetch("https://status.example/check?key={ph["tok"]}");\nreturn r.status;', v)
+    assert ph["tok"] in out and TOKEN not in out  # a URL fetched from this Mac keeps placeholders
+    out = run_opencode(f'const who = "{ph["person"]}";\nawait fetch("https://x.example/?q=" + who);', v)
+    assert ph["person"] in out  # a value in a variable reaches whatever the script calls: kept
+
+
+def test_an_opencode_script_calling_one_server_is_credited_to_it():
+    from keepmum.redact import script_caller
+
+    assert script_caller("execute", {"code": 'return await tools.notes.lookup({name: "M"});'}) == "mcp__notes__exec"
+    assert script_caller("execute", {"code": 'await tools.notes.lookup({});\nawait fetch("https://x.example/");'}) == "execute"
+    assert script_caller("shell", {"command": "ls"}) == "shell"
+
+
+def test_an_opencode_script_over_the_responses_api_is_credited_to_its_server():
+    """opencode on a ChatGPT login sends execute as a function call, its script in `arguments` (a JSON
+    string), not `input`: its result was credited to execute, and the email the server returned
+    went back to it as a placeholder (a live opencode run, mcp-02)."""
+    from keepmum.detect.pipeline import Pipeline
+    from keepmum.detect.rules import RulesDetector
+    from keepmum.redact import Redactor
+
+    vault = Vault(bytes(range(32)))
+    code = 'return await tools.notes.lookup({name: "Margaret Thornbury"});'
+    body = {"input": [
+        {"type": "function_call", "call_id": "c1", "name": "execute", "arguments": json.dumps({"code": code})},
+        {"type": "function_call_output", "call_id": "c1", "output": "Margaret Thornbury: margaret.thornbury@gmail.com"}]}
+    Redactor(Pipeline(RulesDetector(), pii=True), vault).redact_responses_request(body)
+    assert vault.origins_of("margaret.thornbury@gmail.com") == {"mcp__notes"}
+    ph = next(iter(vault._values))
+    assert "margaret.thornbury@gmail.com" in run_opencode(f'return await tools.notes.send_note({{text: "Reach Margaret at {ph}"}});', vault)

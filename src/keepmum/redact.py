@@ -124,15 +124,28 @@ def detector_of(source: str) -> tuple[str, str]:
 
 
 def _caller(item: dict) -> str:
-    """The tool a Responses call's output comes from. A Codex code-mode script that calls only one
-    MCP server's tools returns that server's results, so its output is that server's: a value it
-    found can go back to it (codemode.py)."""
-    from .codemode import CODE_TOOLS, MCP_RESOURCE_CALLS, parse
+    """The tool a Responses call's output comes from (script_caller). A custom tool call (Codex's
+    exec) holds its script in `input`; a function call (opencode's execute) in `arguments`, a JSON
+    document in a string."""
+    value = item.get("input")
+    if value is None and isinstance(item.get("arguments"), str):
+        try:
+            value = json.loads(item["arguments"])
+        except ValueError:
+            value = None
+    return script_caller(item["name"], value)
 
-    name = item["name"]
-    if name not in CODE_TOOLS or not isinstance(item.get("input"), str):
+
+def script_caller(name: str, value) -> str:
+    """The tool a call's output is credited to. A code-mode script (Codex's exec, opencode's
+    execute) that calls only one MCP server's tools returns that server's results, so its output is
+    that server's: a value it found can go back to it (codemode.py)."""
+    from .codemode import CODE_TOOLS, MCP_RESOURCE_CALLS, parse, script_of
+
+    code = script_of(value) if name in CODE_TOOLS else None
+    if code is None:
         return name
-    script = parse(item["input"])
+    script = parse(code)
     servers = {server_of(n) for n in script.calls}
     if script.dynamic or len(servers) != 1 or script.calls & MCP_RESOURCE_CALLS or not next(iter(servers)).startswith("mcp__"):
         return name
@@ -315,7 +328,7 @@ class Redactor:
         `tools`, `metadata` and every other top-level field pass through unchanged.
         """
         out = dict(body)
-        self._calls = {b["id"]: b["name"] for m in out.get("messages") or [] if isinstance(m, dict)
+        self._calls = {b["id"]: script_caller(b["name"], b.get("input")) for m in out.get("messages") or [] if isinstance(m, dict)
                        for b in (m.get("content") if isinstance(m.get("content"), list) else [])
                        if isinstance(b, dict) and b.get("type") == "tool_use"
                        and isinstance(b.get("id"), str) and isinstance(b.get("name"), str)}

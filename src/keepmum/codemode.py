@@ -1,4 +1,5 @@
-"""Codex's code mode: the model's tool calls are a JavaScript program for the `exec` tool.
+"""Code mode: the model's tool calls are a JavaScript program, for Codex's `exec` tool and
+opencode's `execute`.
 
 Since Codex 0.147 a model does not call `exec_command`, `apply_patch` or an MCP server's tools
 itself. It writes a script that does (`await tools.exec_command({cmd: "curl …"})`,
@@ -21,6 +22,11 @@ What a script does with a tool's output is not seen: `tools.mcp__x__send({text: 
 tools.exec_command({cmd: "cat .env"})).output})` sends a file's real text, which never passes
 keepmum. That is the same for a shell command (`curl -d @.env …`); keepmum decides which real
 values the model's own text may carry.
+
+opencode 2.x has its own: `execute` takes `{code}`, and its script reaches MCP servers as
+`tools.<server>.<tool>(…)` (decided as `mcp__<server>__<tool>`) and the web with `fetch(…)`
+(decided as `webfetch`, which keeps placeholders). Its built-in tools are called directly, never
+from a script.
 """
 
 from __future__ import annotations
@@ -28,18 +34,28 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-# Tools whose input is a code-mode script, when it is a string.
-CODE_TOOLS = frozenset({"exec"})
+# Tools whose input is a code-mode script: Codex's `exec` (a string), opencode's `execute` ({code}).
+CODE_TOOLS = frozenset({"exec", "execute"})
 # Nested tools that run a command: their literals are shell text.
 SHELL_CALLS = frozenset({"exec_command", "write_stdin"})
 # Nested tools that reach an MCP server named in their arguments.
 MCP_RESOURCE_CALLS = frozenset({"read_mcp_resource", "list_mcp_resources", "list_mcp_resource_templates"})
 
+def script_of(value) -> str | None:
+    """A code tool's script: Codex's input is the script, opencode's is {code}."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and isinstance(value.get("code"), str):
+        return value["code"]
+    return None
+
+
 _ESCAPE = re.compile(r"\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|\r\n|[\s\S])")
 _SIMPLE = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f", "v": "\v", "0": "\0", "\n": "", "\r\n": ""}
 _IDENT = re.compile(r"[A-Za-z_$][\w$]*")
-# tools.NAME, tools?.NAME, tools["NAME"], tools?.["NAME"]
-_TOOL_REF = re.compile(r"tools\s*(?:(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)|(?:\?\.)?\s*\[\s*([\"'`])([\w$-]+)\2\s*\])")
+# tools.NAME, tools?.NAME, tools["NAME"], tools?.["NAME"], and opencode's two-part tools.SERVER.TOOL
+_SEGMENT = r"(?:\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)|(?:\s*\?\.)?\s*\[\s*([\"'`])([\w$.-]+){q}\s*\])"
+_TOOL_REF = re.compile(r"tools" + _SEGMENT.format(q=r"\2") + "(?:" + _SEGMENT.format(q=r"\5") + ")?")
 _CALL_OPEN = re.compile(r"\s*(?:\?\.\s*)?\(")
 # Names through which a script can reach a tool without naming it where it calls it.
 _DYNAMIC = frozenset({"eval", "Function", "globalThis", "Reflect", "constructor", "import", "require", "self", "window",
@@ -242,6 +258,8 @@ def parse(source: str) -> Script:
             continue
         if (m := _TOOL_REF.match(source, i)) and not (i and (source[i - 1].isalnum() or source[i - 1] in "_$")):
             name = m.group(1) or m.group(3)
+            if tool := m.group(4) or m.group(6):  # opencode: tools.SERVER.TOOL
+                name = f"mcp__{name}__{tool}"
             calls.add(name)
             if (o := _CALL_OPEN.match(source, m.end())) is not None:
                 stack.append(("(", name, o.end() - 1))
@@ -254,6 +272,11 @@ def parse(source: str) -> Script:
             # A property named `tools` is not the global (`x.tools`); `.constructor` reaches Function.
             if word == "constructor" or ((word == "tools" or word in _DYNAMIC) and not (i and source[i - 1] == ".")):
                 dynamic = True
+            if word == "fetch" and not (i and source[i - 1] == ".") and (o := _CALL_OPEN.match(source, m.end())):
+                calls.add("webfetch")  # opencode's scripts reach the web themselves
+                stack.append(("(", "webfetch", o.end() - 1))
+                i, prev = o.end(), "("
+                continue
             if word == "apply_patch" and (o := _CALL_OPEN.match(source, m.end())) is not None:
                 calls.add("apply_patch")
                 stack.append(("(", "apply_patch", o.end() - 1))
@@ -384,13 +407,14 @@ class ScriptCheck:
     mode = "warn"
 
     def review(self, name: str, value, action_of) -> tuple[list[dict], str | None]:
-        if name not in CODE_TOOLS or not isinstance(value, str):
+        code = script_of(value) if name in CODE_TOOLS else None
+        if code is None:
             return [], None
-        tools = computed_to_network(value, action_of)
+        tools = computed_to_network(code, action_of)
         if not tools:
             return [], None
         shown = ", ".join(shown_tool(t) for t in tools)
-        hit = {"check": self.name, "source": name, "score": 1.0, "chars": len(value), "earlier": False,
+        hit = {"check": self.name, "source": name, "score": 1.0, "chars": len(code), "earlier": False,
                "categories": [f"computed values sent to {shown_tool(t)}" for t in tools]}
         note = (f"keepmum: this script sends values it computes, such as a command's output, to {shown}. keepmum "
                 "cannot see those values, so it cannot keep a secret out of them.")
