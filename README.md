@@ -254,6 +254,8 @@ Whatever the setting, a network tool never gets a secret, never more than 5 real
 
 Any app you run can write to your agents' settings. In October 2026 an update to the Postman desktop app enabled its own plugins in Claude Code and Codex, added a hook that told every Codex session to load its skill, marked that hook as trusted on the user's behalf, and connected a remote MCP server, without asking ([postman-app-support#14370](https://github.com/postmanlabs/postman-app-support/issues/14370)). keepmum cannot stop an app from writing those files, so it watches them.
 
+![Settings › Extensions in the Mac app: what other apps added since you last looked, to keep or remove, and what each agent already has](mac/docs/extensions-light.png)
+
 ```sh
 keepmum extensions              # what each agent has; what is new since you last looked is marked
 keepmum extensions keep         # you added them: they are yours now (or name ids to keep some)
@@ -410,7 +412,7 @@ uv sync
 uv run pytest                                # detection, proxy (Messages and Responses APIs), streams, settings, clients
 uv run python bench/gen.py                   # generate the benchmark datasets
 uv run python bench/run.py                   # accuracy and speed; see bench/README.md
-swift docs/video/flow.swift flow.mp4         # the 59-second flow video (detect, mask, send, restore, guard), 1080p
+swift docs/video/flow.swift flow.mp4         # the 67-second flow video (detect, mask, send, restore, guard, and the checks), 1080p
 ```
 
 The design and milestones are in [SPEC.md](docs/SPEC.md).

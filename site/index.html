@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>keepmum: keep secrets on your Mac while you use coding agents</title>
-<meta name="description" content="A local proxy for Claude Code, Codex, Gemini CLI, pi and opencode. It masks API keys, tokens, passwords and personal data before a request leaves your Mac, and restores them in the answer.">
+<meta name="description" content="A local proxy for Claude Code, Codex, Gemini CLI, the Antigravity CLI, pi and opencode. It masks API keys, tokens, passwords and personal data before a request leaves your Mac, and restores them in the answer.">
 <meta name="theme-color" content="#E4572E">
 <link rel="canonical" href="https://keepmum.app/">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -56,7 +56,7 @@
         </a>
         <a class="btn outline" href="https://github.com/blueandhack/keepmum">Read the source</a>
       </div>
-      <p class="fine">For Claude Code, Codex, Gemini CLI, pi and opencode · Free and open source</p>
+      <p class="fine">For Claude Code, Codex, Gemini CLI, the Antigravity CLI, pi and opencode · Free and open source</p>
     </div>
     <div class="hero-mark">
       <svg viewBox="0 0 100 100" role="img" aria-label="The keepmum mark: a lowercase m closed off by a line, like a shut mouth"><path d="M21.6 69.8 L21.6 46.3 C21.6 37 27.8 30.9 35.8 30.9 C43.8 30.9 50 37 50 46.3 L50 69.8 M50 69.8 L50 46.3 C50 37 56.2 30.9 64.2 30.9 C72.2 30.9 78.4 37 78.4 46.3 L78.4 69.8 M12.9 69.8 L87.1 69.8" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -92,7 +92,7 @@
       <div class="step">
         <span class="n">01</span>
         <h3>Detect</h3>
-        <p>96 rules with entropy and checksum checks, then OpenAI Privacy Filter on your Mac’s GPU for what only context gives away. A last step drops UUIDs, hashes and documented example keys.</p>
+        <p>96 rules with entropy and checksum checks, then OpenAI Privacy Filter on your Mac’s GPU for what only context gives away. A hex dump or base64 of your .env is decoded and scanned too. A last step drops UUIDs, hashes and documented example keys.</p>
       </div>
       <div class="step">
         <span class="n">02</span>
@@ -142,7 +142,7 @@
     <div class="cols">
       <div class="feature">
         <h3>Spots what’s new</h3>
-        <p>Plugins, plugin marketplaces, hooks and MCP servers in Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI and opencode. What you already have is yours; anything that appears later shows up in the menu bar.</p>
+        <p>Plugins, plugin marketplaces, hooks, MCP servers, skills and the instruction file every session reads, in Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI and opencode. What you already have is yours; anything that appears later shows up in the menu bar.</p>
       </div>
       <div class="feature">
         <h3>Flags standing instructions</h3>
@@ -159,11 +159,11 @@
     <div class="wrap section">
       <div class="app-head">
         <h2 id="app-title">A menu bar app that shows its work.</h2>
-        <p class="intro">Set up in three steps: download the model, start the background service, switch on protection for each agent. Then watch requests go out and replies come back, see what was masked and what a check flagged, choose what gets masked, and check the audit log.</p>
+        <p class="intro">Set up in three steps: download the model, start the background service, switch on protection for each agent. Then watch requests go out and replies come back, see what was masked and what a check flagged, choose what gets masked, and check the audit log. The menu bar starts and stops the service, and says when something needs you.</p>
       </div>
       <div class="shots">
         <figure class="shot"><img src="img/dashboard.webp" width="2400" height="1560" alt="The keepmum dashboard: requests going out and replies coming back, per coding agent, with what was masked, blocked and flagged by a check"></figure>
-        <img class="menu-shot" src="img/menu.webp" width="640" height="704" alt="The keepmum menu in the menu bar" loading="lazy">
+        <img class="menu-shot" src="img/menu.webp" width="640" height="1034" alt="The keepmum menu in the menu bar" loading="lazy">
       </div>
       <div class="cols">
         <div class="feature">
