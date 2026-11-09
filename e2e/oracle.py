@@ -38,6 +38,7 @@ FAILING = ("leak", "residue", "false-mask", "task", "health")
 RESIDUE = re.compile(r"(?i)keepmum[_-](?:" + "|".join(TYPES) + r")[_-]?[0-9a-f]{4,12}")
 # Shell syntax no secret holds: masked, the model can no longer read its own command.
 SHELL_SYNTAX = re.compile(r" (?:&&|\|\||[|><]|>>|2>&1) ")
+_SPACE = re.compile(r"\s+")
 # What agents leave in a workspace that no case is about.
 AGENT_FILES = (".git/*", ".codex/*", ".claude/*", "*.DS_Store")
 
@@ -87,6 +88,31 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
             blob = ex.sent()
             if any(f in blob for f in forms(v.text) if len(f) >= 4):
                 out.append(Finding("leak", f"{{{{v:{v.name}}}}} reached the provider", f"request {i}: {ex.method} {ex.path}"))
+                break
+
+    # leak, encoded: a protected value in a hex dump, `od -c`, plain hex or base64 that left (a
+    # command printed the file that way: keepmum.decoded).
+    from keepmum.decoded import blocks
+
+    for i, ex in sent:
+        decoded = "".join(d for s in _strings(ex.body) for _, _, d in blocks(s))
+        for v in case.values.values():
+            if v.must_mask and len(v.text) >= 4 and v.text in decoded:
+                out.append(Finding("leak", f"{{{{v:{v.name}}}}} reached the provider encoded (a hex dump or base64)",
+                                   f"request {i}: {ex.method} {ex.path}"))
+
+    # leak, in pieces: a secret cut up and spread out (a dump's text column, spaced characters, hex
+    # bytes with spaces between them), found without decoding anything: every whitespace removed
+    # from what was sent, then any 12 characters of the secret, or 24 digits of its hex.
+    for v in case.values.values():
+        if not v.must_mask or v.kind != "SECRET" or len(v.text) < 24:
+            continue
+        hexed = v.text.encode().hex()
+        pieces = {v.text[i:i + 12] for i in range(len(v.text) - 11)} | {hexed[i:i + 24] for i in range(0, len(hexed) - 23, 2)}
+        for i, ex in sent:
+            squeezed = "".join(_SPACE.split("".join(_strings(ex.body))))
+            if any(p in squeezed for p in pieces):
+                out.append(Finding("leak", f"pieces of {{{{v:{v.name}}}}} reached the provider", f"request {i}: {ex.method} {ex.path}"))
                 break
 
     # leak, in part: a protected value masked only in part (up to a quote, a space), the rest sent.
@@ -222,6 +248,10 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
     if keepmum.get("unresolved") and keepmum["unresolved"] != case.expect.get("unresolved"):
         out.append(Finding("health", f"keepmum met {keepmum['unresolved']} placeholder(s) it could not restore", "keepmum"))
     for e in keepmum.get("errors", []):
+        # Claude Code probes {base}/api/hello before a session; a gateway that is not Anthropic
+        # (DeepSeek's) answers it 401 and Claude Code carries on: nothing failed.
+        if e["path"].endswith("/api/hello") and e["outcome"] == "forwarded":
+            continue
         out.append(Finding("health", f"keepmum answered {e['status']} ({e['outcome']}) for {e['path']}", "keepmum"))
     if served is not None and case.script:
         last = max((s["turn"] for s in served), default=-1)
@@ -230,6 +260,30 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
                                          "the agent ended early or a tool call failed", "script"))
     for err in transcript.errors[:3]:
         out.append(Finding("health", f"agent error: {case.shown(err)[:300]}", "agent"))
+    return out
+
+
+def _strings(body: bytes) -> list[str]:
+    """Every string in a request body, a JSON document in one unpacked too (Codex's tool output is
+    JSON inside a JSON string), as keepmum reads them; the raw text when the body is not JSON."""
+    text = body.decode("utf-8", "replace")
+    try:
+        todo, out = [json.loads(text)], []
+    except ValueError:
+        return [text]
+    while todo:
+        x = todo.pop()
+        if isinstance(x, dict):
+            todo += x.values()
+        elif isinstance(x, list):
+            todo += x
+        elif isinstance(x, str):
+            out.append(x)
+            if x[:1] in "{[":
+                try:
+                    todo.append(json.loads(x))
+                except ValueError:
+                    pass
     return out
 
 

@@ -32,8 +32,13 @@ class Transcript:
 # run's environment under these names, as `op run --env-file e2e/keys.env` puts them there (copy
 # e2e/keys.env.example). Codex, opencode and pi use the OpenAI key, Claude Code the Anthropic one. Each
 # agent gets only the key it uses, under the name it reads; no key is written to disk.
-AUTH = {"mode": "login", "cheap": False}
-KEY_VARS = {"openai": "KEEPMUM_OPENAI_API_KEY", "anthropic": "KEEPMUM_CLAUDE_API_KEY"}
+AUTH = {"mode": "login", "cheap": False, "provider": None}
+KEY_VARS = {"openai": "KEEPMUM_OPENAI_API_KEY", "anthropic": "KEEPMUM_CLAUDE_API_KEY",
+            "deepseek": "KEEPMUM_DEEPSEEK_API_KEY"}
+# `--provider deepseek`: DeepSeek through keepmum, as a gateway in front of its Anthropic-format
+# endpoint (keepmum scans no Chat Completions, DeepSeek's other format, and refuses it). Claude
+# Code, pi and opencode speak that format; Codex only OpenAI's Responses API, agy only Google's.
+DEEPSEEK_MODELS = ("deepseek-v4-pro", "deepseek-flash")  # (default, --cheap)
 # Provider keys never reach an agent unless its run sets one: a key in the user's shell (or a
 # template value) would decide which account an agent uses, and its shell commands could read it.
 _PROVIDER_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", *KEY_VARS.values())
@@ -41,6 +46,19 @@ _PROVIDER_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
 
 def keys() -> bool:
     return AUTH["mode"] == "keys"
+
+
+def deepseek() -> bool:
+    return keys() and AUTH.get("provider") == "deepseek"
+
+
+def deepseek_model(model: str | None) -> str:
+    return model or DEEPSEEK_MODELS[AUTH["cheap"]]
+
+
+def deepseek_url(port: int) -> str:
+    """keepmum's route for the DeepSeek gateway (run.py), at DeepSeek's Anthropic-format base."""
+    return f"http://127.0.0.1:{port}/gateway/deepseek/anthropic"
 
 
 def api_key(provider: str) -> str:
@@ -66,6 +84,7 @@ class Agent:
     modes = ("scripted", "live")  # scripted needs the scripted model to speak its provider's API
     mcp_modes = ("scripted", "live")  # where it can be given the stub MCP server for one run
     key_auth = True  # can run live on an OpenAI or Anthropic API key (--auth keys)
+    deepseek = False  # can run on DeepSeek through keepmum (--provider deepseek): speaks the Messages API
 
     def available(self) -> bool:
         return shutil.which(self.binary) is not None
@@ -161,11 +180,12 @@ class Codex(Agent):
 class Claude(Agent):
     name, binary, api = "claude", "claude", "anthropic"
 
+    deepseek = True
     KEY_MODELS = (None, "claude-haiku-5-5")  # --auth keys: (default: Claude Code's own, --cheap)
 
     def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
         if mode == "live" and keys():
-            model = model or self.KEY_MODELS[AUTH["cheap"]]
+            model = deepseek_model(model) if deepseek() else model or self.KEY_MODELS[AUTH["cheap"]]
         # Claude Code's own sandbox, as Codex runs in workspace-write: commands run without a prompt
         # but cannot write outside the workspace or reach the network; file edits are accepted.
         sandbox = json.dumps({"sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True,
@@ -185,6 +205,12 @@ class Claude(Agent):
             config = out / "claude-config"
             config.mkdir(exist_ok=True)
             env.update(ANTHROPIC_API_KEY=api_key("anthropic"), CLAUDE_CONFIG_DIR=str(config))
+            if deepseek():
+                # Every model Claude Code picks on its own (titles, subagents) is DeepSeek's too.
+                ds = model  # set above from DEEPSEEK_MODELS
+                env.update(ANTHROPIC_BASE_URL=deepseek_url(port), ANTHROPIC_API_KEY=api_key("deepseek"),
+                           ANTHROPIC_DEFAULT_HAIKU_MODEL=ds, ANTHROPIC_DEFAULT_SONNET_MODEL=ds,
+                           ANTHROPIC_DEFAULT_OPUS_MODEL=ds, ANTHROPIC_SMALL_FAST_MODEL=ds)
         return argv, env
 
     def transcript(self, stdout, out):
@@ -316,6 +342,7 @@ class Pi(Agent):
     lands in the user's file; a copy could rotate the refresh token away from it."""
 
     name, binary, api = "pi", "pi", "anthropic"
+    deepseek = True
     mcp_modes = ()
     MODEL = "claude-opus-4-5"
     # The login the live run uses: anthropic (a Claude login) or openai-codex (ChatGPT).
@@ -329,13 +356,20 @@ class Pi(Agent):
         live = mode == "live"
         agent = out / "pi-agent"
         agent.mkdir(exist_ok=True)
-        (agent / "models.json").write_text(json.dumps({"providers": {
-            name: {"baseUrl": url, "headers": {"x-keepmum-client": "pi"}} for name, url in pi_providers(port).items()}}))
+        providers = {name: {"baseUrl": url, "headers": {"x-keepmum-client": "pi"}} for name, url in pi_providers(port).items()}
         env = {**_clean_env(real_home), "PI_CODING_AGENT_DIR": str(agent), "PI_OFFLINE": "1"}
         provider = "anthropic"
         if not live:
             env["ANTHROPIC_API_KEY"] = DUMMY_ANTHROPIC_KEY
             model = model or self.MODEL
+        elif deepseek():
+            provider, model = "keepmum-deepseek", deepseek_model(model)
+            providers["keepmum-deepseek"] = {
+                "baseUrl": deepseek_url(port), "api": "anthropic-messages", "apiKey": "$DEEPSEEK_API_KEY",
+                "headers": {"x-keepmum-client": "pi"},
+                "models": [{"id": model, "reasoning": True, "contextWindow": 1_048_576, "maxTokens": 32_768,
+                            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]}
+            env["DEEPSEEK_API_KEY"] = api_key("deepseek")
         elif keys():
             env["OPENAI_API_KEY"] = api_key("openai")
             provider, model = "openai", model or self.KEY_MODELS[AUTH["cheap"]]
@@ -343,6 +377,7 @@ class Pi(Agent):
             real = Path(os.environ.get("PI_CODING_AGENT_DIR") or Path(real_home) / ".pi" / "agent") / "auth.json"
             (agent / "auth.json").symlink_to(real)
             provider, model = self.LIVE_PROVIDER, model or self.LIVE_MODEL
+        (agent / "models.json").write_text(json.dumps({"providers": providers}))
         argv = [shutil.which(self.binary), "-p", "--mode", "json", "--no-session", "--no-extensions", "--no-skills",
                 "--no-prompt-templates", "--no-themes", "--offline", "--provider", provider, "--model", model,
                 *extra, prompt]
@@ -387,6 +422,7 @@ class OpenCode(Agent):
 
     name, binary, api = "opencode", "opencode", "anthropic"
     NETWORK = frozenset({"webfetch", "websearch"})  # sent from this Mac, or by the provider
+    deepseek = True
     MODEL = "anthropic/claude-opus-4-5"
     LIVE_MODEL = "openai/gpt-6.1-sol"
     KEY_MODELS = ("openai/gpt-6.1-sol", "openai/gpt-6-luna")  # --auth keys, OpenAI: (default, --cheap)
@@ -407,16 +443,25 @@ class OpenCode(Agent):
             "$schema": "https://opencode.ai/config.json", "autoupdate": False, "share": "disabled",
             # --auto approves what is not denied, but a web search still asks (headless, it is cancelled).
             "permission": {"websearch": "allow", "webfetch": "allow"},
-            "provider": {name: {"options": {"baseURL": url, "headers": {"x-keepmum-client": "opencode"}}}
-                         for name, url in opencode_providers(port).items()},
+            "provider": {**{name: {"options": {"baseURL": url, "headers": {"x-keepmum-client": "opencode"}}}
+                            for name, url in opencode_providers(port).items()},
+                         **({"keepmum-deepseek": {
+                             "npm": "@ai-sdk/anthropic", "name": "DeepSeek through keepmum",
+                             "options": {"baseURL": deepseek_url(port) + "/v1", "apiKey": "{env:DEEPSEEK_API_KEY}",
+                                         "headers": {"x-keepmum-client": "opencode"}},
+                             "models": {deepseek_model(model): {"limit": {"context": 1_048_576, "output": 32_768}}}}}
+                            if live and deepseek() else {})},
             **({"mcp": {mcp["name"]: {"type": "local", "command": [mcp["command"], *mcp["args"]],
                                       "environment": mcp["env"], "enabled": True}}} if mcp else {})}))
         argv = [shutil.which(self.binary), "run", "--format", "json", "--auto", "--standalone",
-                "-m", model or (self.KEY_MODELS[AUTH["cheap"]] if live and keys() else self.LIVE_MODEL if live
-                                else self.MODEL), *extra, prompt]
+                "-m", ("keepmum-deepseek/" + deepseek_model(model)) if live and deepseek() else
+                model or (self.KEY_MODELS[AUTH["cheap"]] if live and keys() else self.LIVE_MODEL if live
+                          else self.MODEL), *extra, prompt]
         env = {**_clean_env(real_home), **{k: str(v) for k, v in xdg.items()}}
         if not live:
             env["ANTHROPIC_API_KEY"] = DUMMY_ANTHROPIC_KEY
+        elif deepseek():
+            env["DEEPSEEK_API_KEY"] = api_key("deepseek")
         elif keys():
             env["OPENAI_API_KEY"] = api_key("openai")
         return argv, env
@@ -436,8 +481,14 @@ class OpenCode(Agent):
                 if tool == "shell":
                     t.commands.append(str(inp.get("command", "")))
                 elif tool == "execute":  # Code Mode: reaches MCP servers and, with fetch, the web
-                    t.mcp_inputs.append(json.dumps(inp, ensure_ascii=False))
-                    if "fetch(" in str(inp.get("code", "")):
+                    code = str(inp.get("code", ""))
+                    # A script that calls a tool reaches a server, one that fetches the web (below); one
+                    # that calls neither runs on this Mac only, like any local tool.
+                    if "tools." in code or "tools[" in code:
+                        t.mcp_inputs.append(json.dumps(inp, ensure_ascii=False))
+                    elif "fetch(" not in code:
+                        t.tool_inputs.append(json.dumps(inp, ensure_ascii=False))
+                    if "fetch(" in code:
                         t.network_inputs.append(json.dumps(inp, ensure_ascii=False))
                         t.web_calls += 1
                 elif tool in self.NETWORK:

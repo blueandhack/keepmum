@@ -3,6 +3,8 @@
 #
 #   ./release.sh                  build, sign with Developer ID, notarize, staple -> dist/
 #   SKIP_NOTARIZE=1 ./release.sh  the same with any identity and no notarization, to test the steps
+#   SKIP_LIVE=1 ./release.sh      without the live e2e run (e2e/release-check.sh: real models on API
+#                                 keys from 1Password, ~$0.15), when the keys are not at hand
 #   APP_OUT=build/release/Keepmum.app ./release.sh   build there, leaving build/Keepmum.app (an app in use) alone
 #
 # Needs, once (see mac/README.md, "Releasing"):
@@ -64,6 +66,13 @@ notarize() {
 
 echo "== keepmum $VERSION"
 (cd "$ROOT" && uv run --frozen pytest -q -p no:cacheprovider)
+# The live suite: real agents and models through keepmum (e2e/README.md). A failure stops the
+# release, as a failing test does; SKIP_LIVE=1 skips it, and says so.
+if [ -z "${SKIP_LIVE:-}" ]; then
+  "$ROOT/e2e/release-check.sh"
+else
+  echo "SKIP_LIVE: the live e2e run was skipped; this release was not checked against real models" >&2
+fi
 rm -rf "$APP" && SIGN_IDENTITY=${SIGN_IDENTITY:-} VERSION=$VERSION SWIFT_CONFIG=release RUNTIME_CACHE=0 SKIP_RUNTIME= \
   APP_OUT=$APP ./build-app.sh
 

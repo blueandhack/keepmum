@@ -69,11 +69,16 @@ A release is a notarized `Keepmum-<version>.dmg` on the repository's GitHub Rele
    ```
    Builds with `mac/sparkle-public-key` have an updater; builds without it (or with `SPARKLE_PUBLIC_KEY` empty) have none.
 
-**Each release:**
+**Each release** runs the unit tests, then the live e2e suite (`e2e/release-check.sh`: Codex,
+opencode and pi on gpt-6-luna and Claude Code on Claude Haiku 5.5, on API keys from 1Password, about
+$0.15; the Antigravity CLI on your Google login). A failure in either stops it. `SKIP_LIVE=1`
+releases without the live run, when the keys are not at hand or a fix cannot wait; it says so.
+
+**Steps:**
 
 ```sh
 # 1. set the version in pyproject.toml and src/keepmum/__init__.py, run `uv lock`, commit
-RELEASE_NOTES=notes.md mac/release.sh          # tests, build, sign, notarize, staple -> dist/; adds it to mac/appcast.xml
+RELEASE_NOTES=notes.md mac/release.sh          # tests, live e2e run, build, sign, notarize, staple -> dist/; adds it to mac/appcast.xml
 git push origin main
 git tag -s v0.1.0a2 -m "keepmum 0.1.0 alpha 2" && git push origin v0.1.0a2
 gh release create v0.1.0a2 dist/Keepmum-0.1.0a2.dmg dist/Keepmum-0.1.0a2.dmg.sha256 \

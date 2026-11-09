@@ -38,6 +38,20 @@ under the name it reads (Codex through its provider's `env_key`, so no key is wr
 file). Claude Code gets a config folder of its own and opencode a data folder of its own, so no
 login is there to prefer; a key in the user's shell (`OPENAI_API_KEY`) reaches no agent in any mode.
 
+Every live run reports what it cost: each result line ends with its cost, and the end of the run
+(and `summary.md`) has a table per agent, from the token usage each provider reported in its
+replies, priced in `e2e/cost.py`. On a login it is what the same run would cost on an API key.
+
+Before a release, `e2e/release-check.sh` runs exactly that: every live case on `--auth keys --cheap`,
+then the Antigravity CLI on the user's Google login. `mac/release.sh` runs it after the unit tests,
+and stops on a failure; `SKIP_LIVE=1 mac/release.sh` releases without it. luna and Haiku 5.5 were chosen by measuring
+(Nov 8, 2026, per pass of about 14 cases): Codex $0.087 on luna (gpt-5-nano: $0.073 but 5 failures;
+Codex speaks only OpenAI's Responses API), Claude Code $0.040 on Haiku 5.5 (DeepSeek Flash $0.049),
+opencode $0.016 on luna (DeepSeek $0.017, nano $0.019 with failures), pi $0.003 on luna (DeepSeek
+$0.005, Haiku $0.006). nano's lower prices come back as reasoning tokens; DeepSeek's input price is
+above luna's and Haiku's, and these runs are nearly all input. A weaker model is worth a run now and
+then all the same: nano's nested `bash -lc '…'` commands found two keepmum bugs.
+
 `--cheap` picks each agent's smallest model (gpt-6-luna; Claude Haiku 5.5 for Claude Code); without
 it, Codex, opencode and pi use gpt-6.1-sol and Claude Code its own default. Most of a run's cost is
 each agent's own system prompt and tool list, sent again on every call, not the case: measured on
@@ -128,8 +142,8 @@ Each run gets:
 |---|---|---|
 | Model | `scripted.py` plays the case's turns | the provider's real model |
 | Deterministic | yes: the same result every run | no: use `--repeat` and read the pass rate |
-| Cost | free, about 2 s per case | the user's subscription, 15 to 60 s per case |
-| When | every change to keepmum | before a release, and after an agent update |
+| Cost | free, about 2 s per case | about $0.15 a pass on API keys (gpt-6-luna, Claude Haiku 5.5), 15 to 60 s per case |
+| When | every change to keepmum | before a release (`e2e/release-check.sh`), and after an agent update |
 | Finds | keepmum's own bugs, every time | what real models do with placeholders |
 
 The scripted model writes real tool calls in each agent's own wire format: Claude Code's `Bash`,

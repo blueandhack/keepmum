@@ -13,10 +13,13 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import cost
+
 REAL_HOME = os.environ["HOME"]
 RESULTS = Path(__file__).parent / "results"
 PROVIDERS = {"anthropic": "https://api.anthropic.com", "openai": "https://api.openai.com", "chatgpt": "https://chatgpt.com",
-             "antigravity": "https://daily-cloudcode-pa.googleapis.com", "gemini": "https://generativelanguage.googleapis.com"}
+             "antigravity": "https://daily-cloudcode-pa.googleapis.com", "gemini": "https://generativelanguage.googleapis.com",
+             "deepseek": "https://api.deepseek.com"}
 
 
 def _environment() -> None:
@@ -105,6 +108,8 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         proxy.prefixed["/chatgpt"] = f"{tap_server.url}/chatgpt"
         proxy.prefixed["/antigravity"] = f"{tap_server.url}/antigravity"
         proxy.prefixed["/gemini"] = f"{tap_server.url}/gemini"
+        # DeepSeek is another gateway keepmum sits in front of (--provider deepseek; gateway.py).
+        proxy.gateways["deepseek"] = f"{tap_server.url}/deepseek"
         live_vault["vault"] = proxy.redactor.vault
         server = launch.BackgroundServer(proxy)
         server.start()
@@ -156,6 +161,7 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         "turns": [s["turn"] for s in scripted.served] if scripted else None,
         "tools": sorted(scripted.tools) if scripted else None,
         "code_mode": next((s.get("code_mode") for s in (scripted.served if scripted else []) if "code_mode" in s), None),
+        "usage": cost.of(tap.exchanges).as_dict() if mode == "live" else None,
     }
     if keep is not None:
         d = keep / f"{case.id}.{agent.name}.{mode}.{rep}"
@@ -179,6 +185,8 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
 def _line(r: dict) -> str:
     mark = {"pass": "✓", "fail": "✗", "gap": "◌", "gap-passed": "!", "skip": "–"}[r["status"]]
     head = f"{mark} {r['case']:<34} {r['agent']:<7} {r['mode']:<9} #{r['rep']} {r.get('seconds', 0):>6}s"
+    if r.get("usage"):
+        head += f"  {cost.dollars(r['usage']):>9}"
     lines = [head]
     for f in r.get("findings", []):
         if f["cls"] != "shown" or r["status"] != "pass":
@@ -205,6 +213,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="live: the user's logins, or API keys from KEEPMUM_OPENAI_API_KEY and KEEPMUM_CLAUDE_API_KEY "
                         "(op run --env-file e2e/keys.env -- ...)")
     r.add_argument("--cheap", action="store_true", help="--auth keys: each agent's smallest model")
+    r.add_argument("--provider", choices=["deepseek"],
+                   help="--auth keys: DeepSeek (KEEPMUM_DEEPSEEK_API_KEY) through keepmum as a gateway, for the "
+                        "agents that speak the Messages API (Claude Code, pi, opencode)")
     r.add_argument("--agent-arg", action="append", default=[], help="extra argument for the agent, repeatable")
     r.add_argument("--keep", action="store_true", help="keep transcripts and requests (values shown as {{v:name}})")
     r.add_argument("--check-tools", action="store_true",
@@ -223,10 +234,11 @@ def main(argv: list[str] | None = None) -> int:
     agents = [AGENTS[a] for a in (args.agent or AGENTS)]
     if args.cmd == "run" and args.mode == "live":
         from . import agents as agents_mod
-        agents_mod.AUTH.update(mode=args.auth, cheap=args.cheap)
+        agents_mod.AUTH.update(mode=args.auth, cheap=args.cheap, provider=args.provider)
     model_ok = None
     results = []
-    how = f" ({'API keys' + (', cheapest models' if args.cheap else '')})" if args.mode == "live" and args.auth == "keys" else ""
+    how = (f" ({'API keys' + (', DeepSeek' if args.provider else '') + (', cheapest models' if args.cheap else '')})"
+           if args.mode == "live" and args.auth == "keys" else "")
     print(f"keepmum e2e, {args.mode}{how}: " + ", ".join(f"{a.name} {a.version()}" for a in agents if a.available()))
     for case in cases:
         for agent in agents:
@@ -238,6 +250,8 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             if not agent.available():
                 reason = f"{agent.binary} is not installed"
+            elif args.mode == "live" and args.auth == "keys" and args.provider == "deepseek" and not agent.deepseek:
+                reason = f"{agent.name} does not speak the Messages API, DeepSeek's format keepmum scans"
             elif args.mode == "live" and args.auth == "keys" and not agent.key_auth:
                 reason = f"{agent.name} signs in with Google, not an OpenAI or Anthropic key"
             elif case.mcp and args.mode not in agent.mcp_modes:
@@ -261,7 +275,8 @@ def main(argv: list[str] | None = None) -> int:
     tools_report = check_tools(results) if args.check_tools else None
     out.mkdir(parents=True, exist_ok=True)
     (out / "results.json").write_text(json.dumps(results, indent=1, ensure_ascii=False))
-    (out / "summary.md").write_text(summary(results, args.mode, agents) + (tools_report["text"] if tools_report else ""))
+    (out / "summary.md").write_text(summary(results, args.mode, agents) + (tools_report["text"] if tools_report else "")
+                                    + (cost_report(results) if args.mode == "live" else ""))
     # A known gap that passes scripted fails the run, so its marker is removed and the case guards the
     # fix. Live, a real model may simply not fall into the trap that run: reported, not failed.
     failed = [r for r in results if r["status"] == "fail" or (r["status"] == "gap-passed" and r["mode"] == "scripted")]
@@ -270,10 +285,34 @@ def main(argv: list[str] | None = None) -> int:
         print("\n" + tools_report["text"].strip())
         if tools_report["new"]:
             failed.append({"tools": tools_report["new"]})
+    if args.mode == "live":
+        print("\n" + cost_report(results).strip())
     print(f"\n{counts['pass']} passed, {counts['fail']} failed, {counts['gap']} known gaps still open, "
           f"{counts['gap-passed']} known gaps now passing (remove their known_gap), {counts['skip']} skipped"
           f"  ->  {out / 'summary.md'}")
     return 1 if failed else 0
+
+
+def cost_report(results: list[dict]) -> str:
+    """What the run cost per agent and in all, from the usage each provider reported (cost.py)."""
+    per: dict[str, cost.Usage] = {}
+    for r in results:
+        if r.get("usage") and r["usage"]["calls"]:  # none: a login whose replies carry no usage keepmum reads
+            per.setdefault(r["agent"], cost.Usage()).merge(cost.Usage.from_dict(r["usage"]))
+    if not per:
+        return ""
+    total = cost.Usage()
+    lines = ["", "## Cost", "", "| Agent | Models | Calls | Input | Cached | Cache writes | Output | Cost |",
+             "|---|---|---|---|---|---|---|---|"]
+    for agent, u in sorted(per.items(), key=lambda kv: -kv[1].cost):
+        total.merge(u)
+        lines.append(f"| {agent} | {', '.join(sorted(u.models)) or '?'} | {u.calls} | {u.input:,} | {u.cached:,} | "
+                     f"{u.cache_write:,} | {u.output:,} | {cost.dollars(u)} |")
+    lines.append(f"| **all** | | {total.calls} | {total.input:,} | {total.cached:,} | {total.cache_write:,} | "
+                 f"{total.output:,} | **{cost.dollars(total)}** |")
+    if total.unpriced:
+        lines.append(f"\n`+`: no price for {', '.join(sorted(total.unpriced))} (e2e/cost.py); counted in tokens only.")
+    return "\n".join(lines) + "\n"
 
 
 TOOLS = Path(__file__).parent / "tools.toml"
