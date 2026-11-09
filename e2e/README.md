@@ -147,7 +147,7 @@ Each run gets:
 | Finds | keepmum's own bugs, every time | what real models do with placeholders |
 
 The scripted model writes real tool calls in each agent's own wire format: Claude Code's `Bash`,
-`Write`, `Read` and `Edit`, and Codex 0.147's code mode (`exec` running `tools.exec_command` and
+`Write`, `Read` and `Edit`, and Codex's code mode (since 0.147; `exec` running `tools.exec_command` and
 `tools.apply_patch`, with plain `exec_command` and `apply_patch` when a Codex offers those; MCP
 tools from the script, `tools.mcp__notes__send_note(…)`, in a raw `codex` call), and the
 Antigravity CLI's `run_command`, `write_file`, `read_file` and `edit_file` over the Gemini API. The

@@ -43,13 +43,17 @@ jobs:
           tar -xzf "$RUNNER_TEMP/agy.tar.gz" -C "$RUNNER_TEMP/agy"
           mv "$RUNNER_TEMP/agy/antigravity" "$RUNNER_TEMP/agy/agy"
           echo "$RUNNER_TEMP/agy" >> "$GITHUB_PATH"
-          # opencode 2.x from its newest GitHub release (not on npm), checked against GitHub's digest.
+          # opencode from its newest stable GitHub release (not on npm), checked against GitHub's digest.
+          # The highest version, not the one GitHub calls "Latest": the project keeps that on 1.x.
+          tag="$(gh release list --repo anomalyco/opencode --exclude-pre-releases --limit 100 --json tagName \
+            --jq '.[].tagName' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          echo "opencode $tag"
           for try in 1 2 3 4 5; do
-            gh release download --repo anomalyco/opencode --pattern opencode-linux-arm64.tar.gz --dir "$RUNNER_TEMP" \
-              --clobber && break
+            gh release download "$tag" --repo anomalyco/opencode --pattern opencode-linux-arm64.tar.gz \
+              --dir "$RUNNER_TEMP" --clobber && break
             [ "$try" = 5 ] && exit 1; sleep $((try * 10))
           done
-          digest="$(gh release view --repo anomalyco/opencode --json assets \
+          digest="$(gh release view "$tag" --repo anomalyco/opencode --json assets \
             --jq '.assets[] | select(.name=="opencode-linux-arm64.tar.gz") | .digest' | sed 's/^sha256://')"
           echo "$digest  $RUNNER_TEMP/opencode-linux-arm64.tar.gz" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/opencode"
