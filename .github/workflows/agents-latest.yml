@@ -14,9 +14,12 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_PYTHON: "3.15"
+
 jobs:
   latest:
-    runs-on: macos-26
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -24,26 +27,29 @@ jobs:
       - run: uv sync --frozen
       - name: Install the newest agents
         run: |
+          # Ubuntu 24.04 keeps unprivileged user namespaces from bubblewrap unless this is off.
+          sudo apt-get install -y -qq bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           npm install --no-fund --no-audit --prefix "$RUNNER_TEMP/agents" @openai/codex@latest @anthropic-ai/claude-code@latest \
             @earendil-works/pi-coding-agent@latest
           echo "$RUNNER_TEMP/agents/node_modules/.bin" >> "$GITHUB_PATH"
           # The Antigravity CLI as its installer gets it (the newest release in its manifest, checked
           # against the manifest's SHA-512), without the installer's shell-profile changes.
-          manifest="$(curl -fsSL https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/darwin_arm64.json)"
+          manifest="$(curl -fsSL --retry 5 --retry-all-errors https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_arm64.json)"
           field() { printf '%s' "$manifest" | python3 -c "import json, sys; print(json.load(sys.stdin)['$1'])"; }
-          curl -fsSL -o "$RUNNER_TEMP/agy.tar.gz" "$(field url)"
-          echo "$(field sha512)  $RUNNER_TEMP/agy.tar.gz" | shasum -a 512 -c -
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/agy.tar.gz" "$(field url)"
+          echo "$(field sha512)  $RUNNER_TEMP/agy.tar.gz" | sha512sum -c -
           mkdir -p "$RUNNER_TEMP/agy"
           tar -xzf "$RUNNER_TEMP/agy.tar.gz" -C "$RUNNER_TEMP/agy"
           mv "$RUNNER_TEMP/agy/antigravity" "$RUNNER_TEMP/agy/agy"
           echo "$RUNNER_TEMP/agy" >> "$GITHUB_PATH"
           # opencode 2.x from its newest GitHub release (not on npm), checked against GitHub's digest.
-          gh release download --repo anomalyco/opencode --pattern opencode-darwin-arm64.zip --dir "$RUNNER_TEMP"
+          gh release download --repo anomalyco/opencode --pattern opencode-linux-arm64.tar.gz --dir "$RUNNER_TEMP"
           digest="$(gh release view --repo anomalyco/opencode --json assets \
-            --jq '.assets[] | select(.name=="opencode-darwin-arm64.zip") | .digest' | sed 's/^sha256://')"
-          echo "$digest  $RUNNER_TEMP/opencode-darwin-arm64.zip" | shasum -a 256 -c -
+            --jq '.assets[] | select(.name=="opencode-linux-arm64.tar.gz") | .digest' | sed 's/^sha256://')"
+          echo "$digest  $RUNNER_TEMP/opencode-linux-arm64.tar.gz" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/opencode"
-          unzip -q "$RUNNER_TEMP/opencode-darwin-arm64.zip" -d "$RUNNER_TEMP/opencode"
+          tar -xzf "$RUNNER_TEMP/opencode-linux-arm64.tar.gz" -C "$RUNNER_TEMP/opencode"
           echo "$RUNNER_TEMP/opencode" >> "$GITHUB_PATH"
         env:
           GH_TOKEN: ${{ github.token }}

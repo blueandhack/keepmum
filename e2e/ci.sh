@@ -13,7 +13,11 @@
 # Usage: e2e/ci.sh [case ...]   (the agents must be on PATH; their versions are printed)
 set -eu
 
-work="$(mktemp -d "${TMPDIR:-/tmp}/keepmum-e2e-ci.XXXXXX")"
+# Not under the temp folder: Codex will not create its helper binaries in a CODEX_HOME there, and on
+# Linux every file it writes goes through them ("Failed to write file"). RUNNER_TEMP on GitHub.
+base="${RUNNER_TEMP:-$HOME/.cache}"
+mkdir -p "$base"
+work="$(mktemp -d "$base/keepmum-e2e-ci.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
 # Both logins live in $work only: the user's own (~/.codex, the Keychain) are never read or written.

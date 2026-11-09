@@ -48,15 +48,20 @@ the agent's history unrecognized (val-04).
 
 ### In CI
 
-The `agents` job in `.github/workflows/ci.yml` runs the scripted suite on every change, with Codex and
-Claude Code pinned to the versions this suite was last checked against (`CODEX_VERSION`,
-`CLAUDE_CODE_VERSION`). It calls `e2e/ci.sh`, which you can run yourself:
+The `agents` job in `.github/workflows/ci.yml` runs the scripted suite on every change, on a Linux
+arm64 runner (`ubuntu-24.04-arm`, Python 3.15), with each agent's Linux build pinned to the version
+this suite was last checked against (`CODEX_VERSION`, `CLAUDE_CODE_VERSION`, `PI_VERSION`,
+`OPENCODE_VERSION`, `AGY_VERSION`). Claude Code's and Codex's sandboxes use bubblewrap there, which
+Ubuntu 24.04 allows only with `kernel.apparmor_restrict_unprivileged_userns=0`. Only `mac-app`, which
+builds the Mac app, runs on macOS. The job calls `e2e/ci.sh`, which you can run yourself:
 
 ```sh
 e2e/ci.sh                  # every case; e2e/ci.sh fn- for some
 ```
 
-The agents sign in with dummy API keys, in a temporary folder. Nothing reaches a provider in scripted
+The agents sign in with dummy API keys, in a folder of the run's own (under `RUNNER_TEMP`, or
+`~/.cache`: not the temp folder, where Codex will not create the helper binaries every file write
+goes through on Linux). Nothing reaches a provider in scripted
 mode, so the key is never checked, and no real secret is needed. Your own logins (`~/.codex`, the
 Keychain) are not read or written. Two consequences:
 
