@@ -16,7 +16,7 @@
 set -euo pipefail
 APP=$(cd "$1" && pwd)
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-PYTHON_VERSION=${PYTHON_VERSION:-3.12.15}
+PYTHON_VERSION=${PYTHON_VERSION:-3.15.2}
 BUNDLE_ID=${BUNDLE_ID:-app.keepmum.Keepmum}
 RES=$APP/Contents/Resources
 work=$ROOT/mac/build/runtime
