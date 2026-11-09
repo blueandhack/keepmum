@@ -29,7 +29,12 @@ _JSON_STRING = re.compile(r'"(?:[^"\\\n]|\\.)*"')
 # --- the shell ----------------------------------------------------------------------------
 
 def shell_quote(value: str, ctx: str) -> str:
-    """value as the shell reads it in context ctx: unquoted, single, double, heredoc, raw."""
+    """value as the shell reads it in context ctx: unquoted, single, double, heredoc, raw; or
+    `outer>inner`, in a script a shell runs (`bash -lc '…'`): quoted for the inner script first,
+    then for the quotes around the script."""
+    if ">" in ctx:
+        outer, inner = ctx.split(">", 1)
+        return shell_quote(shell_quote(value, inner), outer)
     if ctx == "raw" or _PLAIN.fullmatch(value):
         return value
     if ctx == "single":
@@ -48,14 +53,73 @@ def escaped_forms(value: str) -> set[str]:
     so it went to the provider as it read (or masked anew, under a placeholder the model never
     wrote). The vault maps each form to the value's own placeholder (vault.Vault.placeholder)."""
     shell = {shell_quote(value, ctx) for ctx in ("single", "double", "heredoc", "unquoted")}
+    shell |= {shell_quote(value, f"{outer}>{inner}") for outer in ("single", "double")
+              for inner in ("single", "double", "unquoted")}
     script = {js_escape(v, q) for v in shell | {value} for q in "\"'`"}
     return (shell | script | {json.dumps(value, ensure_ascii=False)[1:-1]}) - {value}
+
+
+# A shell given a script to run: `bash -lc '…'`, `sh -c "…"`, `/bin/zsh -euc …`.
+_SHELL_C = re.compile(r"(?:^|(?<=[\s;&|(`]))(?:[\w./-]*/)?(?:bash|sh|zsh|dash|ksh)\s+(?:-[A-Za-z]+\s+(?:pipefail\s+)?)*?"
+                      r"-[A-Za-z]*c[A-Za-z]*\s+")
+
+
+def _script_word(cmd: str, start: int) -> tuple[int, str, list[int]]:
+    """The shell word at `start`: where it ends, the text it stands for (the script a shell will
+    run) and, for each of that text's characters, where it sits in `cmd`."""
+    text, at = [], []
+    i, n = start, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if c == "'":
+            j = cmd.find("'", i + 1)
+            j = n if j < 0 else j
+            text += cmd[i + 1:j]
+            at += range(i + 1, j)
+            i = j + 1
+        elif c == '"':
+            i += 1
+            while i < n and cmd[i] != '"':
+                if cmd[i] == "\\" and i + 1 < n and cmd[i + 1] in '\\"$`':
+                    i += 1
+                text.append(cmd[i])
+                at.append(i)
+                i += 1
+            i += 1
+        elif c == "\\" and i + 1 < n:
+            text.append(cmd[i + 1])
+            at.append(i + 1)
+            i += 2
+        elif c.isspace() or c in ";&|)":
+            break
+        else:
+            text.append(c)
+            at.append(i)
+            i += 1
+    return i, "".join(text), at
 
 
 def shell_contexts(cmd: str, positions: list[int]) -> dict[int, str]:
     """The quoting context at each position of a shell command: unquoted, single, double,
     heredoc (an unquoted delimiter: $ and ` still expand) or raw (a quoted delimiter: as is).
-    A $( … ) starts a new unquoted context, inside double quotes too."""
+    A $( … ) starts a new unquoted context, inside double quotes too. In a script a shell is
+    given to run (`bash -lc '…'`), `outer>inner`: the quotes around the script, then the context in
+    it, so a value is quoted for both (a name with a space, split in two by the inner shell, went
+    out in pieces in its error messages: a live Codex run on gpt-5-nano, fn-04)."""
+    out = _shell_contexts(cmd, positions)
+    for m in _SHELL_C.finditer(cmd):
+        end, script, at = _script_word(cmd, m.end())
+        inside = {at.index(p): p for p in positions if m.end() <= p < end and p in at}
+        if not inside:
+            continue
+        for q, ctx in shell_contexts(script, list(inside)).items():
+            p = inside[q]
+            if out[p] in ("single", "double", "unquoted"):
+                out[p] = f"{out[p]}>{ctx}"
+    return out
+
+
+def _shell_contexts(cmd: str, positions: list[int]) -> dict[int, str]:
     want = set(positions)
     out: dict[int, str] = {}
     ctx = ["unquoted"]

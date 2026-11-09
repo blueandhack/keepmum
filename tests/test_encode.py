@@ -171,3 +171,33 @@ def test_a_restored_command_comes_back_with_the_placeholder_the_model_wrote(valu
     claude = r.redact_request({"messages": [{"role": "assistant", "content": [
         {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": ran}}]}]})
     assert claude["messages"][0]["content"][0]["input"]["command"] == wrote
+
+
+@pytest.mark.parametrize("template", [
+    "bash -lc 'cat clients/{ph}_cover.md'", 'bash -lc "cat clients/{ph}_cover.md"',
+    "sh -c 'echo DB_PASSWORD={pw} > out.txt'", "bash -euo pipefail -c 'echo {pw} > out.txt'",
+    "/bin/zsh -lc 'echo \"{pw}\" > out.txt'"])
+def test_a_value_in_a_script_a_shell_runs_is_quoted_for_that_shell_too(template, tmp_path):
+    """`bash -lc '…'`: the quotes are the outer shell's, the script is the inner one's. Escaped only
+    for the outer quotes, a name with a space was split in two by the inner shell (its halves went
+    out in error messages) and a password's `$…` expanded (.env got `Xk9`): a live run, gpt-5-nano."""
+    import shutil
+    import subprocess
+    from collections import Counter
+
+    from keepmum.restore import DEFAULT_POLICY, restore_tool
+
+    if template.startswith("/bin/zsh") and not shutil.which("zsh"):
+        pytest.skip("no zsh")
+    v = Vault(bytes(range(32)))
+    name, pw = "Margaret Thornbury", 'Rv7$Lq2"Nw8$Tz4'
+    cmd = template.format(ph=v.placeholder("PERSON", name), pw=v.placeholder("SECRET", pw))
+    (tmp_path / "clients").mkdir()
+    (tmp_path / "clients" / f"{name}_cover.md").write_text("hi\n")
+    ran = restore_tool("exec_command", {"cmd": cmd}, v, DEFAULT_POLICY, Counter())["cmd"]
+    r = subprocess.run(["bash", "-c", ran], cwd=tmp_path, capture_output=True, text=True)
+    assert r.returncode == 0, (ran, r.stderr)
+    if "{pw}" in template:
+        assert (tmp_path / "out.txt").read_text().strip() in (pw, f"DB_PASSWORD={pw}")
+    else:
+        assert r.stdout == "hi\n"
