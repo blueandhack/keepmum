@@ -53,6 +53,7 @@ struct MenuPanel: View {
     @AppStorage("appearance") private var appearance: Appearance = .system
     @Environment(\.openWindow) private var openWindow
     @Environment(\.isSnapshot) private var isSnapshot
+    @State private var height: CGFloat = 0
 
     var body: some View {
         let s = store.snapshot
@@ -195,6 +196,8 @@ struct MenuPanel: View {
         // Its full height, always: the menu bar window is sized from this, and without it a row
         // that appears while the panel is open is squeezed (text cut to one line) instead.
         .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+        .background { if !isSnapshot { FitMenuBarWindow(height: height) } }
         .task { await engine.refresh() }
         // Opaque: the menu bar window's material shows what is behind it, and the theme's colors,
         // unlike the system's, do not adapt to it (gray labels vanish over a light window).
@@ -208,6 +211,48 @@ struct MenuPanel: View {
             Text(title).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// Keeps the menu bar window as tall as the panel, its top under the menu bar. SwiftUI grows the
+/// window when a row appears but never shrinks it when the row goes, and centers the panel in what
+/// is left over: the panel then opened a long way below the menu bar, with an empty frame under it.
+private struct FitMenuBarWindow: NSViewRepresentable {
+    var height: CGFloat
+
+    func makeNSView(context: Context) -> Fitter { Fitter() }
+
+    func updateNSView(_ view: Fitter, context: Context) {
+        view.height = height
+        DispatchQueue.main.async { view.fit() }  // the view is in its window once this update has run
+    }
+
+    /// Fits its window when the panel's height changes, and again whenever the window opens or is
+    /// resized, should SwiftUI put its old size back.
+    final class Fitter: NSView {
+        var height: CGFloat = 0
+        private var observers: [NSObjectProtocol] = []
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            guard let window else { return }
+            for name in [NSWindow.didResizeNotification, NSWindow.didBecomeKeyNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.fit() }
+                })
+            }
+            fit()
+        }
+
+        func fit() {
+            guard height > 0, let window else { return }
+            let frame = window.frame
+            let fitted = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: frame.width, height: height)).height
+            guard abs(frame.height - fitted) > 0.5 else { return }
+            window.setFrame(NSRect(x: frame.minX, y: frame.maxY - fitted, width: frame.width, height: fitted), display: true)
+        }
     }
 }
 
