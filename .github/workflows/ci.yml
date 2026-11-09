@@ -67,13 +67,19 @@ jobs:
           mv "$RUNNER_TEMP/agy/antigravity" "$RUNNER_TEMP/agy/agy"
           echo "$RUNNER_TEMP/agy" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/agy/agy" --version | grep -qx "$AGY_VERSION"
-          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/opencode.tar.gz" \
-            "https://github.com/anomalyco/opencode/releases/download/v$OPENCODE_VERSION/opencode-linux-arm64.tar.gz"
-          echo "$OPENCODE_SHA256  $RUNNER_TEMP/opencode.tar.gz" | sha256sum -c -
+          # Through the API (gh), not the release-download URL, which answered 504 for minutes at a time.
+          for try in 1 2 3 4 5; do
+            gh release download "v$OPENCODE_VERSION" --repo anomalyco/opencode --pattern opencode-linux-arm64.tar.gz \
+              --dir "$RUNNER_TEMP" --clobber && break
+            [ "$try" = 5 ] && exit 1; sleep $((try * 10))
+          done
+          echo "$OPENCODE_SHA256  $RUNNER_TEMP/opencode-linux-arm64.tar.gz" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/opencode"
-          tar -xzf "$RUNNER_TEMP/opencode.tar.gz" -C "$RUNNER_TEMP/opencode"
+          tar -xzf "$RUNNER_TEMP/opencode-linux-arm64.tar.gz" -C "$RUNNER_TEMP/opencode"
           echo "$RUNNER_TEMP/opencode" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/opencode/opencode" --version | grep -q "$OPENCODE_VERSION"
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: e2e/ci.sh
 
   mac-app:
