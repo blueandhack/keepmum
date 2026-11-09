@@ -41,6 +41,17 @@ def shell_quote(value: str, ctx: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
+def escaped_forms(value: str) -> set[str]:
+    """How value reads once keepmum has put it back escaped: for each shell context, each JavaScript
+    quote (a shell-quoted literal in a code-mode script, too) and a JSON string. An agent sends the
+    commands it ran back in its history: escaped, the value is none of the text keepmum masked,
+    so it went to the provider as it read (or masked anew, under a placeholder the model never
+    wrote). The vault maps each form to the value's own placeholder (vault.Vault.placeholder)."""
+    shell = {shell_quote(value, ctx) for ctx in ("single", "double", "heredoc", "unquoted")}
+    script = {js_escape(v, q) for v in shell | {value} for q in "\"'`"}
+    return (shell | script | {json.dumps(value, ensure_ascii=False)[1:-1]}) - {value}
+
+
 def shell_contexts(cmd: str, positions: list[int]) -> dict[int, str]:
     """The quoting context at each position of a shell command: unquoted, single, double,
     heredoc (an unquoted delimiter: $ and ` still expand) or raw (a quoted delimiter: as is).

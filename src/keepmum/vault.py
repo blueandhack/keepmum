@@ -85,6 +85,7 @@ class Vault:
         self._kinds: dict[str, str] = {}  # value -> type it was first masked as
         self._sources: dict[str, set[str]] = {}  # value -> the detectors that found it (rules:<id>, user:<name>, pf-serve)
         self._origins: dict[str, set[str]] = {}  # value -> the tool servers whose results held it (mcp__gmail)
+        self._forms: dict[str, str] = {}  # a value as it reads escaped (encode.escaped_forms) -> its placeholder
         self._known: re.Pattern[str] | None = None
 
     def __repr__(self) -> str:  # never show values, even in a traceback
@@ -94,6 +95,8 @@ class Vault:
         return len(self._values)
 
     def placeholder(self, kind: str, value: str, sources=(), origin: str | None = None) -> str:
+        if value in self._forms and value not in self._kinds:  # a value keepmum put back escaped
+            return self._forms[value]
         self._sources.setdefault(value, set()).update(x for x in sources if x and x != "known")
         if origin:
             self._origins.setdefault(value, set()).add(origin)
@@ -107,6 +110,11 @@ class Vault:
         self._values[ph] = value
         self._placeholders[key] = ph
         self._kinds.setdefault(value, kind)
+        from .encode import escaped_forms
+
+        for form in escaped_forms(value):
+            if len(form) >= MIN_KNOWN:
+                self._forms.setdefault(form, ph)
         self._known = None
         return ph
 
@@ -129,21 +137,25 @@ class Vault:
         A match must not sit inside a longer word: a masked "Anna" leaves "Annapolis" alone.
         """
         if self._known is None:
-            values = sorted((v for v in self._kinds if len(v) >= MIN_KNOWN), key=len, reverse=True)
+            values = sorted((v for v in [*self._kinds, *self._forms] if len(v) >= MIN_KNOWN), key=len, reverse=True)
             if values:
                 alternation = "|".join(re.escape(v) for v in values)
                 self._known = re.compile(rf"(?<![A-Za-z0-9])(?:{alternation})(?![A-Za-z0-9])")
         return self._known
 
+    def _real(self, value: str) -> str:
+        """The value itself, for one of its escaped forms."""
+        return self._values[self._forms[value]] if value in self._forms and value not in self._kinds else value
+
     def kind_of(self, value: str) -> str:
-        return self._kinds.get(value, "SECRET")
+        return self._kinds.get(self._real(value), "SECRET")
 
     def sources_of(self, value: str) -> frozenset[str]:
-        return frozenset(self._sources.get(value, ()))
+        return frozenset(self._sources.get(self._real(value), ()))
 
     def origins_of(self, value: str | None) -> frozenset[str]:
         """The tool servers that returned this value: they may have it back (tools.py)."""
-        return frozenset(self._origins.get(value, ())) if value is not None else frozenset()
+        return frozenset(self._origins.get(self._real(value), ())) if value is not None else frozenset()
 
     def clear(self) -> None:
         self._values.clear()

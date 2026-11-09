@@ -138,3 +138,36 @@ def test_a_mistyped_placeholder_stops_the_command():
     assert restore_tool("Bash", {"command": f"grep {other} tests/"}, v, DEFAULT_POLICY, Counter())["command"] == f"grep {other} tests/"
     # A file being written is not stopped: it may hold placeholder-shaped text on purpose.
     assert restore_tool("Write", {"file_path": "/x", "content": typo}, v, DEFAULT_POLICY, Counter())["content"] == typo
+
+
+# --- What comes back: a command keepmum restored, in the agent's history -----------------------
+
+@pytest.mark.parametrize("value", ['Rv7$Lq2"Nw8$Tz4', "p@ss w0rd 'x'", "c0rrect\\horse`9Zq"])
+@pytest.mark.parametrize("template", ['echo "DB_PASSWORD={}" >> .env', "echo 'DB_PASSWORD={}' >> .env",
+                                      "echo DB_PASSWORD={} >> .env", "cat <<EOF >> .env\nDB_PASSWORD={}\nEOF"])
+def test_a_restored_command_comes_back_with_the_placeholder_the_model_wrote(value, template):
+    """keepmum puts a value back escaped for the quotes around it. The agent sends the command it ran
+    back in its history: escaped, the value was none of the text keepmum knew, so it went to the
+    provider as it read (`'p@ss w0rd '\\''x'\\''`), or was masked anew under a placeholder the model
+    never wrote, and a model retried "its typo" until it made one up (a live Codex run, val-04)."""
+    import json
+    from collections import Counter
+
+    from keepmum.detect.pipeline import Pipeline
+    from keepmum.detect.rules import RulesDetector
+    from keepmum.redact import Redactor
+    from keepmum.restore import DEFAULT_POLICY, restore_tool
+
+    vault = Vault(bytes(range(32)))
+    ph = vault.placeholder("SECRET", value, ["rules:secret-assignment"])
+    wrote = template.format(ph)
+    ran = restore_tool("exec_command", {"cmd": wrote}, vault, DEFAULT_POLICY, Counter())["cmd"]
+    r = Redactor(Pipeline(RulesDetector()), vault)
+    # Codex (a function call's arguments) and Claude Code (a tool_use input).
+    codex = r.redact_responses_request({"input": [
+        {"type": "function_call", "call_id": "c1", "name": "exec_command", "arguments": json.dumps({"cmd": ran})}]})
+    sent = next(i for i in codex["input"] if i.get("type") == "function_call")
+    assert json.loads(sent["arguments"])["cmd"] == wrote
+    claude = r.redact_request({"messages": [{"role": "assistant", "content": [
+        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": ran}}]}]})
+    assert claude["messages"][0]["content"][0]["input"]["command"] == wrote
