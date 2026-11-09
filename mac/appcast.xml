@@ -7,6 +7,35 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a6</title>
+      <pubDate>Mon, 09 Nov 2026 09:14:26 GMT</pubDate>
+      <sparkle:version>10006</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a6</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a6</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The sixth alpha of keepmum fixes the menu bar panel, which could open well below the menu bar with an empty frame under it.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a6.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2 through 0.1.0a5:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a6.dmg.sha256`
+
+## Fixes
+
+- **The menu bar panel opened too low.** Once a row such as the update notice or an error line had appeared and gone again, the panel's window kept its taller size, and the panel showed in the middle of it, below the menu bar, with an empty frame underneath. The window now shrinks back to the panel's height, its top under the menu bar.
+
+This release was not run against real models (the live end-to-end check was skipped); the change is to the menu bar panel alone.</description>
+      <enclosure url="https://keepmum.app/update/v0.1.0a6/Keepmum-0.1.0a6.dmg" length="37663715" type="application/octet-stream" sparkle:edSignature="jMVI7wIVfvNh6yB74iadDm+ut9g3vYSJv6uLWo9RN+n6EUfqwW1ZYkKpVCajPFyGphspfgXt9dl76XRZoR5JCA=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a5</title>
       <pubDate>Mon, 09 Nov 2026 09:00:14 GMT</pubDate>
       <sparkle:version>10005</sparkle:version>
@@ -194,6 +223,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: g+kOp2MDjG/A7hekD00OcJbjBgSfA5+FAHbNsLunE0fJWhWNzm2yIF8kMxbAx7AJ5HguA8D81QTAYYAdG7uzDw==
-length: 18136
+edSignature: 3JICZgTyWrcZD6pJbk+4lKqEUQqtfyQJqZfHHilVqwM4h89KQGozKSumJzTgWztYwnNzgUJq5uJyd7QdMIyVCA==
+length: 20234
 -->
