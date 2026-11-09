@@ -247,7 +247,27 @@ class Redactor:
             spans += [Span(m.start(), m.end(), kind, 1.0, "known") for m in known.finditer(text)
                       if (kind := self.vault.kind_of(m.group())) not in passed
                       and not (released and released(m.group(), self.vault.sources_of(m.group()), kind))]
+        spans += self._encoded(text, spans, known)
         return merge(narrow(spans, text)), seen
+
+    def _encoded(self, text: str, spans: list[Span], known) -> list[Span]:
+        """Blocks a command printed encoded (a hex dump, `od -c`, plain hex, base64) whose decoded
+        text holds a secret, or a value masked before: each is masked whole (decoded.py)."""
+        from .decoded import encoded
+        from .detect import PRIORITY
+        from .detect.rules import GUESSES
+
+        out = []
+        rules = getattr(self.detector, "rules", None) or self.detector
+        for start, end, decoded in encoded(text):
+            if any(s.start <= start and end <= s.end for s in spans):
+                continue  # already masked
+            kinds = [s.type for s in rules.detect(decoded) if s.source not in GUESSES]
+            if known is not None:
+                kinds += [self.vault.kind_of(m.group()) for m in known.finditer(decoded)]
+            if kinds:
+                out.append(Span(start, end, min(kinds, key=PRIORITY.__getitem__), 0.9, "decoded"))
+        return out
 
     def redact_text(self, text: str) -> str:
         if not text:
