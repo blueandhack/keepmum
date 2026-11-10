@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import secrets
@@ -134,6 +135,7 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
     out.mkdir()
     started = time.monotonic()
     os.environ["HOME"] = str(khome)  # keepmum's own: salt, config, audit log
+    proxy = None
     try:
         proxy = launch.build_proxy(load(), rules_only=not case.model, upstream=f"{tap_server.url}/anthropic", mode="serve")
         proxy.prefixed["/openai"] = f"{tap_server.url}/openai"
@@ -179,6 +181,12 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
     finally:
         for s in reversed(servers):
             s.stop()
+        # The checks' models run in llama-server, started on their first check and otherwise
+        # stopped only after a while unused: stop them with the run, or each run leaves one behind.
+        for g in (proxy.guards if proxy is not None else []):
+            for model in (g.model, getattr(g.model, "_model", None)):  # the harm check wraps its model
+                with contextlib.suppress(Exception):
+                    getattr(model, "unload", lambda: None)()
         os.environ["HOME"] = REAL_HOME
     after = oracle.snapshot(ws)
     transcript = agent.transcript(stdout, out)

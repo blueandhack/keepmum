@@ -254,7 +254,8 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
             out.append(Finding("task", f"keepmum's {check} check never warned", "keepmum"))
     if case.expect.get("warn_shown") and not any("keepmum: " in t for t in [*transcript.shown, transcript.final]):
         out.append(Finding("task", "the agent never showed keepmum's note", "transcript"))
-    if keepmum.get("unresolved") and keepmum["unresolved"] != case.expect.get("unresolved"):
+    if keepmum.get("unresolved") and keepmum["unresolved"] != case.expect.get("unresolved") \
+            and not case.expect.get("foreign_placeholders"):
         out.append(Finding("health", f"keepmum met {keepmum['unresolved']} placeholder(s) it could not restore", "keepmum"))
     for e in keepmum.get("errors", []):
         # Claude Code probes {base}/api/hello before a session; a gateway that is not Anthropic

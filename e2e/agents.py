@@ -193,9 +193,11 @@ class Claude(Agent):
         argv = [shutil.which(self.binary), "-p", "--output-format", "stream-json", "--verbose",
                 "--setting-sources", "project,local", "--strict-mcp-config", "--settings", sandbox,
                 "--permission-mode", "acceptEdits",
+                # WebSearch is a tool a headless run asks permission for, and nobody answers: web-01
+                # failed when Haiku stopped at the refusal instead of writing its note.
+                "--allowedTools", "WebSearch", *([f"mcp__{mcp['name']}"] if mcp else []),
                 *(["--mcp-config", json.dumps({"mcpServers": {mcp["name"]: {
-                    "command": mcp["command"], "args": mcp["args"], "env": mcp["env"]}}}),
-                   "--allowedTools", f"mcp__{mcp['name']}"] if mcp else []),
+                    "command": mcp["command"], "args": mcp["args"], "env": mcp["env"]}}})] if mcp else []),
                 *(["--model", model] if model else []), *extra, "--", prompt]
         env = {**_clean_env(real_home), "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}"}
         if mode == "scripted":  # the scripted model takes any key; no login is used

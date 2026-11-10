@@ -215,6 +215,7 @@ answer_contains = []
 residue_ok = []                                    # files where a kept placeholder is right
 commands_may_keep = false                          # commands may hold placeholders (a kept token, a refusal)
 unresolved = 0                                     # placeholders keepmum is expected not to restore
+foreign_placeholders = true                        # replies may quote placeholders that are not this run's (web pages about keepmum)
 agent_may_fail = false
 mcp_calls_min = 1                                  # calls the MCP server must receive
 mcp_contains = []                                  # text it must receive (templates)

@@ -28,6 +28,10 @@ person = { text = "Margaret Thornbury", kind = "PERSON" }
 
 [expect]
 masked = ["person"]
+# Searched as its placeholder, the name can find keepmum's own pages, whose text holds an example
+# placeholder (KEEPMUM_SECRET_7f3a9c2e) that is not this run's: keepmum rightly leaves it as written,
+# which is not a placeholder it failed to restore. Found in the 0.1.0a7 release check.
+foreign_placeholders = true
 web_calls_min = 1
 files = { "clients/research.md" = { contains = "# Research: Margaret Thornbury" } }
 only_new = ["clients/research.md"]
