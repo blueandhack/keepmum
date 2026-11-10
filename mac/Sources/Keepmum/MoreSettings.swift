@@ -256,7 +256,7 @@ struct UpdatesSection: View {
 
     var body: some View {
         FormSection(title: "Updates",
-                    footer: "A check downloads keepmum's update list from keepmum.app, which sees your IP address and keepmum's version and, unless Count this Mac is off, counts checks and updates per hour, keeping no addresses. A check also says whether it is this Mac's first of the day, week or month, so each Mac counts once; nothing else is sent, no identifier. keepmum.app/privacy has the details. Updates are notarized by Apple and signed by keepmum, and both are verified before one is installed.") {
+                    footer: "A check downloads keepmum's update list from keepmum.app, which sees your IP address and keepmum's version and, unless Count this Mac is off, counts checks and updates per hour, keeping no addresses. A check also says whether it is this Mac's first of the day, week or month, so each Mac counts once, and the day's first says its macOS version and chip; nothing else is sent, no identifier. With Count this Mac off, a check sends none of that. keepmum.app/privacy has the details. Updates are notarized by Apple and signed by keepmum, and both are verified before one is installed.") {
             FormRow(title: "keepmum \(Updates.version)", detail: lastChecked) {
                 PillButton(title: "Check now", icon: "arrow.triangle.2.circlepath") { updates.checkNow() }
                     .disabled(!updates.isConfigured || !updates.canCheck)

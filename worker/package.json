@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "keepmum.app's counting Worker (README.md). Tests: npm test, with Node 22.5 or later (node:sqlite).",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

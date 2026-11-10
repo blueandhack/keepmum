@@ -5,10 +5,17 @@
 //                  its EdDSA signature); counted as a check, per app version (?v=), and as the
 //                  first check of a UTC day, week or month from that Mac, or its first ever, when
 //                  the app says so (?first=day,week,month,new: Updater.swift). No identifier is sent.
-//   /download      the website's download buttons: redirects to the newest DMG; counted
+//                  The day's first check also says the Mac's macOS major version and chip
+//                  (?os=15&chip=arm64, from 0.1.0a7), counted once a day per Mac that way.
+//   /download      the website's download buttons: redirects to the newest DMG; counted, with the
+//                  domain of the page that sent the visitor (?via=, which the site adds from
+//                  document.referrer, or the Referer of a link from elsewhere): a domain, never a path
 //   /update/v<version>/Keepmum-<version>.dmg
 //                  what the feed points updates at: redirects to that DMG on GitHub; counted as an
-//                  update to <version>
+//                  update to <version>, and as the path from the version Sparkle's user agent names
+//
+// A version the feed lists for the first time is noted with its build and date (`versions`), and
+// GitHub's download counts are noted at once, so a new release is on the dashboard within minutes.
 //   /stats         the dashboard (dashboard.js), only behind Cloudflare Access
 //   /video/<file>  the flow video and the like, from the keepmum-media R2 bucket; not counted
 //
@@ -34,7 +41,8 @@ export default {
     if (url.pathname === "/appcast.xml") {
       const feed = await getFeed();
       if (!feed) return new Response("The update feed is unavailable; try again later.\n", { status: 502 });
-      if (counted && fromApp(request)) ctx.waitUntil(count(env, ["check", ...firsts(url)], appVersion(url)));
+      ctx.waitUntil(watchFeed(env, feed));
+      if (counted && fromApp(request)) ctx.waitUntil(count(env, checkRows(url)));
       return new Response(request.method === "HEAD" ? null : feed, {
         headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "no-store" },
       });
@@ -42,13 +50,15 @@ export default {
     if (url.pathname === "/download") {
       const feed = await getFeed();
       const dmg = feed && newestDMG(new TextDecoder().decode(feed));
+      if (feed) ctx.waitUntil(watchFeed(env, feed));
       if (!dmg) return Response.redirect(RELEASES, 302);
-      if (counted) ctx.waitUntil(count(env, ["download"], ""));
+      if (counted) ctx.waitUntil(count(env, [["download", ""], ["via", via(request, url)]]));
       return Response.redirect(dmg, 302);
     }
     const update = url.pathname.match(new RegExp(`^/update/v(${VERSION})/(Keepmum-(${VERSION})\\.dmg)$`));
     if (update && update[1] === update[3]) {
-      if (counted) ctx.waitUntil(count(env, ["update"], update[1]));
+      const from = fromVersion(request);
+      if (counted) ctx.waitUntil(count(env, [["update", update[1]], ...(from ? [["path", `${from}>${update[1]}`]] : [])]));
       return Response.redirect(`${RELEASES}/download/v${update[1]}/${update[2]}`, 302);
     }
     const file = url.pathname.match(/^\/video\/([A-Za-z0-9._-]{1,100}\.(?:mp4|webm|vtt))$/);
@@ -139,6 +149,43 @@ function firsts(url) {
   return Object.keys(FIRSTS).filter((f) => said.includes(f)).map((f) => FIRSTS[f]);
 }
 
+/** What one update check counts: the check and its firsts, under the app's version; and, with the
+ * day's first, the Mac's macOS major version and chip (kinds macos, chip), so each Mac once a day. */
+export function checkRows(url) {
+  const version = appVersion(url), kinds = firsts(url);
+  const rows = [["check", version], ...kinds.map((k) => [k, version])];
+  if (kinds.includes("daily")) {
+    const os = url.searchParams.get("os"), chip = url.searchParams.get("chip");
+    if (os && /^\d{2}$/.test(os)) rows.push(["macos", os]);
+    if (chip === "arm64" || chip === "x86_64") rows.push(["chip", chip]);
+  }
+  return rows;
+}
+
+/** The version updating itself, from Sparkle's user agent ("Keepmum/0.1.0a6 Sparkle/2.10.1"). */
+export function fromVersion(request) {
+  const m = (request.headers.get("user-agent") || "").match(new RegExp(`^Keepmum/(${VERSION}) Sparkle/`));
+  return m ? m[1] : null;
+}
+
+/** Where a website download came from: a domain, never a path. "keepmum.app" for the site's own
+ * pages when the site could not say (no ?via=), "direct" with no referrer at all. */
+export function via(request, url) {
+  const clean = (host) => {
+    const h = (host || "").toLowerCase().replace(/^www\./, "");
+    return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(h) && h.length <= 64 ? h : null;
+  };
+  const said = url.searchParams.get("via");
+  if (said === "direct") return "direct";
+  if (said) return clean(said) || "other";
+  try {
+    const ref = request.headers.get("referer");
+    return ref ? clean(new URL(ref).hostname) || "other" : "direct";
+  } catch {
+    return "other";
+  }
+}
+
 /** The feed's bytes, cached at Cloudflare for five minutes; null if GitHub does not answer. */
 async function getFeed() {
   try {
@@ -175,11 +222,11 @@ function newestDMG(xml) {
 const hour = () => new Date().toISOString().slice(0, 13);
 const today = () => hour().slice(0, 10);
 
-/** One more of each kind for this hour. A counting failure never fails the request. */
-async function count(env, kinds, version) {
+/** One more of each [kind, version] for this hour. A counting failure never fails the request. */
+async function count(env, rows) {
   const h = hour();
   try {
-    await env.DB.batch(kinds.map((kind) => env.DB.prepare(
+    await env.DB.batch(rows.map(([kind, version]) => env.DB.prepare(
       "INSERT INTO counts (day, kind, version, n) VALUES (?1, ?2, ?3, 1) " +
         "ON CONFLICT (day, kind, version) DO UPDATE SET n = n + 1",
     ).bind(h, kind, version)));
@@ -188,8 +235,40 @@ async function count(env, kinds, version) {
   }
 }
 
+/** Each release in the feed: version, build and publication date (pubDate, as ISO). */
+export function feedReleases(xml) {
+  const out = [];
+  for (const item of xml.split("<item>").slice(1)) {
+    const version = item.match(/<sparkle:shortVersionString>([^<]+)<\/sparkle:shortVersionString>/)?.[1];
+    const build = Number(item.match(/<sparkle:version>(\d+)<\/sparkle:version>/)?.[1]);
+    const date = Date.parse(item.match(/<pubDate>([^<]+)<\/pubDate>/)?.[1] || "");
+    if (version && new RegExp(`^${VERSION}$`).test(version) && Number.isFinite(build)) {
+      out.push({ version, build, published: Number.isFinite(date) ? new Date(date).toISOString() : null });
+    }
+  }
+  return out;
+}
+
+// The versions this isolate already knows are noted, so a check costs no database read for them.
+const noted = new Set();
+
+/** A release the feed lists for the first time: note it, and GitHub's download counts with it. */
+export async function watchFeed(env, feed) {
+  const releases = feedReleases(new TextDecoder().decode(feed)).filter((r) => !noted.has(r.version));
+  if (!releases.length) return;
+  try {
+    const results = await env.DB.batch(releases.map((r) => env.DB.prepare(
+      "INSERT INTO versions (version, build, published, seen) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (version) DO NOTHING",
+    ).bind(r.version, r.build, r.published, hour())));
+    for (const r of releases) noted.add(r.version);
+    if (results.some((x) => x?.meta?.changes)) await snapshotGitHub(env);
+  } catch (e) {
+    console.error("feed watch failed", e);
+  }
+}
+
 /** GitHub's running download count of each release's DMG, noted for this hour (the latest one wins). */
-async function snapshotGitHub(env) {
+export async function snapshotGitHub(env) {
   const headers = { "user-agent": "keepmum-counts", accept: "application/vnd.github+json" };
   if (env.GITHUB_TOKEN) headers.authorization = `Bearer ${env.GITHUB_TOKEN}`;
   const r = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`, { headers });
@@ -212,13 +291,14 @@ async function snapshotGitHub(env) {
 }
 
 async function statsData(env, ctx) {
-  const [counts, releases] = await Promise.all([
+  const [counts, releases, versions] = await Promise.all([
     env.DB.prepare("SELECT day, kind, version, n FROM counts ORDER BY day").all(),
     env.DB.prepare("SELECT day, version, n FROM releases ORDER BY day").all(),
+    env.DB.prepare("SELECT version, build, published, seen FROM versions ORDER BY build").all(),
   ]);
   // The first look of a day takes a GitHub snapshot if the cron has not yet.
   if (!releases.results.some((r) => r.day.startsWith(today()))) ctx.waitUntil(snapshotGitHub(env));
-  return { counts: counts.results, releases: releases.results, generated: new Date().toISOString() };
+  return { counts: counts.results, releases: releases.results, versions: versions.results, generated: new Date().toISOString() };
 }
 
 // --- Cloudflare Access ------------------------------------------------------------------------

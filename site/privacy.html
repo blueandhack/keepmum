@@ -34,7 +34,7 @@
 <main id="main" class="doc">
   <div class="wrap">
     <h1>Privacy</h1>
-    <p class="updated">Last updated November 9, 2026</p>
+    <p class="updated">Last updated November 10, 2026</p>
 
     <h2>The short version</h2>
     <p>keepmum runs on your Mac. Your prompts, code, files and secrets never reach the keepmum project. The project keeps counts (how many downloads, update checks and updates there are each hour) and nothing about who: no IP addresses, no accounts, no identifiers. You can opt out of even the counts.</p>
@@ -48,15 +48,15 @@
     <h2>What keepmum.app counts</h2>
     <ul>
       <li><strong>Website visits.</strong> Cloudflare Web Analytics counts page views on keepmum.app. It sets no cookies and does not fingerprint your browser.</li>
-      <li><strong>Downloads.</strong> Each click on a Download button is counted.</li>
-      <li><strong>Update checks.</strong> With automatic checks on, the Mac app asks keepmum.app once a day whether there is a new version. Each check is counted, with the app’s version and whether it is your Mac’s first check of the day, week or month, or its first ever. Your Mac keeps track of that itself and sends only those words, never an identifier, so keepmum can count each Mac once without telling one from another.</li>
-      <li><strong>Updates.</strong> Each update the app downloads is counted, with the version it updates to.</li>
+      <li><strong>Downloads.</strong> Each click on a Download button is counted, with the domain of the site that sent you to keepmum.app (such as <code>github.com</code>), or “direct”. Only the domain: never the page, a search term or anything after it. A browser that asks not to be tracked sends none of it.</li>
+      <li><strong>Update checks.</strong> With automatic checks on, the Mac app asks keepmum.app once a day whether there is a new version. Each check is counted, with the app’s version and whether it is your Mac’s first check of the day, week or month, or its first ever. Your Mac keeps track of that itself and sends only those words, never an identifier, so keepmum can count each Mac once without telling one from another. The day’s first check also says your Mac’s macOS major version and chip (such as macOS 15, Apple silicon), so keepmum knows which systems to support; it is counted as a number per version, like the rest.</li>
+      <li><strong>Updates.</strong> Each update the app downloads is counted, with the version it updates to and the version it updates from (which the app’s update library names in every request).</li>
     </ul>
-    <p>For each of these keepmum stores an hour, a kind, a version and a number, such as “November 7, 2 PM UTC, update check, 0.1.0a5, 3”. Nothing else about a request is kept: not your IP address, your browser or your Mac. Requests from bots and link previews are not counted; the browser’s user agent is read to tell, and not kept. The counts are kept as long as the project runs. keepmum also reads GitHub’s public download count of each release.</p>
+    <p>For each of these keepmum stores an hour, a kind, a version and a number, such as “November 7, 2 PM UTC, update check, 0.1.0a5, 3” or “November 7, 2 PM UTC, macOS, 15, 2”. Nothing else about a request is kept: not your IP address, your browser or your Mac. Requests from bots and link previews are not counted; the browser’s user agent is read to tell, and not kept. The counts are kept as long as the project runs. keepmum also reads GitHub’s public download count of each release.</p>
 
     <h2>Opting out</h2>
     <ul>
-      <li><strong>In the Mac app:</strong> turn off <strong>Count this Mac</strong> in Settings › General › Updates. Updates keep working; checks and updates from your Mac are not counted. Turning off <strong>Check automatically</strong> as well means the app contacts keepmum.app only when you click Check now.</li>
+      <li><strong>In the Mac app:</strong> turn off <strong>Count this Mac</strong> in Settings › General › Updates. Updates keep working; checks and updates from your Mac are not counted, and checks no longer say anything about your Mac. Turning off <strong>Check automatically</strong> as well means the app contacts keepmum.app only when you click Check now.</li>
       <li><strong>On the website:</strong> send Global Privacy Control (built into Firefox, Brave and DuckDuckGo, and available as an extension for other browsers) or Do Not Track. keepmum.app then loads no analytics and does not count your downloads.</li>
       <li><strong>On the command line:</strong> the <code>keepmum</code> command checks for nothing. It makes no requests except the ones it forwards for you and the model downloads you run (<code>keepmum setup</code>, and <code>keepmum guard setup</code> for the optional checks).</li>
     </ul>

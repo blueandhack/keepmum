@@ -18,7 +18,7 @@ export function dashboard(data, who) {
   <header class="top">
     <div class="brand">
       <span class="mark" aria-hidden="true"><svg viewBox="0 0 100 100" width="22" height="22"><path d="M21.6 69.8 L21.6 46.3 C21.6 37 27.8 30.9 35.8 30.9 C43.8 30.9 50 37 50 46.3 L50 69.8 M50 69.8 L50 46.3 C50 37 56.2 30.9 64.2 30.9 C72.2 30.9 78.4 37 78.4 46.3 L78.4 69.8 M12.9 69.8 L87.1 69.8" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-      <div><h1>keepmum counts</h1><p class="sub">Active Macs, downloads and upgrades. Counts only: nothing about who.</p></div>
+      <div><h1>keepmum counts</h1><p class="sub">Active Macs, releases, downloads and upgrades. Counts only: nothing about who.</p></div>
     </div>
     <div class="meta">
       <div class="seg" role="group" aria-label="Appearance">
@@ -44,10 +44,18 @@ export function dashboard(data, who) {
 
   <section class="card">
     <div class="card-head">
-      <div><h2>Active Macs per day</h2><p>Each counted copy of keepmum once a day, by app version.</p></div>
+      <div><h2>Active Macs per day</h2><p>Each counted copy of keepmum once a day, by app version. Dashed lines mark releases.</p></div>
       <div class="legend" id="lg-active"></div>
     </div>
     <div class="chart tall" id="ch-active"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div><h2>Version adoption</h2><p>Each version's share of the day's active Macs: how fast a release takes over.</p></div>
+      <div class="legend" id="lg-adoption"></div>
+    </div>
+    <div class="chart" id="ch-adoption"></div>
   </section>
 
   <div class="grid2">
@@ -75,9 +83,24 @@ export function dashboard(data, who) {
     </section>
   </div>
 
+  <div class="grid3">
+    <section class="card">
+      <div class="card-head"><div><h2>Upgrade paths</h2><p>Updates in this range, by the version they came from.</p></div></div>
+      <div class="bars" id="paths"></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><div><h2>Where downloads come from</h2><p>Website downloads in this range, by the site that sent the visitor.</p></div></div>
+      <div class="bars" id="via"></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><div><h2>Systems</h2><p>Active Macs in this range by macOS version and chip, each Mac once a day.</p></div></div>
+      <div class="systems" id="systems"></div>
+    </section>
+  </div>
+
   <section class="card">
-    <div class="card-head"><div><h2>Releases</h2><p>Each release's DMG: all of GitHub's downloads of it, the upgrades to it, and the Macs on it yesterday.</p></div></div>
-    <div class="table-wrap"><table id="releases"></table></div>
+    <div class="card-head"><div><h2>Releases</h2><p>Newest first: when each shipped, GitHub's downloads of its DMG, the upgrades to it, and its share of yesterday's active Macs.</p></div></div>
+    <div class="releases" id="releases"></div>
   </section>
 
   <details class="card">
@@ -91,7 +114,10 @@ export function dashboard(data, who) {
       <li><b>Active Macs</b> come from update checks: keepmum.app/appcast.xml, which each copy with automatic checks on fetches once a day. From 0.1.0a7 on, a check says whether it is the Mac's first of the UTC day, week or month, so each Mac counts once however often it checks (Check now, Install…). Older versions are counted by their checks, which can count a Mac twice on a day it checks more than once. Copies with checks off or Count this Mac off, and 0.1.0a4 and earlier, are not counted. Nothing is counted when the app opens.</li>
       <li><b>New installs</b> are a Mac's first check ever, from 0.1.0a7 on.</li>
       <li><b>Downloads</b> from the website are keepmum.app/download. <b>From GitHub</b> is the growth in GitHub's own download counts, noted every six hours, less the website's downloads and the upgrades (both redirect to GitHub); it starts the day after the first note.</li>
-      <li><b>Upgrades</b> are keepmum.app/update/…, where the update feed sends the app for a new version's DMG, from 0.1.0a5 on.</li>
+      <li><b>Upgrades</b> are keepmum.app/update/…, where the update feed sends the app for a new version's DMG, from 0.1.0a5 on. <b>Upgrade paths</b> take the version it came from out of the app's update library's user agent, which is read and not kept.</li>
+      <li><b>Where downloads come from</b> is the domain of the page that sent the visitor to keepmum.app, which the site adds to its Download buttons (never the page or anything after the domain); <i>keepmum.app</i> means they came from another page of the site, <i>direct</i> that there was none.</li>
+      <li><b>Systems</b> come from the day's first update check, which from 0.1.0a7 on also says the Mac's macOS major version and chip.</li>
+      <li><b>Releases</b> are noted when the update feed first lists them, with the date the feed gives; GitHub's counts are noted at that moment too.</li>
       <li>Bots, link previews and scripts are not counted; the user agent is read to tell, never kept. A check counts only from the app itself.</li>
       <li>Each count is an hour (UTC), a kind, a version and a number, added up here into days in your time zone. Counts from before hours were kept are whole UTC days. No IP address, user agent or identifier is kept.</li>
     </ul>
@@ -122,7 +148,7 @@ const CSS = `
   --canvas: #f5f5f7; --glow: rgba(228, 87, 46, 0.10); --card: #ffffff; --card-2: #f3f3f5; --border: #e6e6ea; --sep: #ececf0;
   --text: #17171a; --text-2: #5f5f68; --text-3: #8b8b94;
   --accent: #c93f17; --accent-2: #e4572e; --accent-ink: #ffffff;
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --older: #8e8e96;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --older: #6e6e76; /* validated: CVD ΔE ≥ 9.2, normal ≥ 18 against its neighbour */
   --up: #12804a; --up-bg: rgba(18, 128, 74, 0.10); --down: #c4322b; --down-bg: rgba(196, 50, 43, 0.09);
   --shadow: 0 1px 2px rgba(20, 20, 30, 0.04), 0 6px 20px rgba(20, 20, 30, 0.05);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -197,7 +223,48 @@ button { font: inherit; color: inherit; }
 .versions li { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--sep); }
 .versions li b { font-variant-numeric: tabular-nums; font-weight: 600; }
 .versions li small { color: var(--text-3); font-size: 12px; margin-left: 6px; }
-.versions .none { color: var(--text-3); text-align: center; font-size: 13px; padding: 32px 0; }
+.versions .none, .bars .none, .systems .none, .releases .none { color: var(--text-3); text-align: center; font-size: 13px; padding: 32px 0; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 20px; }
+
+/* A ranked list with a bar each: one series, so one color; the label and number carry the meaning. */
+.bars { display: flex; flex-direction: column; gap: 10px; }
+.bars .item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; font-size: 13px; }
+.bars .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bars .name .arrow { color: var(--text-3); margin: 0 5px; }
+.bars .n { font-variant-numeric: tabular-nums; font-weight: 600; }
+.bars .n small { color: var(--text-3); font-weight: 500; font-size: 12px; margin-left: 6px; }
+.bars .track { grid-column: 1 / -1; height: 8px; border-radius: 4px; background: var(--card-2); overflow: hidden; }
+.bars .fill { height: 100%; border-radius: 4px; background: var(--s1); transform-origin: left; }
+.bars .fill.muted { background: var(--older); }
+.bars .item:hover .fill { filter: brightness(1.1); }
+.grow { transform-origin: left; animation: grow 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) { .grow { animation: none; } }
+
+.systems { display: flex; flex-direction: column; gap: 18px; }
+.systems h3 { font-size: 12px; font-weight: 600; color: var(--text-2); margin: 0 0 8px; }
+.split { display: flex; gap: 2px; height: 28px; border-radius: 8px; overflow: hidden; }
+.split span { display: block; min-width: 3px; }
+.split span:hover { filter: brightness(1.12); }
+.split + .key { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; font-size: 12.5px; color: var(--text-2); }
+.split + .key b { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* Releases: one row each, newest first, with its share of yesterday's active Macs. */
+.releases { display: flex; flex-direction: column; }
+.rel { display: grid; grid-template-columns: minmax(150px, 1.2fr) repeat(3, minmax(90px, 0.7fr)) minmax(160px, 1.4fr); gap: 6px 18px; align-items: center; padding: 12px 4px; border-bottom: 1px solid var(--sep); font-size: 13px; }
+.rel:last-child { border-bottom: 0; }
+.rel .v { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rel .v b { font-size: 14px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+.rel .v b i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.rel .v span, .rel .m span { color: var(--text-3); font-size: 12px; }
+.rel .m { display: flex; flex-direction: column; gap: 1px; font-variant-numeric: tabular-nums; }
+.rel .m b { font-weight: 600; font-size: 14px; }
+.rel .share { display: flex; align-items: center; gap: 10px; }
+.rel .share .track { flex: 1; height: 8px; border-radius: 4px; background: var(--card-2); overflow: hidden; }
+.rel .share .fill { height: 100%; border-radius: 4px; }
+.rel .share em { font-style: normal; font-variant-numeric: tabular-nums; font-weight: 600; min-width: 3.2em; text-align: right; }
+.badge { font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+@media (max-width: 760px) { .rel { grid-template-columns: 1fr 1fr 1fr; } .rel .v, .rel .share { grid-column: 1 / -1; } }
 
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
@@ -298,7 +365,10 @@ function client(DATA, WHO) {
 
   // Versions get their color once, from all the data, so a range change never repaints them:
   // the three newest have a hue each, the rest are "Older".
-  const allVersions = [...new Set(raw.filter((r) => r.kind !== "download").map((r) => r.version))].sort((a, b) => vkey(b) - vkey(a));
+  // Only these kinds carry an app version: the others hold a domain, a path, a macOS version or a chip.
+  const VERSIONED = new Set(["check", "daily", "weekly", "monthly", "new", "update"]);
+  const releasesSeen = (DATA.versions || []).map((r) => r.version);
+  const allVersions = [...new Set([...raw.filter((r) => VERSIONED.has(r.kind)).map((r) => r.version), ...releasesSeen])].sort((a, b) => vkey(b) - vkey(a));
   const named = allVersions.filter((v) => vkey(v) >= 0).slice(0, 3);
   const slot = ["--s1", "--s2", "--s3"];
   const newest = named[0];
@@ -349,8 +419,9 @@ function client(DATA, WHO) {
   function showTip(evt, title, series, i, extra) {
     const known = series.filter((s) => s.values[i] != null);
     const shown = known.some((s) => s.values[i]) ? known.filter((s) => s.values[i]) : known;
-    const rows = shown.slice().reverse().map((s) => `<div class="r"><span><i style="background:${s.color}"></i>${s.name}</span><span>${fmt(s.values[i])}</span></div>`).join("");
-    const totalRow = shown.length > 1 && !series.noTotal ? `<div class="r total"><span>Total</span><span>${fmt(sum(shown.map((s) => s.values[i])))}</span></div>` : "";
+    const f = series.format || fmt;
+    const rows = shown.slice().reverse().map((s) => `<div class="r"><span><i style="background:${s.color}"></i>${s.name}</span><span>${f(s.values[i])}</span></div>`).join("");
+    const totalRow = shown.length > 1 && !series.noTotal ? `<div class="r total"><span>Total</span><span>${f(sum(shown.map((s) => s.values[i])))}</span></div>` : "";
     tip.innerHTML = `<div class="d">${title}</div>${rows}${totalRow}${extra || ""}`;
     placeTip(evt);
   }
@@ -363,6 +434,54 @@ function client(DATA, WHO) {
   }
 
   /**
+   * A ranked list with a bar each (bars, below a card's head): the biggest `top` and the rest as
+   * "Other", each with its number and share of the total. One series, one color.
+   */
+  function barList(id, entries, o) {
+    const box = document.getElementById(id);
+    const all = [...entries].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+    const total = sum(all.map(([, n]) => n));
+    if (!total) { box.innerHTML = `<div class="none">${o.empty}</div>`; return; }
+    const top = all.slice(0, o.top || 7);
+    const rest = sum(all.slice(o.top || 7).map(([, n]) => n));
+    const items = [...top.map(([k, n]) => ({ k, n })), ...(rest ? [{ k: null, n: rest }] : [])];
+    const max = Math.max(...items.map((x) => x.n));
+    box.innerHTML = items.map((x, i) => `<div class="item" data-i="${i}"><span class="name">${x.k === null ? "Other" : o.name(x.k)}</span>` +
+      `<span class="n">${fmt(x.n)}<small>${Math.round((x.n / total) * 100)}%</small></span>` +
+      `<div class="track"><div class="fill${x.k === null ? " muted" : ""}${o.animate && !reducedMotion ? " grow" : ""}" style="width:${Math.max(1.5, (x.n / max) * 100)}%"></div></div></div>`).join("");
+    for (const row of box.querySelectorAll(".item")) {
+      const x = items[Number(row.dataset.i)];
+      row.addEventListener("mousemove", (evt) => {
+        tip.innerHTML = `<div class="d">${x.k === null ? `Other (${all.length - top.length})` : o.name(x.k)}</div>` +
+          `<div class="r"><span>${o.unit}</span><span>${fmt(x.n)}</span></div><div class="r"><span>Share</span><span>${((x.n / total) * 100).toFixed(1)}%</span></div>`;
+        placeTip(evt);
+      });
+      row.addEventListener("mouseleave", hideTip);
+    }
+  }
+
+  /** Counts of one kind in a set of days, by version (a domain, a path, a macOS version, a chip). */
+  const kindIn = (kind, days) => {
+    const keep = new Set(days), m = new Map();
+    for (const r of counts) if (r.kind === kind && keep.has(r.day)) m.set(r.version, (m.get(r.version) || 0) + r.n);
+    return m;
+  };
+
+  // Releases: the day each shipped (the feed's date, in the viewer's time zone), one marker per day.
+  const shipped = new Map((DATA.versions || []).map((r) => [r.version, r.published ? ymd(new Date(r.published)) : localDay(r.seen)]));
+  const markers = [...shipped.entries()].reduce((byDay, [v, d]) => byDay.set(d, [...(byDay.get(d) || []), v]), new Map());
+  const releaseMarkers = [...markers.entries()].map(([d, vs]) => {
+    const sorted = vs.sort((a, b) => vkey(b) - vkey(a));
+    return { x: d, label: sorted.join(", "), short: sorted[0] + (sorted.length > 1 ? ` +${sorted.length - 1}` : "") };
+  });
+  const ago = (d) => {
+    const n = Math.round((dateOf(todayISO) - dateOf(d)) / DAY);
+    return n <= 0 ? "today" : n === 1 ? "yesterday" : n < 60 ? `${n} days ago` : `${Math.round(n / 30)} months ago`;
+  };
+  const MACOS = { 14: "Sonoma", 15: "Sequoia", 26: "Tahoe" };
+  const macosName = (v) => `macOS ${v}${MACOS[v] ? ` <span style="color:var(--text-3)">${MACOS[v]}</span>` : ""}`;
+
+  /**
    * A chart over days or weeks: stacked areas or bars (o.kind), stacked or side by side (o.grouped),
    * with a crosshair or band and a tooltip per x. A partial last x (today, this week) is drawn lighter.
    */
@@ -370,14 +489,14 @@ function client(DATA, WHO) {
     const box = document.getElementById(id);
     box.innerHTML = "";
     const W = box.clientWidth, H = box.clientHeight;
-    const m = { l: 40, r: 8, t: 10, b: 26 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const m = { l: 40, r: 8, t: (o.markers || []).some((k) => xs.includes(k.x)) ? 24 : 10, b: 26 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
     const totals = xs.map((_, i) => (o.grouped ? Math.max(0, ...series.map((s) => s.values[i] || 0)) : sum(series.map((s) => s.values[i]))));
     if (!series.length || totals.every((t) => !t)) {
       const e = document.createElement("div");
       e.className = "empty"; e.textContent = o.empty;
       box.appendChild(e);
     }
-    const max = niceMax(Math.max(0, ...totals));
+    const max = o.max || niceMax(Math.max(0, ...totals));
     const svg = el("svg", { width: W, height: H, role: "img", "aria-label": o.title || "" }, box);
     const y = (v) => m.t + ph - (v / max) * ph;
     const band = pw / xs.length;
@@ -387,8 +506,23 @@ function client(DATA, WHO) {
       const v = (max / steps) * k;
       el("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: css("--sep"), "stroke-width": 1, "stroke-dasharray": k ? "2 4" : "" }, svg);
       const t = el("text", { x: m.l - 10, y: y(v) + 4, "text-anchor": "end", fill: css("--text-3"), "font-size": 11 }, svg);
-      t.textContent = Number.isInteger(v) ? fmt(v) : v.toFixed(1);
+      t.textContent = (Number.isInteger(v) ? fmt(v) : v.toFixed(1)) + (o.unitSuffix || "");
     }
+    // Releases: a dashed line on the day each shipped, over the data, its version above the plot;
+    // versions shipped on the same day share one line (o.markers has one per day), and a label that
+    // would run into the one before it is left off.
+    const drawMarkers = () => {
+      let lastLabel = -Infinity;
+      for (const k of (o.markers || []).filter((k) => xs.includes(k.x))) {
+        const mx = x(xs.indexOf(k.x));
+        el("line", { x1: mx, x2: mx, y1: m.t - 4, y2: m.t + ph, stroke: css("--text-2"), "stroke-width": 1, "stroke-dasharray": "2 3", opacity: 0.8 }, svg);
+        const anchor = mx > W - m.r - 70 ? "end" : "start";
+        if ((anchor === "start" ? mx : mx - 70) - lastLabel < 8) continue;
+        const t = el("text", { x: anchor === "start" ? mx + 4 : mx - 4, y: m.t - 10, "text-anchor": anchor, fill: css("--text-2"), "font-size": 11, "font-weight": 600 }, svg);
+        t.textContent = k.short || k.label;
+        lastLabel = (anchor === "start" ? mx : mx - 4) + t.getComputedTextLength() + 4;
+      }
+    };
     const every = Math.max(1, Math.ceil(xs.length / Math.max(2, Math.floor(pw / 72))));
     xs.forEach((d, i) => {
       if (i % every && i !== xs.length - 1) return;
@@ -439,6 +573,7 @@ function client(DATA, WHO) {
       // today is not over: its stretch is washed out, so its dip does not read as a drop
       if (partial(xs.length - 1)) el("rect", { x: x(xs.length - 2), y: m.t - 2, width: x(xs.length - 1) - x(xs.length - 2) + 2, height: ph + 2, fill: surface, opacity: 0.55 }, g);
     }
+    drawMarkers();
     const cross = el("line", { x1: 0, x2: 0, y1: m.t, y2: m.t + ph, stroke: css("--text-2"), "stroke-width": 1, "stroke-dasharray": "3 3", opacity: 0 }, svg);
     const dot = el("circle", { r: 4.5, fill: series[series.length - 1]?.color || "transparent", stroke: css("--card"), "stroke-width": 2, opacity: 0 }, svg);
     const hit = el("rect", { x: m.l, y: m.t, width: pw, height: ph, fill: "transparent" }, svg);
@@ -452,8 +587,11 @@ function client(DATA, WHO) {
         dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(totals[i])); dot.setAttribute("opacity", 1);
       }
       const shown = series.length ? series : [{ name: o.unit || "Count", color: css("--older"), values: xs.map(() => 0) }];
-      shown.noTotal = o.grouped;
-      showTip(evt, o.label(xs[i], true) + (partial(i) ? " (so far)" : ""), shown, i, o.extraFor && o.extraFor(xs[i]));
+      shown.noTotal = o.grouped || o.noTotal;
+      shown.format = o.format;
+      const released = (o.markers || []).filter((k) => k.x === xs[i]).map((k) => k.label).join(", ");
+      const extra = (o.extraFor ? o.extraFor(xs[i]) : "") + (released ? `<div class="r total"><span>Released</span><span>${released}</span></div>` : "");
+      showTip(evt, o.label(xs[i], true) + (partial(i) ? " (so far)" : ""), shown, i, extra);
     });
     hit.addEventListener("mouseleave", () => { hover.setAttribute("opacity", 0); cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0); hideTip(); });
   }
@@ -528,15 +666,28 @@ function client(DATA, WHO) {
       { label: "Upgrades", value: updN, caption: newest ? `${fmt(sum(days.map((d) => updates.get(d)?.get(newest) || 0)))} to ${newest}` : "From 0.1.0a5 on" },
       { label: "On the newest version", value: onNewest, suffix: "%", caption: newest ? `${newest}, of yesterday's active Macs` : "No version seen yet" },
     ];
+    const latest = [...shipped.keys()].sort((a, b) => vkey(b) - vkey(a))[0];
+    if (latest) {
+      const upLatest = sum(raw.filter((r) => r.kind === "update" && r.version === latest).map((r) => r.n));
+      minor.unshift({ label: "Latest release", text: latest,
+        caption: `Shipped ${label(shipped.get(latest))}, ${ago(shipped.get(latest))} · ${fmt(upLatest)} upgrade${upLatest === 1 ? "" : "s"} to it` });
+    }
     document.getElementById("minor").innerHTML = minor.map((k) =>
-      `<div class="kpi"><div class="text"><span class="label">${k.label}</span><span class="caption">${k.caption}</span></div><span class="value">${num(k.value, k.suffix)}</span></div>`).join("");
+      `<div class="kpi"><div class="text"><span class="label">${k.label}</span><span class="caption">${k.caption}</span></div><span class="value">${k.text ?? num(k.value, k.suffix)}</span></div>`).join("");
     countUp(first);
 
     // active Macs per day
     const act = versionSeries(active, days);
     legend("lg-active", act, true);
     chart("ch-active", days, act, { kind: "area", title: "Active Macs per day", label, partial: isToday, animate: first, unit: "Active Macs",
-      empty: "No update checks yet. Builds from 0.1.0a5 on check keepmum.app." });
+      markers: releaseMarkers, empty: "No update checks yet. Builds from 0.1.0a5 on check keepmum.app." });
+
+    // each version's share of the day's active Macs, out of 100
+    const share = act.map((s) => ({ ...s, values: s.values.map((v, i) => (activeOn(days[i]) ? Math.round((v / activeOn(days[i])) * 1000) / 10 : null)) }));
+    legend("lg-adoption", share, true);
+    chart("ch-adoption", days, share, { kind: "area", title: "Version adoption", label, partial: isToday, animate: first, unit: "Share",
+      markers: releaseMarkers, noTotal: true, max: 100, unitSuffix: "%", format: (v) => (v == null ? "—" : `${v}%`),
+      empty: "No active Macs counted yet." });
 
     // per week
     const weeks = weeksFor(days);
@@ -581,13 +732,37 @@ function client(DATA, WHO) {
     chart("ch-installs", days, inst, { kind: "bar", grouped: true, title: "New installs and upgrades", label, partial: isToday, animate: first,
       empty: "No new installs or upgrades in this range yet." });
 
+    // where updates came from, where downloads came from, and the systems
+    barList("paths", kindIn("path", days), { animate: first, unit: "Upgrades", top: 6,
+      name: (k) => { const [a, b] = k.split(">"); return `${a}<span class="arrow">→</span>${b}`; },
+      empty: "No upgrade paths in this range. The app names the version it updates from from 0.1.0a5 on." });
+    barList("via", kindIn("via", days), { animate: first, unit: "Downloads", top: 7,
+      name: (k) => (k === "direct" ? "Direct, or not said" : k === "keepmum.app" ? "keepmum.app <span style=\"color:var(--text-3)\">another page</span>" : k === "other" ? "Not a domain" : k),
+      empty: "No website downloads with a source in this range yet." });
+    const chips = kindIn("chip", days), arm = chips.get("arm64") || 0, intel = chips.get("x86_64") || 0;
+    const sys = document.getElementById("systems");
+    sys.innerHTML = `<div><h3>macOS</h3><div class="bars" id="macos"></div></div>` + (arm + intel
+      ? `<div><h3>Chip</h3><div class="split" role="img" aria-label="Apple silicon ${fmt(arm)}, Intel ${fmt(intel)}">` +
+        `${arm ? `<span style="flex:${arm};background:${css("--s1")}"></span>` : ""}${intel ? `<span style="flex:${intel};background:${css("--s2")}"></span>` : ""}</div>` +
+        `<div class="key">${[["Apple silicon", arm, "--s1"], ["Intel", intel, "--s2"]].filter(([, n]) => n).map(([name, n, c]) =>
+          `<span><i style="display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;background:${css(c)}"></i>${name} <b>${fmt(n)}</b> · ${Math.round((n / (arm + intel)) * 100)}%</span>`).join("")}</div></div>`
+      : "");
+    barList("macos", kindIn("macos", days), { animate: first, unit: "Mac-days", top: 5, name: macosName,
+      empty: "No systems counted in this range. Macs say theirs from 0.1.0a7 on." });
+
     // releases, newest first
     const vs = [...new Set([...latestPerVersion.keys(), ...allVersions.filter((v) => vkey(v) >= 0)])].sort((a, b) => vkey(b) - vkey(a));
     const upTotal = (v) => sum(raw.filter((r) => r.kind === "update" && r.version === v).map((r) => r.n));
-    document.getElementById("releases").innerHTML =
-      `<thead><tr><th>Version</th><th>GitHub downloads</th><th>Upgrades to it</th><th>Active yesterday</th></tr></thead><tbody>` +
-      (vs.length ? vs.map((v) => `<tr><td><i style="display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:8px;background:${colorOf(v)}"></i>${v}</td><td>${fmt(latestPerVersion.get(v) ?? null)}</td><td>${fmt(upTotal(v))}</td><td>${fmt(active.get(yesterdayISO)?.get(v) || 0)}</td></tr>`).join("")
-        : `<tr><td colspan="4">No releases noted yet: GitHub's counts are noted every six hours.</td></tr>`) + "</tbody>";
+    const yt = activeOn(yesterdayISO);
+    document.getElementById("releases").innerHTML = vs.length ? vs.map((v, i) => {
+      const on = active.get(yesterdayISO)?.get(v) || 0, pct = yt ? (on / yt) * 100 : 0, d = shipped.get(v);
+      return `<div class="rel"><div class="v"><b><i style="background:${colorOf(v)}"></i>${v}${i === 0 && d ? ' <span class="badge">Latest</span>' : ""}</b>` +
+        `<span>${d ? `${label(d, true)} · ${ago(d)}` : "Date not noted"}</span></div>` +
+        `<div class="m"><b>${fmt(latestPerVersion.get(v) ?? null)}</b><span>GitHub downloads</span></div>` +
+        `<div class="m"><b>${fmt(upTotal(v))}</b><span>upgrades to it</span></div>` +
+        `<div class="m"><b>${fmt(on)}</b><span>active yesterday</span></div>` +
+        `<div class="share"><div class="track"><div class="fill${first && !reducedMotion ? " grow" : ""}" style="width:${pct}%;background:${colorOf(v)}"></div></div><em>${yt ? Math.round(pct) + "%" : "—"}</em></div></div>`;
+    }).join("") : `<div class="none">No releases noted yet: the update feed is read when an app checks.</div>`;
 
     document.getElementById("daily").innerHTML =
       `<thead><tr><th>Day</th><th>Active Macs</th><th>New installs</th><th>Update checks</th><th>Website downloads</th><th>GitHub downloads</th><th>Upgrades</th></tr></thead><tbody>` +

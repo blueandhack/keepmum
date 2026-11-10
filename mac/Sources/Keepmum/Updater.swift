@@ -14,7 +14,9 @@ import Sparkle
 ///
 /// So that keepmum.app can count each Mac once a day, week and month without an identifier, a check
 /// says which of those it is this Mac's first in (`first=day,week,month` on the feed URL, UTC
-/// periods, weeks from Monday), and `new` on the first check this Mac ever makes. Nothing else.
+/// periods, weeks from Monday), and `new` on the first check this Mac ever makes. The day's first
+/// check also says the Mac's macOS major version and chip (`os=15&chip=arm64`), so keepmum.app can
+/// count Macs per macOS version once a day. Nothing else, and none of it with Count this Mac off.
 ///
 /// keepmum runs in the menu bar, so a scheduled check that finds an update does not interrupt: the
 /// menu shows it (`available`, Sparkle's gentle reminders), and Install opens Sparkle's window.
@@ -126,8 +128,8 @@ final class Updates: NSObject {
             Each check downloads keepmum's update list from keepmum.app, which sees your IP address and \
             keepmum's version and counts checks and updates per hour, keeping no addresses (Count this Mac, \
             in Settings, turns that off). To count each Mac once, a check also says whether it is this \
-            Mac's first of the day, week or month. Nothing else is sent: no identifier, no usage data, no \
-            system details.
+            Mac's first of the day, week or month, and the day's first says its macOS version and chip \
+            (macOS 15, Apple silicon). Nothing else is sent: no identifier, no usage data.
 
             You can change this, or check now, in Settings › General › Updates.
             """
@@ -169,13 +171,34 @@ extension Updates: SPUUpdaterDelegate {
     /// keepmum asks on the first launch (above), with its own words about what a check sends.
     func updaterShouldPromptForPermissionToCheck(forUpdates updater: SPUUpdater) -> Bool { false }
 
-    /// `first=day,week,month,new` on the feed URL, for a counted Mac (see the type's comment).
+    /// `first=day,week,month,new` on the feed URL, for a counted Mac (see the type's comment), and
+    /// with the day's first, `os` and `chip`.
     func feedParameters(for updater: SPUUpdater, sendingSystemProfile: Bool) -> [[String: String]] {
         guard counted else { pendingFirsts = nil; return [] }
         let periods = Self.periods(Date())
         let firsts = Self.firsts(periods)
         pendingFirsts = (periods, firsts.contains("new"))
-        return firsts.isEmpty ? [] : [["key": "first", "value": firsts.joined(separator: ",")]]
+        return Self.parameters(firsts)
+    }
+
+    /// The feed URL's parameters for a counted check that is first in `firsts`.
+    static func parameters(_ firsts: [String]) -> [[String: String]] {
+        guard !firsts.isEmpty else { return [] }
+        var out = [["key": "first", "value": firsts.joined(separator: ",")]]
+        if firsts.contains("day") {
+            out.append(["key": "os", "value": String(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)])
+            out.append(["key": "chip", "value": chip])
+        }
+        return out
+    }
+
+    /// The Mac's chip as the feed URL says it: arm64 (Apple silicon) or x86_64 (Intel).
+    static var chip: String {
+        #if arch(arm64)
+        "arm64"
+        #else
+        "x86_64"
+        #endif
     }
 
     /// The feed came back, so keepmum.app counted the check: remember its periods.
