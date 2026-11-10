@@ -67,7 +67,7 @@ jobs:
             fi
           }
           quiet npx --yes "wrangler@$WRANGLER_VERSION" d1 execute keepmum-counts --remote --file schema.sql
-          echo "Schema: $(grep -o 'Executed [0-9]* queries[^.]*' wrangler.log | head -1)"
+          echo "Schema: $(grep -o 'Executed [0-9]* queries' wrangler.log | head -1)"
           quiet npx --yes "wrangler@$WRANGLER_VERSION" deploy
           echo "Deployed: $(grep -o 'Current Version ID: [0-9a-f-]*' wrangler.log | head -1)"
 
