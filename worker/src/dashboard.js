@@ -10,46 +10,73 @@ export function dashboard(data, who) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>keepmum counts</title>
+<script>try { var t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <style>${CSS}</style>
 </head>
 <body>
 <main class="wrap">
   <header class="top">
-    <div class="brand"><span class="mark" aria-hidden="true">m</span><div><h1>keepmum counts</h1>
-      <p class="sub">Downloads, installs in use and upgrades. Counts only: nothing about who.</p></div></div>
-    <div class="who"><span id="who"></span><span id="generated"></span></div>
+    <div class="brand">
+      <span class="mark" aria-hidden="true"><svg viewBox="0 0 100 100" width="22" height="22"><path d="M21.6 69.8 L21.6 46.3 C21.6 37 27.8 30.9 35.8 30.9 C43.8 30.9 50 37 50 46.3 L50 69.8 M50 69.8 L50 46.3 C50 37 56.2 30.9 64.2 30.9 C72.2 30.9 78.4 37 78.4 46.3 L78.4 69.8 M12.9 69.8 L87.1 69.8" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <div><h1>keepmum counts</h1><p class="sub">Active Macs, downloads and upgrades. Counts only: nothing about who.</p></div>
+    </div>
+    <div class="meta">
+      <div class="seg" role="group" aria-label="Appearance">
+        <button type="button" data-theme-set="auto" title="Match the system">Auto</button>
+        <button type="button" data-theme-set="light" title="Light" aria-label="Light"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+        <button type="button" data-theme-set="dark" title="Dark" aria-label="Dark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/></svg></button>
+      </div>
+      <div class="who"><span id="who"></span><span id="generated"></span></div>
+    </div>
   </header>
 
-  <div class="filters" role="group" aria-label="Time range">
-    <button type="button" data-range="30">30 days</button>
-    <button type="button" data-range="90">90 days</button>
-    <button type="button" data-range="all">All</button>
-    <span class="utc" id="tz">Days in your time zone</span>
+  <div class="filters">
+    <div class="seg" role="group" aria-label="Time range">
+      <button type="button" data-range="30">30 days</button>
+      <button type="button" data-range="90">90 days</button>
+      <button type="button" data-range="all">All</button>
+    </div>
+    <span class="tz" id="tz">Days in your time zone</span>
   </div>
 
-  <section class="tiles" id="tiles" aria-label="Summary"></section>
+  <section class="kpis" id="kpis" aria-label="Active Macs"></section>
+  <section class="kpis minor" id="minor" aria-label="Downloads and upgrades"></section>
 
-  <section class="card wide">
-    <div class="card-head"><h2>Installs in use</h2><p>Update checks per day, by app version. Each copy with automatic checks on checks once a day.</p></div>
-    <div class="legend" id="lg-installs"></div>
-    <div class="chart" id="ch-installs"></div>
+  <section class="card">
+    <div class="card-head">
+      <div><h2>Active Macs per day</h2><p>Each counted copy of keepmum once a day, by app version.</p></div>
+      <div class="legend" id="lg-active"></div>
+    </div>
+    <div class="chart tall" id="ch-active"></div>
   </section>
 
   <div class="grid2">
     <section class="card">
-      <div class="card-head"><h2>Downloads</h2><p>New copies: from the website's button, and straight from GitHub (estimated from GitHub's totals).</p></div>
-      <div class="legend" id="lg-downloads"></div>
+      <div class="card-head"><div><h2>Active Macs per week</h2><p id="weekly-note">Each counted copy once a week. Weeks start Monday, UTC.</p></div></div>
+      <div class="chart" id="ch-weekly"></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><div><h2>Versions in use</h2><p id="versions-note">Yesterday's active Macs, by app version.</p></div></div>
+      <div class="versions" id="versions"></div>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <div><h2>Downloads</h2><p>From the website's button, and straight from GitHub (estimated from its totals).</p></div>
+        <div class="legend" id="lg-downloads"></div>
+      </div>
       <div class="chart" id="ch-downloads"></div>
     </section>
     <section class="card">
-      <div class="card-head"><h2>Upgrades</h2><p>Updates the app downloaded, by the version it updated to.</p></div>
-      <div class="legend" id="lg-updates"></div>
-      <div class="chart" id="ch-updates"></div>
+      <div class="card-head">
+        <div><h2>New installs and upgrades</h2><p>A Mac's first check ever, and the updates the app downloaded.</p></div>
+        <div class="legend" id="lg-installs"></div>
+      </div>
+      <div class="chart" id="ch-installs"></div>
     </section>
   </div>
 
   <section class="card">
-    <div class="card-head"><h2>Releases</h2><p>Each release's DMG: all of GitHub's downloads of it, the upgrades to it, and the copies on it yesterday.</p></div>
+    <div class="card-head"><div><h2>Releases</h2><p>Each release's DMG: all of GitHub's downloads of it, the upgrades to it, and the Macs on it yesterday.</p></div></div>
     <div class="table-wrap"><table id="releases"></table></div>
   </section>
 
@@ -61,10 +88,12 @@ export function dashboard(data, who) {
   <section class="notes">
     <h2>How these are counted</h2>
     <ul>
-      <li><b>Installs in use</b> are update checks: keepmum.app/appcast.xml, once a day per copy with automatic checks on. Copies with checks off, and builds from 0.1.0a4 and earlier (which read the feed on GitHub), are not counted. Nothing is counted when the app opens.</li>
+      <li><b>Active Macs</b> come from update checks: keepmum.app/appcast.xml, which each copy with automatic checks on fetches once a day. From 0.1.0a7 on, a check says whether it is the Mac's first of the UTC day, week or month, so each Mac counts once however often it checks (Check now, Install…). Older versions are counted by their checks, which can count a Mac twice on a day it checks more than once. Copies with checks off or Count this Mac off, and 0.1.0a4 and earlier, are not counted. Nothing is counted when the app opens.</li>
+      <li><b>New installs</b> are a Mac's first check ever, from 0.1.0a7 on.</li>
       <li><b>Downloads</b> from the website are keepmum.app/download. <b>From GitHub</b> is the growth in GitHub's own download counts, noted every six hours, less the website's downloads and the upgrades (both redirect to GitHub); it starts the day after the first note.</li>
       <li><b>Upgrades</b> are keepmum.app/update/…, where the update feed sends the app for a new version's DMG, from 0.1.0a5 on.</li>
-      <li>Each count is an hour (UTC), a kind, a version and a number, added up here into days in your time zone. Counts from before hours were kept are whole UTC days. GitHub's counts, noted every six hours, fit those days to within six hours. No IP address or user agent is kept.</li>
+      <li>Bots, link previews and scripts are not counted; the user agent is read to tell, never kept. A check counts only from the app itself.</li>
+      <li>Each count is an hour (UTC), a kind, a version and a number, added up here into days in your time zone. Counts from before hours were kept are whole UTC days. No IP address, user agent or identifier is kept.</li>
     </ul>
   </section>
 </main>
@@ -74,82 +103,132 @@ export function dashboard(data, who) {
 </html>`;
 }
 
-// Layout: one column of cards; summary tiles first, the daily-installs chart full width, then
-// downloads and upgrades side by side, then the release table. Colors: the Mac app's surfaces and
-// text; series from a colorblind-checked palette (blue, orange, aqua), older versions in gray.
+// Layout: a header with the appearance switch; the active-Mac numbers as large tiles, downloads and
+// upgrades as smaller ones; the daily chart full width; then four cards two by two; tables; notes.
+// Colors are tokens on :root, light by default, dark from the system or the switch. Series come
+// from a colorblind-checked palette (blue, orange, aqua), stepped for each mode; older versions gray.
+const DARK = `
+  color-scheme: dark;
+  --canvas: #0f0f11; --glow: rgba(255, 122, 77, 0.10); --card: #19191c; --card-2: #212125; --border: #2a2a2f; --sep: #2c2c31;
+  --text: #f4f4f6; --text-2: #a1a1a8; --text-3: #75757d;
+  --accent: #ff7a4d; --accent-2: #ffb08f; --accent-ink: #160a05;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --older: #6c6c73;
+  --up: #4cc38a; --up-bg: rgba(76, 195, 138, 0.14); --down: #ff7b72; --down-bg: rgba(255, 123, 114, 0.14);
+  --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.35);
+`;
 const CSS = `
 :root {
   color-scheme: light;
-  --canvas: #ffffff; --surface: #f4f4f5; --raised: #ffffff; --sep: #e3e3e6;
-  --text: #1d1d1f; --text-2: #6e6e73; --text-3: #8e8e93;
-  --accent: #c93f17; --accent-ink: #ffffff;
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --older: #7c7c82;
-  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --canvas: #f5f5f7; --glow: rgba(228, 87, 46, 0.10); --card: #ffffff; --card-2: #f3f3f5; --border: #e6e6ea; --sep: #ececf0;
+  --text: #17171a; --text-2: #5f5f68; --text-3: #8b8b94;
+  --accent: #c93f17; --accent-2: #e4572e; --accent-ink: #ffffff;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --older: #8e8e96;
+  --up: #12804a; --up-bg: rgba(18, 128, 74, 0.10); --down: #c4322b; --down-bg: rgba(196, 50, 43, 0.09);
+  --shadow: 0 1px 2px rgba(20, 20, 30, 0.04), 0 6px 20px rgba(20, 20, 30, 0.05);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
-@media (prefers-color-scheme: dark) { :root {
-  color-scheme: dark;
-  --canvas: #1e1e1e; --surface: #2a2a2c; --raised: #3a3a3c; --sep: #3a3a3c;
-  --text: #f5f5f7; --text-2: #98989d; --text-3: #7c7c80;
-  --accent: #ff7a4d; --accent-ink: #1e1e1e;
-  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --older: #6c6c70;
-} }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { ${DARK} } }
+:root[data-theme="dark"] { ${DARK} }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--canvas); color: var(--text); font: 14px/1.5 var(--font); }
-.wrap { max-width: 1120px; margin: 0 auto; padding: 28px max(16px, env(safe-area-inset-left)) 56px; display: flex; flex-direction: column; gap: 18px; }
-h1 { font-size: 20px; line-height: 1.2; margin: 0; letter-spacing: -0.01em; }
-h2 { font-size: 14px; margin: 0; }
+html { background: var(--canvas); }
+body { margin: 0; color: var(--text); font: 14px/1.5 var(--font); -webkit-font-smoothing: antialiased;
+  background: radial-gradient(900px 420px at 0% -8%, var(--glow), transparent 70%), radial-gradient(700px 360px at 100% -12%, var(--glow), transparent 65%), var(--canvas);
+  background-repeat: no-repeat; min-height: 100vh; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 32px max(16px, env(safe-area-inset-left)) 64px; display: flex; flex-direction: column; gap: 20px; }
+h1 { font: 700 22px/1.15 var(--display); margin: 0; letter-spacing: -0.02em; }
+h2 { font-size: 14.5px; font-weight: 650; margin: 0; letter-spacing: -0.005em; }
 p { margin: 0; }
-.top { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; }
-.brand { display: flex; gap: 12px; align-items: center; }
-.mark { width: 36px; height: 36px; border-radius: 9px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-weight: 700; font-size: 20px; }
-.sub, .who { color: var(--text-2); font-size: 12.5px; }
-.who { display: flex; flex-direction: column; align-items: flex-end; }
-.filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.filters button { appearance: none; border: 0; background: var(--surface); color: var(--text); font: 500 12.5px var(--font); padding: 6px 12px; border-radius: 999px; cursor: pointer; }
-.filters button[aria-pressed="true"] { background: var(--text); color: var(--canvas); }
-.filters button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.utc { margin-left: auto; color: var(--text-3); font-size: 12px; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px; }
-.tile { background: var(--surface); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.tile .label { font-size: 12px; font-weight: 600; color: var(--text-2); letter-spacing: 0.02em; }
-.tile .value { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.15; }
-.tile .caption { font-size: 12px; color: var(--text-2); }
-.tile svg { margin-top: 4px; }
-.card { background: var(--surface); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.card-head p { color: var(--text-2); font-size: 12.5px; margin-top: 2px; }
-.grid2 .card-head { flex: 1; } /* side-by-side charts share a baseline, however their text wraps */
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 18px; }
-.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-2); min-height: 18px; }
-.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+button { font: inherit; color: inherit; }
+
+.top { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: center; justify-content: space-between; }
+.brand { display: flex; gap: 14px; align-items: center; min-width: 0; }
+.mark { width: 44px; height: 44px; flex: none; border-radius: 12px; display: grid; place-items: center; color: var(--accent-ink);
+  background: linear-gradient(145deg, var(--accent-2), var(--accent)); box-shadow: 0 6px 18px var(--glow), inset 0 1px 0 rgba(255, 255, 255, 0.25); }
+.sub { color: var(--text-2); font-size: 13px; margin-top: 3px; }
+.meta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.who { display: flex; flex-direction: column; align-items: flex-end; color: var(--text-2); font-size: 12.5px; line-height: 1.4; }
+@media (max-width: 640px) { .who { align-items: flex-start; } }
+
+.seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 999px; background: var(--card-2); border: 1px solid var(--border); }
+.seg button { appearance: none; border: 0; background: transparent; color: var(--text-2); font-size: 12.5px; font-weight: 550; padding: 5px 12px; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; min-height: 28px; transition: background 0.15s, color 0.15s; }
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.seg button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.tz { color: var(--text-3); font-size: 12px; }
+
+.card, .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 14px; }
+.kpi { padding: 16px 18px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; position: relative; overflow: hidden; }
+.kpi.hero { background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 9%, var(--card)), var(--card) 60%); }
+.kpi .label { font-size: 12px; font-weight: 600; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
+.kpi .row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.kpi .value { font: 700 34px/1.1 var(--display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.kpi .caption { font-size: 12px; color: var(--text-2); }
+.kpi svg.spark { display: block; margin-top: 2px; }
+.minor .kpi { padding: 12px 16px; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+.minor .kpi .value { font-size: 22px; }
+.minor .kpi .text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.delta { font-size: 11.5px; font-weight: 650; padding: 2px 7px; border-radius: 999px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.delta.up { color: var(--up); background: var(--up-bg); }
+.delta.down { color: var(--down); background: var(--down-bg); }
+.delta.flat { color: var(--text-2); background: var(--card-2); }
+
+.card { padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.card-head { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; align-items: flex-start; }
+.card-head p { color: var(--text-2); font-size: 12.5px; margin-top: 3px; max-width: 62ch; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 20px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-2); }
+.legend i, .tip i, .versions i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .chart { position: relative; height: 220px; }
+.chart.tall { height: 280px; }
 .chart svg { display: block; overflow: visible; }
-.empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); font-size: 13px; text-align: center; padding: 0 24px; }
+.reveal { animation: reveal 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes reveal { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@media (prefers-reduced-motion: reduce) { .reveal { animation: none; } .seg button { transition: none; } }
+.empty { position: absolute; inset: 0 0 24px 40px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; text-align: center; padding: 0 24px; }
+
+.versions { display: flex; flex-direction: column; gap: 14px; justify-content: center; flex: 1; }
+.versions .bar { display: flex; gap: 2px; height: 28px; border-radius: 8px; overflow: hidden; }
+.versions .bar span { display: block; min-width: 3px; transition: filter 0.15s; }
+.versions .bar span:hover { filter: brightness(1.12); }
+.versions ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 16px; }
+.versions li { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--sep); }
+.versions li b { font-variant-numeric: tabular-nums; font-weight: 600; }
+.versions li small { color: var(--text-3); font-size: 12px; margin-left: 6px; }
+.versions .none { color: var(--text-3); text-align: center; font-size: 13px; padding: 32px 0; }
+
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
-th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--sep); white-space: nowrap; }
+th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--sep); white-space: nowrap; }
 th:first-child, td:first-child { text-align: left; }
-th { color: var(--text-2); font-weight: 600; font-size: 12px; }
+th { color: var(--text-3); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+tbody tr:hover td { background: var(--card-2); }
 tr:last-child td { border-bottom: 0; }
-summary { cursor: pointer; font-weight: 600; }
-.notes { color: var(--text-2); font-size: 12.5px; }
-.notes ul { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; max-width: 90ch; }
+summary { cursor: pointer; font-weight: 650; }
+.notes { color: var(--text-2); font-size: 12.5px; padding: 0 4px; }
+.notes ul { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; max-width: 95ch; }
 .notes b { color: var(--text); font-weight: 600; }
-.tip { position: fixed; pointer-events: none; z-index: 5; background: var(--raised); color: var(--text); border: 1px solid var(--sep); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.14); min-width: 150px; }
-.tip .d { font-weight: 600; margin-bottom: 4px; }
-.tip .row { display: flex; gap: 10px; justify-content: space-between; font-variant-numeric: tabular-nums; }
-.tip .row span:first-child { color: var(--text-2); }
-.tip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
-.tip .total { border-top: 1px solid var(--sep); margin-top: 4px; padding-top: 4px; font-weight: 600; }
+
+.tip { position: fixed; pointer-events: none; z-index: 5; background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; font-size: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18); min-width: 160px; }
+.tip .d { font-weight: 650; margin-bottom: 5px; }
+.tip .r { display: flex; gap: 12px; justify-content: space-between; font-variant-numeric: tabular-nums; }
+.tip .r span:first-child { color: var(--text-2); }
+.tip .total { border-top: 1px solid var(--sep); margin-top: 5px; padding-top: 5px; font-weight: 650; }
 `;
 
 // --- In the browser -----------------------------------------------------------------------------
 
 function client(DATA, WHO) {
-  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const root = document.documentElement;
+  const css = (name) => getComputedStyle(root).getPropertyValue(name).trim();
   const fmt = (n) => (n == null ? "—" : n.toLocaleString("en-US"));
   const sum = (a) => a.reduce((s, x) => s + (x || 0), 0);
-  const pad = (n) => String(n).padStart(2, "0");
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
   // Days are the viewer's own: YYYY-MM-DD in the browser's time zone.
+  const pad = (n) => String(n).padStart(2, "0");
   const ymd = (dt) => `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
   const dateOf = (d) => { const [y, m, dd] = d.split("-").map(Number); return new Date(y, m - 1, dd); };
   const addDays = (d, k) => { const dt = dateOf(d); dt.setDate(dt.getDate() + k); return ymd(dt); };
@@ -161,7 +240,20 @@ function client(DATA, WHO) {
   // The Worker keeps each count under its UTC hour (2026-11-09T14), which lands on the viewer's day.
   // Rows from before it kept hours hold a whole UTC day (2026-11-09) and keep their date.
   const hourly = (k) => k.length > 10;
-  const localDay = (k) => (hourly(k) ? ymd(new Date(k + ":00:00Z")) : k);
+  const timeOf = (k) => Date.parse(hourly(k) ? k + ":00:00Z" : k + "T00:00:00Z");
+  const localDay = (k) => (hourly(k) ? ymd(new Date(timeOf(k))) : k);
+  // Weeks and months are UTC, as the app marks them (Updater.swift): weeks from Monday, keyed by it.
+  const DAY = 86400000;
+  const weekOf = (t) => {
+    const d = new Date(t), back = (d.getUTCDay() + 6) % 7;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - back)).toISOString().slice(0, 10);
+  };
+  const monthOf = (t) => new Date(t).toISOString().slice(0, 7);
+  const now = Date.now(), nowUTC = new Date(now);
+  const thisWeek = weekOf(now), lastWeek = weekOf(now - 7 * DAY), weekBefore = weekOf(now - 14 * DAY);
+  const thisMonth = monthOf(now), lastMonth = monthOf(Date.UTC(nowUTC.getUTCFullYear(), nowUTC.getUTCMonth() - 1, 15));
+  const weekLabel = (w, long) => `${long ? "Week of " : ""}${dateOf(w).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+  const monthName = (m) => new Date(m + "-15T00:00:00Z").toLocaleDateString("en-US", { month: "long", timeZone: "UTC" });
 
   // keepmum's versions in release order: 0.1.0a4 < 0.1.0b1 < 0.1.0rc1 < 0.1.0 (as build-app.sh numbers them).
   function vkey(v) {
@@ -171,27 +263,29 @@ function client(DATA, WHO) {
     return Number(m[1]) * 1e6 + Number(m[2]) * 1e4 + Number(m[3] || 0) * 100 + pre;
   }
 
-  // --- the numbers, by day ---
-  const counts = (DATA.counts || []).map((r) => ({ ...r, day: localDay(r.day) }));
-  const by = (kind) => {
+  // --- the numbers ---
+  const raw = DATA.counts || [];
+  const counts = raw.map((r) => ({ ...r, day: localDay(r.day) }));
+  const add = (m, d, v, n) => { const x = m.get(d) || new Map(); x.set(v, (x.get(v) || 0) + n); m.set(d, x); };
+  const by = (keep) => { const m = new Map(); for (const r of counts) if (keep(r)) add(m, r.day, r.version, r.n); return m; };
+  const total = (m) => (d) => (m.get(d) ? sum([...m.get(d).values()]) : 0);
+  // Versions that say which checks are a Mac's first of the day count once a day by that; older
+  // ones by their checks.
+  const marking = new Set(raw.filter((r) => r.kind === "daily").map((r) => r.version));
+  const active = by((r) => (marking.has(r.version) ? r.kind === "daily" : r.kind === "check"));
+  const checks = by((r) => r.kind === "check"), updates = by((r) => r.kind === "update"), site = by((r) => r.kind === "download"), fresh = by((r) => r.kind === "new");
+  const activeOn = total(active), checksOn = total(checks), siteOn = total(site), updatesOn = total(updates), newOn = total(fresh);
+  const per = (kind, keyOf) => {
     const m = new Map();
-    for (const r of counts) if (r.kind === kind) {
-      const d = m.get(r.day) || new Map();
-      d.set(r.version, (d.get(r.version) || 0) + r.n);
-      m.set(r.day, d);
-    }
+    for (const r of raw) if (r.kind === kind && hourly(r.day)) { const k = keyOf(timeOf(r.day)); m.set(k, (m.get(k) || 0) + r.n); }
     return m;
   };
-  const checks = by("check"), updates = by("update"), site = by("download");
-  const siteOn = (d) => (site.get(d) ? sum([...site.get(d).values()]) : 0);
-  const updatesOn = (d) => (updates.get(d) ? sum([...updates.get(d).values()]) : 0);
-  const checksOn = (d) => (checks.get(d) ? sum([...checks.get(d).values()]) : 0);
+  const weekly = per("weekly", weekOf), monthly = per("monthly", monthOf);
+  const markingSince = [...marking].filter((v) => vkey(v) >= 0).sort((a, b) => vkey(a) - vkey(b))[0];
 
   // GitHub's totals, noted every six hours: a day's total is its last note, and its growth is over
   // the last note of the day noted before it.
-  const notes = (DATA.releases || [])
-    .map((r) => ({ ...r, t: Date.parse(hourly(r.day) ? r.day + ":00:00Z" : r.day + "T00:00:00Z"), day: localDay(r.day) }))
-    .sort((a, b) => a.t - b.t);
+  const notes = (DATA.releases || []).map((r) => ({ ...r, t: timeOf(r.day), day: localDay(r.day) })).sort((a, b) => a.t - b.t);
   const ghTotal = new Map(), latestPerVersion = new Map();
   for (const r of notes) {
     latestPerVersion.set(r.version, r.n);
@@ -204,19 +298,16 @@ function client(DATA, WHO) {
 
   // Versions get their color once, from all the data, so a range change never repaints them:
   // the three newest have a hue each, the rest are "Older".
-  const allVersions = [...new Set(counts.filter((r) => r.kind !== "download").map((r) => r.version))]
-    .sort((a, b) => vkey(b) - vkey(a));
+  const allVersions = [...new Set(raw.filter((r) => r.kind !== "download").map((r) => r.version))].sort((a, b) => vkey(b) - vkey(a));
   const named = allVersions.filter((v) => vkey(v) >= 0).slice(0, 3);
   const slot = ["--s1", "--s2", "--s3"];
   const newest = named[0];
+  const colorOf = (v) => (named.includes(v) ? css(slot[named.indexOf(v)]) : css("--older"));
   function versionSeries(map, days) {
-    const series = named.map((v, i) => ({ name: v, color: css(slot[i]), values: days.map((d) => map.get(d)?.get(v) || 0) }));
-    const older = days.map((d) => {
-      const m = map.get(d);
-      return m ? sum([...m.entries()].filter(([v]) => !named.includes(v)).map(([, n]) => n)) : 0;
-    });
+    const series = named.map((v) => ({ name: v, color: colorOf(v), values: days.map((d) => map.get(d)?.get(v) || 0) }));
+    const older = days.map((d) => { const m = map.get(d); return m ? sum([...m.entries()].filter(([v]) => !named.includes(v)).map(([, n]) => n)) : 0; });
     if (sum(older) > 0) series.push({ name: "Older", color: css("--older"), values: older });
-    return series.filter((s) => sum(s.values) > 0);
+    return series.filter((s) => sum(s.values) > 0).reverse(); // oldest at the bottom of a stack
   }
 
   // --- range ---
@@ -225,6 +316,11 @@ function client(DATA, WHO) {
     let d = range === "all" ? (firstDay < todayISO ? firstDay : todayISO) : addDays(todayISO, 1 - Number(range));
     const out = [];
     for (; d <= todayISO; d = addDays(d, 1)) out.push(d);
+    return out;
+  }
+  function weeksFor(days) {
+    const out = [];
+    for (let w = weekOf(Date.parse(days[0] + "T12:00:00Z")); w <= thisWeek; w = new Date(Date.parse(w + "T00:00:00Z") + 7 * DAY).toISOString().slice(0, 10)) out.push(w);
     return out;
   }
 
@@ -242,12 +338,7 @@ function client(DATA, WHO) {
     return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
   }
   const tip = document.getElementById("tip");
-  function showTip(evt, day, series, i, extra) {
-    const rows = series.filter((s) => s.values[i] != null).map((s) =>
-      `<div class="row"><span><i style="background:${s.color}"></i>${s.name}</span><span>${fmt(s.values[i])}</span></div>`).join("");
-    const measured = series.some((s) => s.values[i] != null);
-    const total = measured && series.length > 1 ? `<div class="row total"><span>Total</span><span>${fmt(sum(series.map((s) => s.values[i])))}</span></div>` : "";
-    tip.innerHTML = `<div class="d">${label(day, true)}${day === todayISO ? " (so far)" : ""}</div>${rows || ""}${total}${extra || ""}`;
+  function placeTip(evt) {
     tip.hidden = false;
     const r = tip.getBoundingClientRect();
     let x = evt.clientX + 14, y = evt.clientY + 14;
@@ -255,167 +346,285 @@ function client(DATA, WHO) {
     if (y + r.height > innerHeight - 8) y = evt.clientY - r.height - 14;
     tip.style.left = x + "px"; tip.style.top = y + "px";
   }
+  function showTip(evt, title, series, i, extra) {
+    const known = series.filter((s) => s.values[i] != null);
+    const shown = known.some((s) => s.values[i]) ? known.filter((s) => s.values[i]) : known;
+    const rows = shown.slice().reverse().map((s) => `<div class="r"><span><i style="background:${s.color}"></i>${s.name}</span><span>${fmt(s.values[i])}</span></div>`).join("");
+    const totalRow = shown.length > 1 && !series.noTotal ? `<div class="r total"><span>Total</span><span>${fmt(sum(shown.map((s) => s.values[i])))}</span></div>` : "";
+    tip.innerHTML = `<div class="d">${title}</div>${rows}${totalRow}${extra || ""}`;
+    placeTip(evt);
+  }
   const hideTip = () => { tip.hidden = true; };
 
-  // A version chart always names its versions, even one: its title does not.
   function legend(id, series, always) {
     const box = document.getElementById(id);
-    box.innerHTML = series.length > 1 || (always && series.length) ? series.map((s) => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join("") : "";
+    if (!box) return;
+    box.innerHTML = series.length > 1 || (always && series.length) ? series.slice().reverse().map((s) => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join("") : "";
   }
 
-  /** A stacked bar or area chart over days, with a hover tooltip per day. */
-  function chart(id, days, series, kind, empty, extraFor) {
+  /**
+   * A chart over days or weeks: stacked areas or bars (o.kind), stacked or side by side (o.grouped),
+   * with a crosshair or band and a tooltip per x. A partial last x (today, this week) is drawn lighter.
+   */
+  function chart(id, xs, series, o) {
     const box = document.getElementById(id);
     box.innerHTML = "";
     const W = box.clientWidth, H = box.clientHeight;
-    const m = { l: 40, r: 8, t: 8, b: 24 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
-    const totals = days.map((_, i) => sum(series.map((s) => s.values[i])));
+    const m = { l: 40, r: 8, t: 10, b: 26 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const totals = xs.map((_, i) => (o.grouped ? Math.max(0, ...series.map((s) => s.values[i] || 0)) : sum(series.map((s) => s.values[i]))));
     if (!series.length || totals.every((t) => !t)) {
       const e = document.createElement("div");
-      e.className = "empty"; e.textContent = empty;
+      e.className = "empty"; e.textContent = o.empty;
       box.appendChild(e);
     }
     const max = niceMax(Math.max(0, ...totals));
-    const svg = el("svg", { width: W, height: H, role: "img", "aria-label": box.previousElementSibling?.previousElementSibling?.querySelector("h2")?.textContent || "" }, box);
+    const svg = el("svg", { width: W, height: H, role: "img", "aria-label": o.title || "" }, box);
     const y = (v) => m.t + ph - (v / max) * ph;
-    const band = pw / days.length;
+    const band = pw / xs.length;
     const x = (i) => m.l + band * i + band / 2;
-    // recessive grid and axis labels
     const steps = max % 4 === 0 ? 4 : max % 5 === 0 ? 5 : 2; // whole-number ticks: counts have no halves
     for (let k = 0; k <= steps; k++) {
       const v = (max / steps) * k;
-      el("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: css("--sep"), "stroke-width": 1 }, svg);
-      const t = el("text", { x: m.l - 8, y: y(v) + 4, "text-anchor": "end", fill: css("--text-3"), "font-size": 11 }, svg);
+      el("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: css("--sep"), "stroke-width": 1, "stroke-dasharray": k ? "2 4" : "" }, svg);
+      const t = el("text", { x: m.l - 10, y: y(v) + 4, "text-anchor": "end", fill: css("--text-3"), "font-size": 11 }, svg);
       t.textContent = Number.isInteger(v) ? fmt(v) : v.toFixed(1);
     }
-    const every = Math.max(1, Math.ceil(days.length / Math.max(2, Math.floor(pw / 70))));
-    days.forEach((d, i) => {
-      if (i % every && i !== days.length - 1) return;
-      if (i !== days.length - 1 && days.length - 1 - i < every / 2) return; // keep clear of the last label
+    const every = Math.max(1, Math.ceil(xs.length / Math.max(2, Math.floor(pw / 72))));
+    xs.forEach((d, i) => {
+      if (i % every && i !== xs.length - 1) return;
+      if (i !== xs.length - 1 && xs.length - 1 - i < every / 2) return; // keep clear of the last label
       const t = el("text", { x: x(i), y: H - 6, "text-anchor": "middle", fill: css("--text-3"), "font-size": 11 }, svg);
-      t.textContent = label(d);
+      t.textContent = o.label(d);
     });
-    const hover = el("rect", { x: 0, y: m.t, width: 0, height: ph, fill: css("--text"), opacity: 0 }, svg);
-    const surface = css("--surface");
-    if (kind === "bar" || days.length < 3) {
-      const bw = Math.max(2, Math.min(22, band * 0.68));
-      days.forEach((_, i) => {
+    const hover = el("rect", { x: 0, y: m.t, width: 0, height: ph, fill: css("--text"), opacity: 0, rx: 6 }, svg);
+    const g = el("g", { class: o.animate && !reducedMotion ? "reveal" : "" }, svg);
+    const partial = (i) => o.partial && o.partial(xs[i]);
+    const asBars = o.kind === "bar" || xs.length < 3;
+    if (asBars) {
+      const groups = o.grouped ? series.length : 1;
+      const bw = Math.max(2, Math.min(o.grouped ? 12 : 24, (band * 0.7) / groups));
+      xs.forEach((_, i) => {
         let base = 0;
-        const segs = series.map((s) => ({ s, v: s.values[i] || 0 })).filter((g) => g.v > 0);
-        segs.forEach((g, j) => {
-          const y0 = y(base), y1 = y(base + g.v);
-          base += g.v;
-          const top = j === segs.length - 1;
-          const h = Math.max(1, y0 - y1 - (j > 0 ? 2 : 0)); // a 2px gap between stacked segments
+        const segs = series.map((s, si) => ({ s, si, v: s.values[i] || 0 })).filter((q) => q.v > 0);
+        segs.forEach((q, j) => {
+          const x0 = o.grouped ? x(i) - (groups * bw + (groups - 1) * 2) / 2 + q.si * (bw + 2) : x(i) - bw / 2;
+          const lo = o.grouped ? 0 : base, hi = lo + q.v;
+          if (!o.grouped) base = hi;
+          const top = o.grouped || j === segs.length - 1;
+          const gap = !o.grouped && j > 0 ? 2 : 0; // 2px of surface between stacked segments
+          const y0 = y(lo) - gap, h = Math.max(1, y0 - y(hi)), yt = y0 - h;
           const r = top ? Math.min(4, bw / 2, h) : 0;
-          const x0 = x(i) - bw / 2, yt = y0 - (j > 0 ? 2 : 0) - h;
-          el("path", { d: `M${x0},${yt + h} V${yt + r} Q${x0},${yt} ${x0 + r},${yt} H${x0 + bw - r} Q${x0 + bw},${yt} ${x0 + bw},${yt + r} V${yt + h} Z`, fill: g.s.color }, svg);
+          el("path", { d: `M${x0},${yt + h} V${yt + r} Q${x0},${yt} ${x0 + r},${yt} H${x0 + bw - r} Q${x0 + bw},${yt} ${x0 + bw},${yt + r} V${yt + h} Z`, fill: q.s.color, opacity: partial(i) ? 0.45 : 1 }, g);
         });
       });
     } else {
-      // stacked areas, bottom series first; a 2px surface line separates the layers
-      let lower = days.map(() => 0);
-      const layers = series.map((s) => {
-        const upper = lower.map((b, i) => b + (s.values[i] || 0));
-        const l = { s, lower, upper };
-        lower = upper;
-        return l;
-      });
-      for (const l of layers) {
+      // stacked areas, the oldest version at the bottom; a 2px line of card separates the layers
+      const surface = css("--card");
+      let lower = xs.map(() => 0);
+      const layers = series.map((s) => { const upper = lower.map((b, i) => b + (s.values[i] || 0)); const l = { s, lower, upper }; lower = upper; return l; });
+      const defs = el("defs", {}, svg);
+      layers.forEach((l, li) => {
+        const gid = `${id}-g${li}`;
+        const grad = el("linearGradient", { id: gid, x1: 0, x2: 0, y1: 0, y2: 1 }, defs);
+        el("stop", { offset: "0%", "stop-color": l.s.color, "stop-opacity": layers.length === 1 ? 0.5 : 0.95 }, grad);
+        el("stop", { offset: "100%", "stop-color": l.s.color, "stop-opacity": layers.length === 1 ? 0.04 : 0.75 }, grad);
         const top = l.upper.map((v, i) => `${x(i)},${y(v)}`).join(" L");
         const bottom = l.lower.map((v, i) => `${x(i)},${y(v)}`).reverse().join(" L");
-        el("path", { d: `M${top} L${bottom} Z`, fill: l.s.color, opacity: 0.9 }, svg);
-      }
+        el("path", { d: `M${top} L${bottom} Z`, fill: `url(#${gid})` }, g);
+      });
       for (const l of layers) {
-        el("path", { d: "M" + l.upper.map((v, i) => `${x(i)},${y(v)}`).join(" L"), fill: "none", stroke: surface, "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+        const line = "M" + l.upper.map((v, i) => `${x(i)},${y(v)}`).join(" L");
+        el("path", { d: line, fill: "none", stroke: layers.length === 1 ? l.s.color : surface, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, g);
       }
+      // today is not over: its stretch is washed out, so its dip does not read as a drop
+      if (partial(xs.length - 1)) el("rect", { x: x(xs.length - 2), y: m.t - 2, width: x(xs.length - 1) - x(xs.length - 2) + 2, height: ph + 2, fill: surface, opacity: 0.55 }, g);
     }
-    const cross = el("line", { x1: 0, x2: 0, y1: m.t, y2: m.t + ph, stroke: css("--text-2"), "stroke-width": 1, opacity: 0 }, svg);
+    const cross = el("line", { x1: 0, x2: 0, y1: m.t, y2: m.t + ph, stroke: css("--text-2"), "stroke-width": 1, "stroke-dasharray": "3 3", opacity: 0 }, svg);
+    const dot = el("circle", { r: 4.5, fill: series[series.length - 1]?.color || "transparent", stroke: css("--card"), "stroke-width": 2, opacity: 0 }, svg);
     const hit = el("rect", { x: m.l, y: m.t, width: pw, height: ph, fill: "transparent" }, svg);
     hit.addEventListener("mousemove", (evt) => {
       const bx = svg.getBoundingClientRect().left;
-      const i = Math.min(days.length - 1, Math.max(0, Math.floor((evt.clientX - bx - m.l) / band)));
-      if (kind === "bar" || days.length < 3) {
-        hover.setAttribute("x", m.l + band * i); hover.setAttribute("width", band); hover.setAttribute("opacity", 0.06);
+      const i = Math.min(xs.length - 1, Math.max(0, Math.floor((evt.clientX - bx - m.l) / band)));
+      if (asBars) {
+        hover.setAttribute("x", m.l + band * i + 1); hover.setAttribute("width", Math.max(0, band - 2)); hover.setAttribute("opacity", 0.05);
       } else {
-        cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 0.6);
+        cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 0.7);
+        dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(totals[i])); dot.setAttribute("opacity", 1);
       }
-      showTip(evt, days[i], series.length ? series : [{ name: "Count", color: css("--older"), values: days.map(() => 0) }], i, extraFor && extraFor(days[i]));
+      const shown = series.length ? series : [{ name: o.unit || "Count", color: css("--older"), values: xs.map(() => 0) }];
+      shown.noTotal = o.grouped;
+      showTip(evt, o.label(xs[i], true) + (partial(i) ? " (so far)" : ""), shown, i, o.extraFor && o.extraFor(xs[i]));
     });
-    hit.addEventListener("mouseleave", () => { hover.setAttribute("opacity", 0); cross.setAttribute("opacity", 0); hideTip(); });
+    hit.addEventListener("mouseleave", () => { hover.setAttribute("opacity", 0); cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0); hideTip(); });
   }
 
   function sparkline(values, color) {
-    const W = 200, H = 28, max = Math.max(1, ...values);
-    const pts = values.map((v, i) => `${(i / Math.max(1, values.length - 1)) * W},${H - 2 - (v / max) * (H - 4)}`).join(" ");
-    return `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
+    const W = 240, H = 34, max = Math.max(1, ...values), n = Math.max(1, values.length - 1);
+    const pts = values.map((v, i) => [(i / n) * W, H - 3 - (v / max) * (H - 8)]);
+    const line = pts.map((p) => p.join(",")).join(" L");
+    const id = "sp" + Math.random().toString(36).slice(2, 8);
+    return `<svg class="spark" width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+      <defs><linearGradient id="${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity="0.28"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
+      <path d="M${line} L${W},${H} L0,${H} Z" fill="url(#${id})"/>
+      <path d="M${line}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  }
+  function delta(now, before, what) {
+    if (!now || !before) return "";
+    const p = Math.round(((now - before) / before) * 100);
+    const cls = p > 0 ? "up" : p < 0 ? "down" : "flat";
+    return `<span class="delta ${cls}" title="Against ${what}">${p > 0 ? "▲" : p < 0 ? "▼" : "■"} ${Math.abs(p)}%</span>`;
   }
 
+  /** Numbers in the tiles count up from zero on the first draw. */
+  function countUp(animate) {
+    for (const v of document.querySelectorAll("[data-to]")) {
+      const to = Number(v.dataset.to), suffix = v.dataset.suffix || "";
+      if (!animate || reducedMotion || !to) { v.textContent = fmt(to) + suffix; continue; }
+      const t0 = performance.now(), dur = 800;
+      const step = (t) => {
+        const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+        v.textContent = fmt(Math.round(to * e)) + suffix;
+        if (p < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
+  }
+  const num = (n, suffix) => (n == null ? "—" : `<span data-to="${n}" data-suffix="${suffix || ""}">0</span>`);
+
   // --- the page ---
-  function render(range) {
+  function render(range, first) {
     for (const b of document.querySelectorAll("[data-range]")) b.setAttribute("aria-pressed", String(b.dataset.range === range));
     const days = daysFor(range);
     const full = days.filter((d) => d !== todayISO);
+    const isToday = (d) => d === todayISO;
 
-    const installs = versionSeries(checks, days);
-    const yesterday = checksOn(yesterdayISO);
-    const siteN = sum(days.map(siteOn)), directN = sum(days.map((d) => directOn(d) || 0)), updN = sum(days.map(updatesOn));
-    const onNewest = newest && yesterday ? (checks.get(yesterdayISO)?.get(newest) || 0) / yesterday : null;
-    const tiles = [
-      { label: "Installs in use", value: yesterday ? fmt(yesterday) : "—",
-        caption: yesterday ? `Update checks on ${label(yesterdayISO)} · ${fmt(checksOn(todayISO))} today so far` : "Counted from 0.1.0a5 on",
-        spark: full.length > 1 ? sparkline(full.map(checksOn), css("--s1")) : "" },
-      { label: "Downloads", value: fmt(siteN + directN), caption: `${fmt(siteN)} from the website · ${fmt(directN)} from GitHub` },
-      { label: "Upgrades", value: fmt(updN), caption: newest ? `${fmt(sum(days.map((d) => updates.get(d)?.get(newest) || 0)))} to ${newest}, the newest` : "Counted from 0.1.0a5 on" },
-      { label: "On the newest version", value: onNewest == null ? "—" : Math.round(onNewest * 100) + "%",
-        caption: newest ? `${newest}, of yesterday's installs in use` : "No version seen yet" },
+    // tiles: active Macs
+    const yesterday = activeOn(yesterdayISO), dayBefore = activeOn(addDays(todayISO, -2));
+    const since = markingSince ? `Counted from ${markingSince} on` : "Counted from 0.1.0a7 on";
+    const wkLast = weekly.get(lastWeek), wkNow = weekly.get(thisWeek);
+    const moLast = monthly.get(lastMonth), moNow = monthly.get(thisMonth);
+    const newN = sum(days.map(newOn));
+    const kpis = [
+      { hero: true, label: "Daily active Macs", value: yesterday || null, delta: delta(yesterday, dayBefore, label(addDays(todayISO, -2))),
+        caption: yesterday ? `${label(yesterdayISO, true)} · ${fmt(activeOn(todayISO))} today so far` : "No checks counted yet",
+        spark: full.length > 1 ? sparkline(full.map(activeOn), css("--s1")) : "" },
+      { label: "Weekly active Macs", value: wkLast ?? wkNow ?? null, delta: wkLast ? delta(wkLast, weekly.get(weekBefore), weekLabel(weekBefore, true).toLowerCase()) : "",
+        caption: wkLast != null ? `${weekLabel(lastWeek, true)} · ${fmt(wkNow || 0)} this week so far` : wkNow != null ? "This week so far" : since,
+        spark: weekly.size > 1 ? sparkline(weeksFor(days).filter((w) => w !== thisWeek).map((w) => weekly.get(w) || 0), css("--s1")) : "" },
+      { label: "Monthly active Macs", value: moLast ?? moNow ?? null, delta: "",
+        caption: moLast != null ? `${monthName(lastMonth)} · ${fmt(moNow || 0)} in ${monthName(thisMonth)} so far` : moNow != null ? `${monthName(thisMonth)} so far` : since },
+      { label: "New installs", value: marking.size ? newN : null, delta: "",
+        caption: marking.size ? `In this range · ${fmt(newOn(todayISO))} today` : since,
+        spark: marking.size && full.length > 1 ? sparkline(full.map(newOn), css("--s3")) : "" },
     ];
-    document.getElementById("tiles").innerHTML = tiles.map((t) =>
-      `<div class="tile"><span class="label">${t.label}</span><span class="value">${t.value}</span><span class="caption">${t.caption}</span>${t.spark || ""}</div>`).join("");
+    document.getElementById("kpis").innerHTML = kpis.map((k) =>
+      `<div class="kpi${k.hero ? " hero" : ""}"><span class="label">${k.label}</span><div class="row"><span class="value">${num(k.value)}</span>${k.delta}</div><span class="caption">${k.caption}</span>${k.spark || ""}</div>`).join("");
 
-    legend("lg-installs", installs, true);
-    chart("ch-installs", days, installs, "area", "No update checks yet. Builds from 0.1.0a5 on check keepmum.app.");
+    // tiles: downloads and upgrades
+    const siteN = sum(days.map(siteOn)), directN = sum(days.map((d) => directOn(d) || 0)), updN = sum(days.map(updatesOn));
+    const onNewest = newest && yesterday ? Math.round(((active.get(yesterdayISO)?.get(newest) || 0) / yesterday) * 100) : null;
+    const minor = [
+      { label: "Downloads", value: siteN + directN, caption: `${fmt(siteN)} website · ${fmt(directN)} GitHub` },
+      { label: "Upgrades", value: updN, caption: newest ? `${fmt(sum(days.map((d) => updates.get(d)?.get(newest) || 0)))} to ${newest}` : "From 0.1.0a5 on" },
+      { label: "On the newest version", value: onNewest, suffix: "%", caption: newest ? `${newest}, of yesterday's active Macs` : "No version seen yet" },
+    ];
+    document.getElementById("minor").innerHTML = minor.map((k) =>
+      `<div class="kpi"><div class="text"><span class="label">${k.label}</span><span class="caption">${k.caption}</span></div><span class="value">${num(k.value, k.suffix)}</span></div>`).join("");
+    countUp(first);
 
+    // active Macs per day
+    const act = versionSeries(active, days);
+    legend("lg-active", act, true);
+    chart("ch-active", days, act, { kind: "area", title: "Active Macs per day", label, partial: isToday, animate: first, unit: "Active Macs",
+      empty: "No update checks yet. Builds from 0.1.0a5 on check keepmum.app." });
+
+    // per week
+    const weeks = weeksFor(days);
+    chart("ch-weekly", weeks, weekly.size ? [{ name: "Active Macs", color: css("--s1"), values: weeks.map((w) => weekly.get(w) ?? null) }] : [],
+      { kind: "bar", title: "Active Macs per week", label: weekLabel, partial: (w) => w === thisWeek, animate: first, unit: "Active Macs",
+        empty: `No weekly counts yet. ${since}.` });
+    document.getElementById("weekly-note").textContent = `Each counted Mac once a week${markingSince ? `, from ${markingSince} on` : ""}. Weeks start Monday, UTC.`;
+
+    // versions in use yesterday
+    const vy = active.get(yesterdayISO) || new Map(), vt = sum([...vy.values()]);
+    const vlist = named.map((v) => ({ v, n: vy.get(v) || 0 }));
+    const older = sum([...vy.entries()].filter(([v]) => !named.includes(v)).map(([, n]) => n));
+    if (older) vlist.push({ v: "Older", n: older });
+    const shown = vlist.filter((x) => x.n > 0);
+    const vbox = document.getElementById("versions");
+    vbox.innerHTML = vt
+      ? `<div class="bar" role="img" aria-label="Versions in use yesterday">${shown.map((x) => `<span data-v="${x.v}" style="flex:${x.n};background:${x.v === "Older" ? css("--older") : colorOf(x.v)}"></span>`).join("")}</div>` +
+        `<ul>${shown.map((x) => `<li><span><i style="background:${x.v === "Older" ? css("--older") : colorOf(x.v)}"></i>${x.v}</span><span><b>${fmt(x.n)}</b><small>${Math.round((x.n / vt) * 100)}%</small></span></li>`).join("")}</ul>`
+      : `<div class="none">No active Macs counted yesterday.</div>`;
+    for (const s of vbox.querySelectorAll(".bar span")) {
+      const x = shown.find((q) => q.v === s.dataset.v);
+      s.addEventListener("mousemove", (evt) => { tip.innerHTML = `<div class="d">${x.v}</div><div class="r"><span>Active Macs</span><span>${fmt(x.n)}</span></div><div class="r"><span>Share</span><span>${Math.round((x.n / vt) * 100)}%</span></div>`; placeTip(evt); });
+      s.addEventListener("mouseleave", hideTip);
+    }
+
+    // downloads
     const downloads = [
-      { name: "Website", color: css("--s1"), values: days.map(siteOn) },
       { name: "GitHub", color: css("--s2"), values: days.map(directOn) },
+      { name: "Website", color: css("--s1"), values: days.map(siteOn) },
     ];
     legend("lg-downloads", downloads);
-    chart("ch-downloads", days, downloads, "bar", "No downloads in this range yet.",
-      (d) => (ghGrowth.has(d) ? "" : `<div class="row"><span>GitHub</span><span>not noted yet</span></div>`));
+    chart("ch-downloads", days, downloads, { kind: "bar", title: "Downloads", label, partial: isToday, animate: first,
+      empty: "No downloads in this range yet.",
+      extraFor: (d) => (ghGrowth.has(d) ? "" : `<div class="r"><span>GitHub</span><span>not noted yet</span></div>`) });
 
-    const ups = versionSeries(updates, days);
-    legend("lg-updates", ups, true);
-    chart("ch-updates", days, ups, "bar", "No upgrades yet. Releases from 0.1.0a5 on are counted.");
+    // new installs and upgrades, side by side
+    const inst = [
+      { name: "New installs", color: css("--s3"), values: days.map(newOn) },
+      { name: "Upgrades", color: css("--s1"), values: days.map(updatesOn) },
+    ];
+    legend("lg-installs", inst.slice().reverse(), true);
+    chart("ch-installs", days, inst, { kind: "bar", grouped: true, title: "New installs and upgrades", label, partial: isToday, animate: first,
+      empty: "No new installs or upgrades in this range yet." });
 
     // releases, newest first
     const vs = [...new Set([...latestPerVersion.keys(), ...allVersions.filter((v) => vkey(v) >= 0)])].sort((a, b) => vkey(b) - vkey(a));
-    const upTotal = (v) => sum(counts.filter((r) => r.kind === "update" && r.version === v).map((r) => r.n));
+    const upTotal = (v) => sum(raw.filter((r) => r.kind === "update" && r.version === v).map((r) => r.n));
     document.getElementById("releases").innerHTML =
-      `<thead><tr><th>Version</th><th>GitHub downloads</th><th>Upgrades to it</th><th>Installs on it yesterday</th></tr></thead><tbody>` +
-      (vs.length ? vs.map((v) => `<tr><td>${v}</td><td>${fmt(latestPerVersion.get(v) ?? null)}</td><td>${fmt(upTotal(v))}</td><td>${fmt(checks.get(yesterdayISO)?.get(v) || 0)}</td></tr>`).join("")
+      `<thead><tr><th>Version</th><th>GitHub downloads</th><th>Upgrades to it</th><th>Active yesterday</th></tr></thead><tbody>` +
+      (vs.length ? vs.map((v) => `<tr><td><i style="display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:8px;background:${colorOf(v)}"></i>${v}</td><td>${fmt(latestPerVersion.get(v) ?? null)}</td><td>${fmt(upTotal(v))}</td><td>${fmt(active.get(yesterdayISO)?.get(v) || 0)}</td></tr>`).join("")
         : `<tr><td colspan="4">No releases noted yet: GitHub's counts are noted every six hours.</td></tr>`) + "</tbody>";
 
     document.getElementById("daily").innerHTML =
-      `<thead><tr><th>Day</th><th>Installs in use</th><th>Website downloads</th><th>GitHub downloads</th><th>Upgrades</th></tr></thead><tbody>` +
-      [...days].reverse().map((d) => `<tr><td>${label(d, true)}${d === todayISO ? " (so far)" : ""}</td><td>${fmt(checksOn(d))}</td><td>${fmt(siteOn(d))}</td><td>${fmt(directOn(d))}</td><td>${fmt(updatesOn(d))}</td></tr>`).join("") + "</tbody>";
+      `<thead><tr><th>Day</th><th>Active Macs</th><th>New installs</th><th>Update checks</th><th>Website downloads</th><th>GitHub downloads</th><th>Upgrades</th></tr></thead><tbody>` +
+      [...days].reverse().map((d) => `<tr><td>${label(d, true)}${isToday(d) ? " (so far)" : ""}</td><td>${fmt(activeOn(d))}</td><td>${fmt(newOn(d))}</td><td>${fmt(checksOn(d))}</td><td>${fmt(siteOn(d))}</td><td>${fmt(directOn(d))}</td><td>${fmt(updatesOn(d))}</td></tr>`).join("") + "</tbody>";
   }
 
+  // --- header, switches ---
   document.getElementById("who").textContent = WHO;
   document.getElementById("generated").textContent = "As of " + at(DATA.generated, { year: "numeric", month: "short", day: "numeric", timeZoneName: "short" });
-  const raw = DATA.counts || [];
-  const firstHourly = raw.filter((r) => hourly(r.day)).map((r) => localDay(r.day)).sort()[0];
+  const firstHourly = raw.filter((r) => hourly(r.day) && ["check", "download", "update"].includes(r.kind)).map((r) => localDay(r.day)).sort()[0];
   const tz = document.getElementById("tz");
-  tz.textContent = `Days in your time zone, ${zone(Date.now())}` +
+  tz.textContent = `Days in your time zone, ${zone(now)}` +
     (!raw.some((r) => !hourly(r.day)) ? "" : firstHourly ? `; UTC days before ${label(firstHourly)}` : "; UTC days so far");
   try { tz.title = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
+
   let range = "30";
   try { range = localStorage.getItem("range") || "30"; } catch {}
   for (const b of document.querySelectorAll("[data-range]")) {
-    b.addEventListener("click", () => { range = b.dataset.range; try { localStorage.setItem("range", range); } catch {} render(range); });
+    b.addEventListener("click", () => { range = b.dataset.range; try { localStorage.setItem("range", range); } catch {} render(range, true); });
   }
-  render(range);
+  function setTheme(t) {
+    if (t === "light" || t === "dark") root.dataset.theme = t; else delete root.dataset.theme;
+    for (const b of document.querySelectorAll("[data-theme-set]")) b.setAttribute("aria-pressed", String(b.dataset.themeSet === (t || "auto")));
+  }
+  let theme = "auto";
+  try { theme = localStorage.getItem("theme") || "auto"; } catch {}
+  setTheme(theme);
+  for (const b of document.querySelectorAll("[data-theme-set]")) {
+    b.addEventListener("click", () => {
+      theme = b.dataset.themeSet;
+      try { localStorage.setItem("theme", theme); } catch {}
+      setTheme(theme);
+      render(range, false);
+    });
+  }
+  render(range, true);
   let t;
-  addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => render(range), 120); });
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => render(range));
+  addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => render(range, false), 120); });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => render(range, false));
 }

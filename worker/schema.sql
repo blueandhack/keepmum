@@ -1,6 +1,10 @@
 -- One row per UTC hour, kind and app version: how many times. Nothing about who.
 --   day:  the UTC hour, 2026-11-09T14; older rows hold a whole UTC day, 2026-11-09
 --   kind: check     the app looked for an update (version: the app's own; unknown: a build without it in its feed URL)
+--         daily     that check was the Mac's first counted one this UTC day (weekly: ISO week, monthly:
+--         weekly    month; new: its first ever). The app says so (?first=); no identifier is kept or sent.
+--         monthly
+--         new
 --         download  keepmum.app/download, the website's buttons (version: empty)
 --         update    the app downloaded an update (version: the one it updated to)
 CREATE TABLE IF NOT EXISTS counts (

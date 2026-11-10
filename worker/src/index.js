@@ -2,7 +2,9 @@
 // request is stored.
 //
 //   /appcast.xml   the Mac app's update feed, mac/appcast.xml on main byte for byte (the app checks
-//                  its EdDSA signature); counted as a check, per app version (?v=)
+//                  its EdDSA signature); counted as a check, per app version (?v=), and as the
+//                  first check of a UTC day, week or month from that Mac, or its first ever, when
+//                  the app says so (?first=day,week,month,new: Updater.swift). No identifier is sent.
 //   /download      the website's download buttons: redirects to the newest DMG; counted
 //   /update/v<version>/Keepmum-<version>.dmg
 //                  what the feed points updates at: redirects to that DMG on GitHub; counted as an
@@ -15,6 +17,8 @@
 //
 // Nothing is counted for a Mac with "Count this Mac" off (the app sends Keepmum-Count: off) or a
 // browser that asks not to be tracked (Global Privacy Control, Do Not Track): keepmum.app/privacy.
+// Nor for bots: the user agent is read to tell, never kept. A check counts only from the app
+// (Sparkle's user agent), so a crawler fetching the feed is not an install in use.
 
 import { dashboard } from "./dashboard.js";
 
@@ -26,11 +30,11 @@ const VERSION = "[0-9A-Za-z.+-]{1,32}";
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const counted = request.method === "GET" && !optedOut(request);
+    const counted = request.method === "GET" && !optedOut(request) && !isBot(request);
     if (url.pathname === "/appcast.xml") {
       const feed = await getFeed();
       if (!feed) return new Response("The update feed is unavailable; try again later.\n", { status: 502 });
-      if (counted) ctx.waitUntil(count(env, "check", appVersion(url)));
+      if (counted && fromApp(request)) ctx.waitUntil(count(env, ["check", ...firsts(url)], appVersion(url)));
       return new Response(request.method === "HEAD" ? null : feed, {
         headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "no-store" },
       });
@@ -39,12 +43,12 @@ export default {
       const feed = await getFeed();
       const dmg = feed && newestDMG(new TextDecoder().decode(feed));
       if (!dmg) return Response.redirect(RELEASES, 302);
-      if (counted) ctx.waitUntil(count(env, "download", ""));
+      if (counted) ctx.waitUntil(count(env, ["download"], ""));
       return Response.redirect(dmg, 302);
     }
     const update = url.pathname.match(new RegExp(`^/update/v(${VERSION})/(Keepmum-(${VERSION})\\.dmg)$`));
     if (update && update[1] === update[3]) {
-      if (counted) ctx.waitUntil(count(env, "update", update[1]));
+      if (counted) ctx.waitUntil(count(env, ["update"], update[1]));
       return Response.redirect(`${RELEASES}/download/v${update[1]}/${update[2]}`, 302);
     }
     const file = url.pathname.match(/^\/video\/([A-Za-z0-9._-]{1,100}\.(?:mp4|webm|vtt))$/);
@@ -118,6 +122,23 @@ function optedOut(request) {
   return h.get("keepmum-count") === "off" || h.get("sec-gpc") === "1" || h.get("dnt") === "1";
 }
 
+// Crawlers, link previews (Slack, iMessage, …), scanners and scripts, by their user agent; and
+// requests without one.
+const BOT = /bot\b|bot\/|crawl|spider|slurp|preview|facebookexternalhit|embedly|headless|lighthouse|python|go-http|okhttp|java\/|curl\/|wget|httpclient|axios|node-fetch|scrapy|libwww/i;
+const isBot = (request) => {
+  const ua = request.headers.get("user-agent") || "";
+  return !ua || BOT.test(ua);
+};
+/** Sparkle's user agent: "Keepmum/0.1.0a6 Sparkle/2.10.1". */
+const fromApp = (request) => /\sSparkle\/\d/.test(request.headers.get("user-agent") || "");
+
+/** The firsts a check says it is for this Mac: kinds daily, weekly, monthly, new (each once). */
+const FIRSTS = { day: "daily", week: "weekly", month: "monthly", new: "new" };
+function firsts(url) {
+  const said = (url.searchParams.get("first") || "").split(",");
+  return Object.keys(FIRSTS).filter((f) => said.includes(f)).map((f) => FIRSTS[f]);
+}
+
 /** The feed's bytes, cached at Cloudflare for five minutes; null if GitHub does not answer. */
 async function getFeed() {
   try {
@@ -154,13 +175,14 @@ function newestDMG(xml) {
 const hour = () => new Date().toISOString().slice(0, 13);
 const today = () => hour().slice(0, 10);
 
-/** One more for this hour. A counting failure never fails the request. */
-async function count(env, kind, version) {
+/** One more of each kind for this hour. A counting failure never fails the request. */
+async function count(env, kinds, version) {
+  const h = hour();
   try {
-    await env.DB.prepare(
+    await env.DB.batch(kinds.map((kind) => env.DB.prepare(
       "INSERT INTO counts (day, kind, version, n) VALUES (?1, ?2, ?3, 1) " +
         "ON CONFLICT (day, kind, version) DO UPDATE SET n = n + 1",
-    ).bind(hour(), kind, version).run();
+    ).bind(h, kind, version)));
   } catch (e) {
     console.error("count failed", e);
   }
