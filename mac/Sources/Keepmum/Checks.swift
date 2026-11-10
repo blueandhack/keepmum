@@ -75,7 +75,7 @@ struct ChecksSection: View {
                                           threshold: Double) -> some View {
         let current = levels.first { abs($0.value.threshold - threshold) < 0.0005 }?.key
         let options = Self.levelOrder + (current == nil ? [("custom", "Custom")] : [])
-        FormRow(title: "Sensitivity", detail: sensitivityDetail(levels: levels, current: current, threshold: threshold,
+        FormRow(title: "Sensitivity", detail: sensitivityDetail(c, levels: levels, current: current, threshold: threshold,
                                                                 isDefault: abs(threshold - (c.defaultThreshold ?? 0.65)) < 0.0005)) {
             modePicker(current ?? "custom", options: options) { level in
                 if level != "custom" { await engine.setInjectionThreshold(level) }
@@ -83,18 +83,20 @@ struct ChecksSection: View {
         }
     }
 
-    private func sensitivityDetail(levels: [String: Engine.Checks.Injection.Level], current: String?, threshold: Double,
-                                   isDefault: Bool) -> String {
+    private func sensitivityDetail(_ c: Engine.Checks.Injection, levels: [String: Engine.Checks.Injection.Level],
+                                   current: String?, threshold: Double, isDefault: Bool) -> String {
         let pct = { (x: Double) in x == 0 ? "none" : x < 0.01 ? "<1%" : "\(Int((x * 100).rounded()))%" }
         let score = String(format: "%.2f", threshold)
+        let short = c.shortThreshold.flatMap { t in c.shortChars.map { " (\(String(format: "%.3g", t)) under \($0) characters)" } } ?? ""
         guard let current, let l = levels[current] else {
-            return "Custom: flags a tool result scoring \(score) or more (keepmum guard sensitivity injection). Lower is stricter."
+            return "Custom: flags a tool result scoring \(score) or more\(short) (keepmum guard sensitivity injection). Lower is stricter."
         }
-        let which = current == "high" ? "High (the default)" : current.capitalized
+        let which = current.capitalized + (isDefault ? " (the default)" : "")
         let catches = "On keepmum's test set: catches \(pct(l.caught)) of injections, and flags \(pct(l.ordinary)) of ordinary pages and \(pct(l.security)) of security code and writing."
-        let advice = current == "high" ? " Working on security code? Medium or Low raises fewer false alarms." :
+        let sessions = l.sessions.map { " On real Claude Code and Codex sessions: flags \(pct($0)) of tool results." } ?? ""
+        let advice = current == "high" ? " More false alarms than Medium, for a few more catches." :
                      current == "lowest" ? " Misses more injections: subtle ones score lower." : ""
-        return "\(which): flags a tool result scoring \(score) or more. \(catches)\(advice)"
+        return "\(which): flags a tool result scoring \(score) or more\(short). \(catches)\(sessions)\(advice)"
     }
 
     private func injectionDetail(_ mode: String) -> String {

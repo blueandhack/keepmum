@@ -21,8 +21,11 @@ the harm check (harm.py).
 
 Text is normalized first, as the model's own tokenizer does (`normalize`: smuggled text decoded,
 NFKC, invisible characters removed), then scored in 2,048-token windows (at most 16: 12 from the
-start and 4 from the end); a text gets its highest window. The threshold is the one the benchmark
-set on dev data for the GGUF (at most 2% of ordinary documents flagged).
+start and 4 from the end); a text gets its highest window. A result flags when its score reaches the
+threshold, Medium's 0.8 by default; one under SHORT_CHARS must reach a much higher one (`short_threshold`).
+On real coding-agent sessions (bench/results/guard-public-*.md) short results were most of the false
+alarms: a grep line, an error, an agent's own notice. Few published attacks are that short, and a line
+planted in a repository usually arrives inside a longer file.
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ import threading
 import time
 import unicodedata
 from pathlib import Path
+from typing import NamedTuple
 
 from .detect.pfserve import data_dir
 from .llamacpp import INSTALL_HINT, Server, find_server
@@ -56,13 +60,34 @@ FILES = {
 # What earlier keepmum versions downloaded: Shield Small (ZeroLeaks, CC BY-NC 4.0). Removed on setup.
 LEGACY = ("shield-small-s15e",)
 MODES = ("off", "warn", "block", "local")  # local: local.py
-THRESHOLD = 0.65
-# Sensitivity levels for the app and `keepmum guard sensitivity injection`: the threshold, and on the benchmark's
-# 408 documents (bench/results/GUARD.md, the Q8_0 in keepmum's windows) the share of 144 injected
-# documents caught, and of 115 ordinary and 101 security documents (writing and code that quotes
-# attacks) flagged.
-LEVELS = {"high": (0.65, 0.993, 0.017, 0.069), "medium": (0.8, 0.972, 0.0, 0.05),
-          "low": (0.9, 0.938, 0.0, 0.04), "lowest": (0.98, 0.882, 0.0, 0.01)}
+THRESHOLD = 0.8  # Medium
+
+
+class Level(NamedTuple):
+    threshold: float  # the score at which a tool result flags
+    short: float  # the same, for one under SHORT_CHARS
+    caught: float  # bench/results/GUARD.md: of its 144 injected documents
+    ordinary: float  # of its 115 ordinary documents, flagged
+    security: float  # of its 101 security documents (writing and code that quotes attacks), flagged
+    sessions: float  # bench/results/guard-public-*.md: of 2,000 tool results from real Claude Code and Codex sessions, flagged
+
+
+# Sensitivity levels for the app and `keepmum guard sensitivity injection`, measured on the GGUF in
+# keepmum's windows. GUARD.md's documents are all longer than SHORT_CHARS.
+LEVELS = {"high": Level(0.65, 0.99, 0.993, 0.017, 0.069, 0.031),
+          "medium": Level(0.8, 0.995, 0.972, 0.0, 0.05, 0.017),
+          "low": Level(0.9, 0.998, 0.938, 0.0, 0.04, 0.009),
+          "lowest": Level(0.98, 0.999, 0.882, 0.0, 0.01, 0.004)}
+SHORT_CHARS = 200  # a tool result shorter than this needs its level's `short` score to flag
+
+
+def short_threshold(threshold: float) -> float:
+    """The score a result under SHORT_CHARS needs: the `short` of the strictest level whose threshold is at
+    or below `threshold` (High's below High), and never less than `threshold` itself."""
+    bars = [v.short for v in LEVELS.values() if v.threshold <= threshold]
+    return max(threshold, max(bars, default=LEVELS["high"].short))
+
+
 WINDOW, OVERLAP, MAX_WINDOWS, TAIL_WINDOWS = 2048, 256, 16, 4
 BOS, EOS = 2, 1  # <bos>, <eos>
 BATCH = 1  # windows per request to llama-server: one at a time is the fastest here, and the smallest
@@ -274,15 +299,19 @@ class Guard:
     asked only for a new hit."""
 
     def __init__(self, mode, model=None, threshold: float = THRESHOLD, keep: int = 4096, name: str = "injection",
-                 min_chars: int = MIN_CHARS):
+                 min_chars: int = MIN_CHARS, short_chars: int = 0):
         self._mode = mode if callable(mode) else (lambda: mode)
         self.model = model if model is not None else InjectionModel()
         self.threshold = threshold
         self.name = name
         self.min_chars = min_chars
+        self.short_chars = short_chars  # the injection check's SHORT_CHARS; 0: one threshold for every length
         self._flagged: dict[bytes, dict] = {}  # text hash -> the hit, for texts flagged earlier
         self._keep = keep
         self._lock = threading.Lock()
+
+    def threshold_for(self, chars: int) -> float:
+        return short_threshold(self.threshold) if chars < self.short_chars else self.threshold
 
     @property
     def mode(self) -> str:
@@ -300,7 +329,7 @@ class Guard:
             key = _key(text)
             with self._lock:
                 seen = self._flagged.get(key)
-            if seen is not None and seen["score"] < self.threshold:
+            if seen is not None and seen["score"] < self.threshold_for(seen["chars"]):
                 seen = None  # flagged under a lower threshold than now: no longer a hit
             if seen is not None:
                 if earlier:
@@ -309,7 +338,7 @@ class Guard:
             if not new or len(text) < self.min_chars:
                 continue
             s = self.model.score(text)
-            if s < self.threshold:
+            if s < self.threshold_for(len(text)):
                 continue
             hit = {"check": self.name, "source": source, "score": s, "chars": len(text), "earlier": False}
             categories = getattr(self.model, "categories", None)

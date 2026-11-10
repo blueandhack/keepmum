@@ -168,7 +168,7 @@ keepmum guard injection warn         # check what tools return; log a possible i
 keepmum guard harm block             # check what you type; refuse a request the model flags
 keepmum guard harm warn --model 4b   # switch the harm check to Qwen3Guard 4B, the most accurate
 keepmum guard commands block         # check the shell commands in the model's replies; no download
-keepmum guard sensitivity injection low          # fewer false alarms: high (0.65, the default), medium, low, lowest, or a number
+keepmum guard sensitivity injection low          # fewer false alarms: high, medium (0.8, the default), low, lowest, or a number
 keepmum guard sensitivity harm low               # the harm check: high, medium (the default), low or lowest
 keepmum guard local add --model qwen3:8b             # Ollama: the model that answers flagged requests in local mode
 keepmum guard local add --preset lmstudio --model qwen/qwen3-14b --check harm   # another server, for one check
@@ -193,14 +193,16 @@ Where it goes is a list of local servers (`keepmum guard local add`), each a URL
 
 **Warn** sends the request at once and runs the check afterwards, so it adds no delay. A hit is logged, counted in the stats feed and audited once, with the check, the tool (for injection), the score, the length and, for harm, the model's categories (Violent, Jailbreak, …), never the text. With `[log] context` on, the Mac app's Logs page also shows, in memory only, what was flagged and what the user had typed, every masked value in them shown as its type. **Block** runs the check first. The agent gets an error that names the tool or the categories, and every retry that still carries the flagged text is refused too: rewind or `/clear` to drop it. If a check fails, block mode refuses the request and warn mode sends it.
 
-**Sensitivity.** The injection check flags a tool result scoring 0.65 or more. If it flags too much, typically when you work on security code or read pages written for agents, raise the threshold (`keepmum guard sensitivity injection medium|low|lowest|<number>`, or Settings › Checks › Sensitivity). On keepmum's test set (`bench/results/GUARD.md`: 144 injected, 115 ordinary and 101 security documents):
+**Sensitivity.** The injection check flags a tool result scoring 0.8 or more, and one under 200 characters only at 0.995 or more: in real coding-agent sessions, short results (a grep line, an error, the agent's own notices) raised most of the false alarms, and few attacks are that short. If it flags too much, typically when you work on security code or read pages written for agents, raise the threshold (`keepmum guard sensitivity injection low|lowest|<number>`, or Settings › Checks › Sensitivity). Two benchmarks: keepmum's test set (`bench/results/GUARD.md`: 144 injected, 115 ordinary and 101 security documents), and 2,000 tool results from real Claude Code and Codex sessions in [SWE-chat](https://huggingface.co/datasets/SALT-NLP/SWE-chat) with attacks from AgentDojo and four other public sets (`bench/results/guard-public-*.md`):
 
-| Level | Threshold | Injections caught | Ordinary documents flagged | Security documents flagged |
-|---|---|---|---|---|
-| High (default) | 0.65 | 99% | 2% | 7% |
-| Medium | 0.80 | 97% | 0% | 5% |
-| Low | 0.90 | 94% | 0% | 4% |
-| Lowest | 0.98 | 88% | 0% | 1% |
+| Level | Threshold (under 200 characters) | Injections caught | Ordinary documents flagged | Security documents flagged | Real tool results flagged | AgentDojo attacks caught |
+|---|---|---|---|---|---|---|
+| High | 0.65 (0.99) | 99% | 2% | 7% | 3.1% | 89% |
+| Medium (default) | 0.80 (0.995) | 97% | 0% | 5% | 1.7% | 85% |
+| Low | 0.90 (0.998) | 94% | 0% | 4% | 0.9% | 78% |
+| Lowest | 0.98 (0.999) | 88% | 0% | 1% | 0.4% | 64% |
+
+No level catches every attack: on the public sets, half or more of those hidden in code files and repository docs get through even at High. The check is a warning, not a guarantee.
 
 The harm check has the same four levels (`keepmum guard sensitivity harm …`, `[guard] harm_sensitivity`), with Medium as its default. Its models score on different scales, so it takes a level, not a number: each level flags about the same share of safe prompts on every model, and carries over when you change the model. On keepmum's harm test set (`bench/results/HARM.md`: 862 harmful and 994 safe prompts, 44 of them coding prompts that only sound harmful), harmful prompts caught / safe prompts flagged:
 

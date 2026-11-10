@@ -86,11 +86,12 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
 
     observe = LiveConfig(cfg.path, cfg, on_change=apply)
     from .commands import CommandsCheck
-    from .guard import Guard
+    from .guard import SHORT_CHARS, Guard
     from .harm import HarmModel
 
     # Models load on their first check and unload when idle; modes follow the config file.
-    injection = Guard(lambda: observe.config.guard_injection, threshold=cfg.guard_injection_threshold, name="injection")
+    injection = Guard(lambda: observe.config.guard_injection, threshold=cfg.guard_injection_threshold, name="injection",
+                      short_chars=SHORT_CHARS)
     harm_model = HarmModel(cfg.guard_harm_model, cfg.guard_harm_sensitivity)
     harm = Guard(lambda: observe.config.guard_harm, harm_model, threshold=harm_model.threshold, name="harm",
                  min_chars=8)

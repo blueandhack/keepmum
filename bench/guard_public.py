@@ -307,14 +307,23 @@ def _p(x, pct: bool = True) -> str:
     return f"{100 * x:.1f}%" if pct else f"{x:.3f}"
 
 
-def at(recs: list[dict], sc: dict, threshold: float, half: str | None = None) -> dict:
+def _flags(sc: dict, threshold: float, short: tuple[int, float] | None = None):
+    """Whether a record flags at `threshold`; with `short` (chars, threshold), one shorter than chars needs
+    that threshold instead, as keepmum's check does (keepmum.guard.SHORT_CHARS)."""
+    if short is None:
+        return lambda r: sc[r["id"]]["score"] >= threshold
+    return lambda r: sc[r["id"]]["score"] >= (short[1] if len(r["text"]) < short[0] else threshold)
+
+
+def at(recs: list[dict], sc: dict, threshold: float, half: str | None = None, short: tuple[int, float] | None = None) -> dict:
     """Per source: the share of benign documents flagged and of injected ones caught. With `half`, the
     coding-agent sources count only that half."""
+    flag = _flags(sc, threshold, short)
     out = {}
     for name in SOURCES:
         rs = [r for r in recs if r["source"] == name and r["id"] in sc and (half is None or name not in CODING or r["half"] == half)]
-        out[name] = {"benign": _rate([sc[r["id"]]["score"] >= threshold for r in rs if not r["label"]]),
-                     "injected": _rate([sc[r["id"]]["score"] >= threshold for r in rs if r["label"]]),
+        out[name] = {"benign": _rate([flag(r) for r in rs if not r["label"]]),
+                     "injected": _rate([flag(r) for r in rs if r["label"]]),
                      "n_benign": sum(1 for r in rs if not r["label"]), "n_injected": sum(1 for r in rs if r["label"])}
     return out
 
@@ -337,19 +346,20 @@ def summarize(run: dict, recs: list[dict]) -> dict:
     out["by_tool"] = {"1%": by_tool(recs, sc, t)}
     if run["detector"] == "keepmum":
         sys.path.insert(0, str(ROOT / "src"))
-        from keepmum.guard import LEVELS
+        from keepmum.guard import LEVELS, SHORT_CHARS
 
-        out["levels"] = {level: at(recs, sc, v[0]) for level, v in LEVELS.items()}
-        out["by_tool"] |= {level: by_tool(recs, sc, v[0]) for level, v in LEVELS.items()}
+        out["levels"] = {level: at(recs, sc, v.threshold, short=(SHORT_CHARS, v.short)) for level, v in LEVELS.items()}
+        out["by_tool"] |= {level: by_tool(recs, sc, v.threshold, short=(SHORT_CHARS, v.short)) for level, v in LEVELS.items()}
     return out
 
 
-def by_tool(recs: list[dict], sc: dict, threshold: float) -> dict:
+def by_tool(recs: list[dict], sc: dict, threshold: float, short: tuple[int, float] | None = None) -> dict:
     """SWE-chat's tool results flagged, per tool: (documents, share flagged)."""
+    flag = _flags(sc, threshold, short)
     tools: dict[str, list[bool]] = {}
     for r in recs:
         if r["source"] == "swe-chat" and r["id"] in sc:
-            tools.setdefault(r.get("tool") or "?", []).append(sc[r["id"]]["score"] >= threshold)
+            tools.setdefault(r.get("tool") or "?", []).append(flag(r))
     return {k: (len(v), _rate(v)) for k, v in sorted(tools.items(), key=lambda kv: -len(kv[1]))}
 
 
@@ -391,13 +401,14 @@ def render(summaries: list[dict], recs: list[dict], env: dict) -> str:
     for s in summaries:
         if "levels" in s:
             lines += ["", "## keepmum at its sensitivity levels", "",
-                      "The GGUF in llama-server as keepmum runs it, at each level's threshold (keepmum.guard.LEVELS), "
-                      "over every document.", ""] + _head("Level (threshold)", s["levels"]["high"])
+                      "The GGUF in llama-server as keepmum runs it, at each level's thresholds (keepmum.guard.LEVELS: "
+                      "the second for a document under keepmum.guard.SHORT_CHARS), over every document.", ""]
+            lines += _head("Level (thresholds)", s["levels"]["high"])
             sys.path.insert(0, str(ROOT / "src"))
             from keepmum.guard import LEVELS
 
             for level, cells in s["levels"].items():
-                lines.append(_row(f"{level} ({LEVELS[level][0]})", cells))
+                lines.append(_row(f"{level} ({LEVELS[level].threshold}, {LEVELS[level].short})", cells))
     cols = [(s["detector"], "1%") for s in summaries] + [("keepmum", lv) for s in summaries if "levels" in s for lv in ("high", "medium")]
     tools = next(iter(summaries[0]["by_tool"].values()))
     if tools:

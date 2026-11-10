@@ -544,8 +544,8 @@ def _guard_status() -> dict:
         "injection": {"mode": cfg.guard_injection, "installed": guard.installed(),
                       "server": server, "model": f"{guard.REPO}@{guard.REVISION}", "source": f"{guard.SOURCE}@{guard.RELEASE}",
                       "licence": guard.LICENCE, "threshold": cfg.guard_injection_threshold, "default_threshold": guard.THRESHOLD,
-                      "levels": {k: {"threshold": t, "caught": c, "ordinary": o, "security": s}
-                                 for k, (t, c, o, s) in guard.LEVELS.items()}},
+                      "short_chars": guard.SHORT_CHARS, "short_threshold": guard.short_threshold(cfg.guard_injection_threshold),
+                      "levels": {k: v._asdict() for k, v in guard.LEVELS.items()}},
         "commands": {"mode": cfg.guard_commands, "rules": [label for _, label, _ in RULES + SENDS]},
         "local": {"servers": [{"url": x.url, "model": x.model, "checks": list(x.checks), "api": x.api}
                               for x in cfg.guard_local_servers]},
@@ -915,10 +915,13 @@ def guard_sensitivity(check: str = typer.Argument(..., help="injection or harm")
         return
     if value is None:
         level = next((k for k, v in guard.LEVELS.items() if v[0] == cfg.guard_injection_threshold), None)
-        typer.echo(f"injection threshold: {cfg.guard_injection_threshold}" + (f" ({level})" if level else " (custom)"))
-        typer.echo("On the benchmark (bench/results/GUARD.md): caught of injected / flagged of ordinary, security documents")
-        for name, (t, c, o, s) in guard.LEVELS.items():
-            typer.echo(f"  {name:<7} {t:<5} {c:.0%} / {o:.0%}, {s:.0%}" + ("  (default)" if t == guard.THRESHOLD else ""))
+        typer.echo(f"injection threshold: {cfg.guard_injection_threshold}" + (f" ({level})" if level else " (custom)")
+                   + f", {guard.short_threshold(cfg.guard_injection_threshold)} under {guard.SHORT_CHARS} characters")
+        typer.echo("On the benchmarks: injected documents caught / ordinary, security documents flagged (bench/results/GUARD.md);")
+        typer.echo("tool results from real Claude Code and Codex sessions flagged (bench/results/guard-public-*.md)")
+        for name, v in guard.LEVELS.items():
+            typer.echo(f"  {name:<7} {v.threshold:<4} {f'({v.short} short)':<13} {v.caught:.0%} / {v.ordinary:.0%}, {v.security:.0%}  "
+                       f"{v.sessions:.1%}" + ("  (default)" if v.threshold == guard.THRESHOLD else ""))
         return
     if value in guard.LEVELS or value == "default":
         number = guard.THRESHOLD if value == "default" else guard.LEVELS[value][0]
@@ -929,7 +932,7 @@ def guard_sensitivity(check: str = typer.Argument(..., help="injection or harm")
             typer.echo(f"keepmum guard sensitivity: {value!r}: use {', '.join(guard.LEVELS)}, default, or a number", err=True)
             raise typer.Exit(2)
     if not 0.5 <= number <= 0.999:
-        typer.echo("keepmum guard sensitivity: the threshold must be 0.5-0.999 (0.65 is the default)", err=True)
+        typer.echo(f"keepmum guard sensitivity: the threshold must be 0.5-0.999 ({guard.THRESHOLD} is the default)", err=True)
         raise typer.Exit(2)
     try:
         _update_config(cfg.path, "guard", "injection_threshold", None if number == guard.THRESHOLD else number,

@@ -706,6 +706,29 @@ def test_a_raised_threshold_flags_less_and_drops_what_it_no_longer_would():
     assert g.check([("Read", "new, score 0.88 " + "x" * 40, True)]) == []
 
 
+def test_short_results_need_a_higher_score():
+    g = guard.Guard("block", Scores(), name="injection", short_chars=guard.SHORT_CHARS)  # as launch.py makes it
+    short, long = "short, score 0.99 " + "x" * 40, "long, score 0.99 " + "x" * 200
+    assert len(short) < guard.SHORT_CHARS <= len(long)
+    assert [h["source"] for h in g.check([("Bash", short, True), ("WebFetch", long, True)])] == ["WebFetch"]
+    assert g.check([("Grep", "short, score 0.996 " + "x" * 40, True)])[0]["source"] == "Grep"
+    g.threshold = guard.LEVELS["high"].threshold  # High's short bar is 0.99
+    assert g.check([("Bash", "again, score 0.99 " + "x" * 40, True)])[0]["chars"] < guard.SHORT_CHARS
+    g.threshold = guard.LEVELS["low"].threshold  # flagged earlier at High, but not at Low's 0.998
+    assert [h["source"] for h in g.check([("Bash", "again, score 0.99 " + "x" * 40, False)])] == []
+    assert guard.Guard("block", Scores(), name="harm").check([("Bash", short, True)])  # other checks: one threshold
+
+
+def test_the_short_threshold_follows_the_level():
+    assert {k: guard.short_threshold(v.threshold) for k, v in guard.LEVELS.items()} == \
+        {k: v.short for k, v in guard.LEVELS.items()}
+    assert guard.short_threshold(0.5) == guard.LEVELS["high"].short  # custom numbers: the level at or below
+    assert guard.short_threshold(0.85) == guard.LEVELS["medium"].short
+    assert guard.short_threshold(0.9995) == 0.9995  # never below the threshold itself
+    assert guard.LEVELS["medium"].threshold == guard.THRESHOLD
+    assert all(v.short > v.threshold for v in guard.LEVELS.values())
+
+
 def test_the_threshold_is_read_checked_written_and_audited(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
@@ -733,7 +756,7 @@ def test_the_threshold_is_read_checked_written_and_audited(tmp_path, monkeypatch
     for bad in (["injection", "0.2"], ["injection", "loud"], ["harm", "0.9"]):
         assert cli.invoke(app, ["guard", "sensitivity", *bad]).exit_code == 2, bad
     shown = cli.invoke(app, ["guard", "sensitivity", "injection"]).stdout
-    assert "0.65 (high)" in shown and "lowest" in shown
+    assert "0.8 (medium), 0.995 under 200 characters" in shown and "lowest" in shown
     up, down = config_changes({"injection_threshold": 0.65}, {"injection_threshold": 0.9}), \
         config_changes({"injection_threshold": 0.9}, {"injection_threshold": 0.8})
     assert up[0]["weakens"] is True and down[0]["weakens"] is False
