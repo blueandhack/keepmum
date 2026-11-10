@@ -1,0 +1,91 @@
+name: Worker
+
+# keepmum.app's counting Worker (worker/README.md).
+#
+# - test: the Worker's tests (worker/test, an in-memory D1), on every change to worker/.
+# - deploy: on main, every run, schema.sql first (it only creates what is missing), then the Worker. Needs the
+#   repository secret CLOUDFLARE_API_TOKEN (a token with Workers Scripts and D1 edit rights on the
+#   account) and, if the token reaches more than one account, CLOUDFLARE_ACCOUNT_ID. Without the
+#   token the job fails, saying so: mac/release.sh checks for a successful deploy before a release.
+# - release: when the update feed changes on main, asks keepmum.app for it until the new version is
+#   there (GitHub's raw files and Cloudflare each cache it for up to five minutes). The Worker notes
+#   a version it sees for the first time, with GitHub's download counts, so the dashboard has the
+#   release within minutes, not at the next six-hourly note. This request is not counted (curl).
+on:
+  push:
+    branches: [main]
+    paths: ["worker/**", "mac/appcast.xml", ".github/workflows/worker.yml"]
+  pull_request:
+    paths: ["worker/**", ".github/workflows/worker.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  WRANGLER_VERSION: 4.154.0
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24  # node:sqlite, for the in-memory D1
+      - run: npm test
+        working-directory: worker
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # Every run on main deploys, a feed-only change too: the same code again changes nothing, and
+      # so any successful run means main's Worker is live (mac/release.sh checks for one).
+      - name: Schema, then the Worker
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::No CLOUDFLARE_API_TOKEN secret, so the Worker was not deployed. Add one (worker/README.md, Deploy)."
+            exit 1
+          fi
+          npx --yes "wrangler@$WRANGLER_VERSION" d1 execute keepmum-counts --remote --file schema.sql
+          npx --yes "wrangler@$WRANGLER_VERSION" deploy
+
+  release:
+    needs: deploy
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Let keepmum.app note the new release
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if git cat-file -e "$BEFORE^{commit}" 2>/dev/null && git diff --quiet "$BEFORE" HEAD -- mac/appcast.xml; then
+            echo "The feed did not change."; exit 0
+          fi
+          version=$(grep -o '<sparkle:shortVersionString>[^<]*' mac/appcast.xml | head -1 | cut -d'>' -f2)
+          echo "Waiting for keepmum.app to serve $version"
+          for i in $(seq 1 24); do
+            if curl -fsS https://keepmum.app/appcast.xml | grep -q "<sparkle:shortVersionString>$version<"; then
+              echo "keepmum.app serves $version: the Worker has noted it."
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::warning::keepmum.app did not serve $version within 12 minutes; the Worker notes it at the next app check or six-hourly note."

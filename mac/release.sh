@@ -6,6 +6,7 @@
 #   SKIP_LIVE=1 ./release.sh      without the live e2e run (e2e/release-check.sh: real models on API
 #                                 keys from 1Password, ~$0.15), when the keys are not at hand
 #   APP_OUT=build/release/Keepmum.app ./release.sh   build there, leaving build/Keepmum.app (an app in use) alone
+#   SKIP_WORKER=1 ./release.sh    without checking that keepmum.app's counting Worker is deployed
 #
 # Needs, once (see mac/README.md, "Releasing"):
 #   - a "Developer ID Application" certificate in the login Keychain
@@ -65,6 +66,23 @@ notarize() {
 }
 
 echo "== keepmum $VERSION"
+# keepmum.app's counting Worker (worker/) must be live before the app that talks to it ships: a
+# release can send it something new (0.1.0a7: the macOS version and chip). .github/workflows/worker.yml
+# deploys it from main; this checks that a deploy succeeded at or after the last change to worker/.
+if [ -z "${SKIP_WORKER:-}" ]; then
+  changed=$(git -C "$ROOT" log -1 --format=%H -- worker)
+  deployed=""
+  for sha in $(gh run list --repo blueandhack/keepmum --workflow worker.yml --branch main --status success \
+                 --limit 30 --json headSha --jq '.[].headSha' 2>/dev/null); do
+    if git -C "$ROOT" merge-base --is-ancestor "$changed" "$sha" 2>/dev/null; then deployed=$sha; break; fi
+  done
+  if [ -z "$deployed" ]; then
+    echo "keepmum.app's Worker is not deployed with the last change to worker/ (${changed:0:9}): push main and" >&2
+    echo "let .github/workflows/worker.yml deploy it, or run it by hand (worker/README.md); SKIP_WORKER=1 skips this" >&2
+    exit 1
+  fi
+  echo "keepmum.app's Worker: deployed at ${deployed:0:9}"
+fi
 (cd "$ROOT" && uv run --frozen pytest -q -p no:cacheprovider)
 # The live suite: real agents and models through keepmum (e2e/README.md). A failure stops the
 # release, as a failing test does; SKIP_LIVE=1 skips it, and says so.
