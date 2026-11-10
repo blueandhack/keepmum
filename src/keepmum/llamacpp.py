@@ -1,13 +1,17 @@
 """llama-server (llama.cpp), the runtime of both optional checks: found, started, asked, stopped.
 
 Each check's model runs in a llama-server process of its own on a free local port, started on the
-first check and stopped when idle (guard.Idle). The Mac app bundles a build from a pinned llama.cpp
+first check and stopped when idle (guard.Idle). It never outlives keepmum: a small sh supervisor
+(SUPERVISE) stops it within seconds of keepmum's process going away, however it went (macOS has no
+parent-death signal), and keepmum stops it at exit. Before, a keepmum that exited first, as
+`keepmum claude` does at the end of a session, left the model running and holding its memory. The Mac app bundles a build from a pinned llama.cpp
 (native/llama-server/build.sh) and points KEEPMUM_LLAMA_SERVER at it; on the command line, keepmum
 uses its own copy or Homebrew's.
 """
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shutil
@@ -20,6 +24,20 @@ from pathlib import Path
 from .detect.pfserve import data_dir
 
 INSTALL_HINT = "brew install llama.cpp, or set KEEPMUM_LLAMA_SERVER"
+# Runs the server ("$@") while keepmum's process ($1) lives: stops it when keepmum is gone (checked
+# every POLL_S), when asked to stop (TERM, INT), or ends when the server ends.
+POLL_S = 2
+SUPERVISE = ('keepmum=$1; shift; "$@" & server=$!; '
+             'trap \'kill "$server" 2>/dev/null; wait "$server"; exit 0\' TERM INT HUP; '
+             'while kill -0 "$keepmum" 2>/dev/null && kill -0 "$server" 2>/dev/null; do sleep ' + str(POLL_S) + ' & wait $!; done; '
+             'kill "$server" 2>/dev/null; wait "$server"')
+_running: set = set()  # Servers started and not stopped, for the exit handler
+
+
+@atexit.register
+def _stop_all() -> None:
+    for server in list(_running):
+        server.stop()
 
 
 def find_server() -> Path | None:
@@ -50,9 +68,11 @@ class Server:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         self.url = f"http://127.0.0.1:{port}"
-        self._proc = subprocess.Popen([str(self.server), "-m", str(self.model), "--host", "127.0.0.1", "--port", str(port),
-                                       "-ngl", "99", "--no-webui", *self.args],
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        command = [str(self.server), "-m", str(self.model), "--host", "127.0.0.1", "--port", str(port),
+                   "-ngl", "99", "--no-webui", *self.args]
+        self._proc = subprocess.Popen(["/bin/sh", "-c", SUPERVISE, "keepmum-llama", str(os.getpid()), *command],
+                                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _running.add(self)
         deadline = time.monotonic() + self.START_S
         while time.monotonic() < deadline and self._proc.poll() is None:
             try:
@@ -70,10 +90,11 @@ class Server:
             return json.loads(r.read())
 
     def stop(self) -> None:
+        _running.discard(self)
         if self._proc is not None:
-            self._proc.terminate()
+            self._proc.terminate()  # the supervisor stops the server, then exits
             try:
-                self._proc.wait(timeout=5)
+                self._proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self._proc.kill()
         self._proc = None
