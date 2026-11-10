@@ -58,6 +58,9 @@ PRESETS = {"ollama": ("Ollama", "http://localhost:11434"), "lmstudio": ("LM Stud
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
 SKILL_FILE = "SKILL.md"  # a skill folder's file, as in Claude Code
 MAX_SKILL_CHARS = 20_000  # per skill: a local model's context is small, and the conversation comes after
+# Responses input items that offer the model tools (Codex 0.16x sends its tool list as one): the local
+# model gets none, and servers that do not know the type refuse the whole request.
+TOOL_ITEMS = ("additional_tools",)
 
 
 @dataclass(frozen=True)
@@ -269,6 +272,8 @@ def prepare(body: dict, api: str, model: str, route: LocalRoute, skills: str = "
     elif api == "responses":
         for key in ("tools", "tool_choice", "parallel_tool_calls", "previous_response_id"):
             data.pop(key, None)
+        if isinstance(data.get("input"), list):
+            data["input"] = [i for i in data["input"] if not (isinstance(i, dict) and i.get("type") in TOOL_ITEMS)]
         instructions = data.get("instructions")
         data["instructions"] = text + ("\n\n" + instructions if isinstance(instructions, str) and instructions else "")
     return data

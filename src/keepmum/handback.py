@@ -18,9 +18,11 @@ the conversation with the replacement where the result was. It never gets the re
 user's own (how to edit the result, what to keep). The injection check's skills (`local_skills`)
 follow it.
 
-What the local model writes is scanned like the rest of the request: masked, and checked by the
-injection check as a tool result. A summary or rewrite the check flags is not handed back: that turn
-is answered locally, as with stay. An answer it flags keeps the next turn local too. Only the injection
+What the local model writes is checked by the injection check on its own, then masked like the rest
+of the request. keepmum's line around it, and its notices, are not checked: they are keepmum's, and
+their wording (instructions, the agent) reads like an injection to the model. A summary or rewrite the
+check flags is not handed back: that result's turns are answered locally, as with stay, and it is not
+asked for again. An answer it flags keeps the next turn local too. Only the injection
 check hands back. A harm hit is what the user typed, and handing it back would send it, reworded, to
 the provider the check kept it from.
 """
@@ -119,6 +121,8 @@ class Handbacks:
         self._by: OrderedDict[bytes, tuple[int, str]] = OrderedDict()  # text hash -> (its length, replacement)
         self._lengths: Counter[int] = Counter()  # of the flagged texts: most strings are passed over on length
         self._made: dict[bytes, None] = {}
+        # Flagged results whose summary or rewrite the check flagged: they stay local, not asked again.
+        self._kept: OrderedDict[bytes, None] = OrderedDict()
         self._keep = keep
         self._lock = threading.Lock()
 
@@ -141,6 +145,16 @@ class Handbacks:
                 self._lengths[n] -= 1
                 if not self._lengths[n]:
                     del self._lengths[n]
+
+    def keep_local(self, text: str) -> None:
+        with self._lock:
+            self._kept[_key(text)] = None
+            while len(self._kept) > self._keep:
+                self._kept.popitem(last=False)
+
+    def kept(self, text: str) -> bool:
+        with self._lock:
+            return _key(text) in self._kept
 
     def made(self, text: str) -> bool:
         """Whether keepmum wrote this text as a replacement."""

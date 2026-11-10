@@ -50,7 +50,7 @@ def answer(body: dict, model: str) -> httpx.Response:
 
 
 def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", servers=None, local=None, harm=False,
-        skills=None, handback=None):
+        skills=None, handback=None, scorer=None):
     """Requests through a proxy whose local servers are mocked: `local` maps a port to a handler
     taking (request, body), else every server on localhost answers like Ollama."""
     seen = {"upstream": [], "local": [], "sent": []}
@@ -71,12 +71,12 @@ def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", se
 
     async def go():
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        checks = [guard.Guard(mode, Flags(), name="harm" if harm else "injection")]
+        checks = [guard.Guard(mode, scorer or Flags(), name="harm" if harm else "injection")]
         proxy = Proxy(Redactor(Pipeline(RulesDetector(), None), Vault(secrets.token_bytes(32))), upstream="http://up",
                       client=client, stats_token="t", guards=checks,
                       local=lambda check: servers_for(servers, check), gemini_upstream="http://up",
                       local_skills=lambda check: skills_for(skills or [], check),
-                      handback=(lambda: handback) if handback else None)
+                      handback=handback if callable(handback) else (lambda: handback) if handback else None)
         agent = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
         rs = [await agent.post(path, json=b, headers={"x-api-key": "sk-ant-secret-key", "anthropic-version": "2023-06-01"})
               for b in bodies]
@@ -718,3 +718,23 @@ def test_the_cli_sets_the_handback_and_the_audit_log_marks_it(tmp_path, monkeypa
     r = CliRunner().invoke(app, ["guard", "local", "handback", "stay", "--instructions", ""])
     assert r.exit_code == 0 and "local_handback" not in path.read_text()
     assert CliRunner().invoke(app, ["guard", "local", "handback", "cloud"]).exit_code == 2
+
+
+def test_codex_tool_list_items_never_reach_the_local_model():
+    """Codex 0.16x sends its tools as an `additional_tools` input item; Ollama refused the whole request
+    for it (found by e2e/cases/local-01 with a real Codex)."""
+    body = codex(ATTACK)
+    body["input"].insert(0, {"type": "additional_tools", "role": "developer", "tools": [{"type": "custom", "name": "exec"}]})
+    out = prepare(body, "responses", "m", LocalRoute("injection", [{"source": "shell"}]))
+    assert [i.get("type") for i in out["input"]] == ["message", "function_call", "function_call_output"]
+    assert "additional_tools" in json.dumps(body)  # the agent's own request is not changed
+
+
+def test_a_server_that_refuses_the_requests_shape_is_asked_in_chat_completions():
+    def picky(request, body):
+        if request.url.path == "/v1/responses":
+            return httpx.Response(400, json={"error": {"message": 'input[3]: unknown input item type: "custom_tool_call"'}})
+        return chat_only(request, body)
+    rs, seen, _ = run("local", [codex(ATTACK)], servers=[Server("http://localhost:8080", "m")], local={8080: picky},
+                      path="/openai/v1/responses")
+    assert rs[0].json()["object"] == "response" and [p for _, p, _, _ in seen["local"]] == ["/v1/responses", "/v1/chat/completions"]

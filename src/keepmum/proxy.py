@@ -402,9 +402,15 @@ class Proxy:
                 log.error("blocked %s: scan failed (%s)", path, type(e).__name__)
                 self._record(path, "blocked", 500, origin=origin)
                 return api_error(500, "api_error", "could not scan this request, so it was not sent")
+            # keepmum's own replacements are not tool output: what the local model wrote in them was
+            # checked on its own (`_hand_back`), and their wording reads like an injection to the model.
+            texts["injection"] = [i for i in texts.get("injection") or [] if not self.handbacks.made(i[1])]
             refused = await self._guarded(texts, path, origin, kind="masked" if new else "clean", api=t.api)
             if isinstance(refused, LocalRoute):
                 if first is None and (handed := await self._hand_back(refused, texts, path)):
+                    if handed.get("kept"):  # what the local model wrote was flagged: this turn stays local
+                        self.stats.note_guard(refused.entries, handed_back=handed)
+                        return await self._answer_locally(request, t, original, refused, origin, texts)
                     first, (body, _) = refused, self._handed_back(original)
                     continue  # scanned again: what the local model wrote is checked like any result
                 if first is not None:
@@ -617,8 +623,8 @@ class Proxy:
         if route.check != "injection" or strategy not in ("withhold", *WRITTEN):
             return None
         flagged = self._flagged_texts(route, texts)
-        if not flagged or any(self.handbacks.made(text) for text in flagged):
-            return None  # what keepmum wrote in a result's place was flagged: it stays local
+        if not flagged or any(self.handbacks.kept(text) for text in flagged):
+            return None  # what the local model wrote for it was flagged before: it stays local
         if strategy == "withhold":
             for text, source in flagged.items():
                 self.handbacks.add(text, handback_notice(strategy, source))
@@ -628,11 +634,23 @@ class Proxy:
         skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
         prompt = (texts.get("harm") or [(None, None, None)])[-1][1]
         done, server = [], None
+        guard = next((g for g in self.guards if g.name == "injection"), None)
         for text, source in flagged.items():
             got = await self._write_locally(strategy, text, source, prompt, instructions, skills, path)
             if got is None:
                 return None
             out, server = got
+            try:  # what the local model wrote, on its own: keepmum's line around it is not checked
+                hits = await anyio.to_thread.run_sync(guard.check, [("the local model", out, True)], True) if guard else []
+            except Exception as e:
+                log.warning("%s: the local %s was not checked (%s); answered locally", path, strategy, type(e).__name__)
+                return None
+            if hits:
+                for t in flagged:
+                    self.handbacks.keep_local(t)
+                log.info("%s: the injection check flagged the local model's %s; answered locally", path, strategy)
+                return {"strategy": strategy, "model": server.model, "url": server.url,
+                        "kept": "what the local model wrote was flagged too"}
             done.append((text, handback_wrap(strategy, source, out, custom=bool(instructions))))
         for text, replacement in done:
             self.handbacks.add(text, replacement)
@@ -745,8 +763,12 @@ class Proxy:
                     except httpx.HTTPError:
                         detail = ""
                     await resp.aclose()
-                    if way == "native" and len(ways) > 1 and resp.status_code in (404, 405, 501):
-                        continue  # perhaps it does not speak this API: ask in Chat Completions
+                    if way == "native" and len(ways) > 1 and resp.status_code in (400, 404, 405, 422, 501):
+                        # It does not speak this API, or not this request's shape of it (Ollama's
+                        # Responses API refuses item types it does not know): ask in Chat Completions.
+                        log.info("%s: %s at %s refused the agent's API (HTTP %d%s); asking in Chat Completions",
+                                 path, server.model, server.url, resp.status_code, f": {detail}" if detail else "")
+                        continue
                     failures.append(f"{server.model} at {server.url}: HTTP {resp.status_code}" + (f" ({detail})" if detail else ""))
                     break
                 content = None
