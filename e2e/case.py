@@ -8,6 +8,12 @@ Cases are TOML files in e2e/cases/. Templates in any string:
   {{cwd}}            the workspace path as the model sees it in the request (scripts only)
   {{seen:text}}      text (templates allowed) as the model saw it: every value keepmum masked in
                      the run replaced by its placeholder (scripts only: a file name from a listing)
+
+In `config` only, filled when the run starts:
+
+  {{local}}          the local model server's URL, through the tap (local mode's `local_servers`)
+  {{local_model}}    the model there (KEEPMUM_E2E_LOCAL_MODEL)
+  {{ws}}             the workspace's path on disk
 """
 
 from __future__ import annotations
@@ -83,6 +89,9 @@ class Case:
     # per agent ({codex = "…"}) when only some agents have it.
     known_gap: str | dict | None = None
     mcp: bool = False  # the agent gets the stub MCP server `notes` (mcp_notes.py)
+    # What the run needs on this Mac, else it is skipped: "injection" (the injection check's model and
+    # llama-server), "local" (a local model server with KEEPMUM_E2E_LOCAL_MODEL).
+    needs: list[str] = field(default_factory=list)
     timeout: int = 300
     raw: dict = field(default_factory=dict)
 
@@ -144,7 +153,7 @@ def load_case(path: Path) -> Case:
         prompt=raw.get("prompt", "").strip(), values=values, plain=raw.get("plain", []),
         files=raw.get("files", {}), workspace_dir=raw.get("workspace_dir", "ws"), script=raw.get("script", []),
         expect=raw.get("expect", {}), known_gap=raw.get("known_gap"),
-        mcp=bool(raw.get("mcp", False)), timeout=raw.get("timeout", 300), raw=raw,
+        mcp=bool(raw.get("mcp", False)), needs=list(raw.get("needs", [])), timeout=raw.get("timeout", 300), raw=raw,
     )
 
 

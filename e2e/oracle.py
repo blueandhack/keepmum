@@ -12,8 +12,11 @@ Every finding has a class, worst first:
   shown       a placeholder in something the user sees but that changes nothing (reasoning summaries)
   unexercised live only: a value the case says is masked never reached the model at all, in any form
               (it copied the value with a command without reading it); the run tests less than meant
+  kept        local mode: the injection check flagged what the real local model wrote in a result's
+              place, so the turn stayed local (`handback_may_keep`): the check held, the hand-back was
+              not exercised
 
-leak, residue, false-mask, task and health fail a run; shown and unexercised are reported only.
+leak, residue, false-mask, task and health fail a run; shown, unexercised and kept are reported only.
 """
 
 from __future__ import annotations
@@ -74,9 +77,11 @@ def forms(value: str) -> list[bytes]:
 
 def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, bytes], after: dict[str, bytes],
           transcript: Transcript, masked: dict[str, tuple[str, str]], keepmum: dict, exit_code: int | None,
-          served: list[dict] | None, mcp_log: str | None = None) -> list[Finding]:
+          served: list[dict] | None, mcp_log: str | None = None, local: list[Exchange] | None = None) -> list[Finding]:
     """`masked`: placeholder -> (type, value) for every value keepmum masked in the run (its vault).
-    `mcp_log`: what the stub MCP server received (case.mcp), one JSON line per call."""
+    `mcp_log`: what the stub MCP server received (case.mcp), one JSON line per call. `exchanges` are
+    what went to the provider; `local`, what keepmum asked of the local model server (local mode),
+    which stays on this Mac and is not a leak."""
     out: list[Finding] = []
     sent = [(i, ex) for i, ex in enumerate(exchanges)]
 
@@ -234,6 +239,10 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
         if case.resolve(want, salt) not in transcript.final:
             out.append(Finding("task", f"the answer does not say {case.shown(case.resolve(want, salt))!r}", "answer"))
 
+    # A local model may write a summary that repeats the planted text: the check keeps that turn local.
+    kept_local = bool(case.expect.get("handback_may_keep")) and any(h["kept"] for h in keepmum.get("local", []))
+    out += _local_mode(case, salt, exchanges, local or [], keepmum, kept_local)
+
     # health
     if exit_code not in (0, None) and not case.expect.get("agent_may_fail"):
         out.append(Finding("health", f"the agent exited {exit_code}", "agent"))
@@ -253,13 +262,75 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
         if e["path"].endswith("/api/hello") and e["outcome"] == "forwarded":
             continue
         out.append(Finding("health", f"keepmum answered {e['status']} ({e['outcome']}) for {e['path']}", "keepmum"))
-    if served is not None and case.script:
+    if served is not None and case.script and not kept_local:
         last = max((s["turn"] for s in served), default=-1)
         if last < len(case.script) - 1:
             out.append(Finding("health", f"the script stopped at turn {last + 1} of {len(case.script)}: "
                                          "the agent ended early or a tool call failed", "script"))
     for err in transcript.errors[:3]:
         out.append(Finding("health", f"agent error: {case.shown(err)[:300]}", "agent"))
+    return out
+
+
+def _local_mode(case: Case, salt: bytes, exchanges: list[Exchange], local: list[Exchange], keepmum: dict,
+                kept_local: bool = False) -> list[Finding]:
+    """Local mode's expectations (local.py, handback.py):
+
+      local            checks that sent a turn to the local model, which answered it or wrote what went
+                       to the provider in a result's place
+      handed_back      how the conversation went back to the provider: summary, rewrite, withhold, answer
+      local_calls_min  requests the local model server must receive
+      local_contains   text the local model server must receive (templates)
+      local_lacks      text it must not receive (a skill for another check)
+      provider_lacks   text the provider must never receive, in any form (a planted instruction)
+      provider_contains  text some request to the provider must hold (what replaced a result)
+      handback_may_keep  the check may flag what the real local model wrote, keeping the turn local:
+                       then a local answer is required in place of handed_back and provider_contains
+    """
+    out: list[Finding] = []
+    e = case.expect
+    hits = keepmum.get("local", [])
+    for check in e.get("local", []):
+        mine = [h for h in hits if h["check"] == check]
+        if not mine:
+            out.append(Finding("task", f"keepmum's {check} check never sent a turn to the local model", "keepmum"))
+        elif not any(h["answered"] or (h["handed_back"] and not h["kept"]) for h in mine):
+            why = next((h["error"] or h["kept"] for h in mine if h["error"] or h["kept"]), "no local answer")
+            out.append(Finding("task", f"the local model did not take the {check} check's turn: {why}", "keepmum"))
+    if kept_local and not any(h["handed_back"] and not h["kept"] for h in hits):
+        out.append(Finding("kept", f"the check flagged the local model's {e.get('handed_back', 'text')}, so the turn "
+                                   "stayed local: the check held, the hand-back was not exercised", "keepmum"))
+        if not any(h["answered"] for h in hits):
+            out.append(Finding("task", "the turn stayed local, but no local model answered it", "keepmum"))
+        e = {k: v for k, v in e.items() if k not in ("handed_back", "provider_contains")}
+    if want := e.get("handed_back"):
+        got = sorted({h["handed_back"] for h in hits if h["handed_back"] and not h["kept"]})
+        if want not in got:
+            kept = next((h["kept"] for h in hits if h["kept"]), None)
+            out.append(Finding("task", f"nothing was handed back as {want}" + (f" ({kept})" if kept else f" (got {got or 'none'})"),
+                               "keepmum"))
+    if len(local) < e.get("local_calls_min", 0):
+        out.append(Finding("task", f"the local model server got {len(local)} request(s), not {e['local_calls_min']}", "local"))
+    local_text = b"".join(ex.sent() for ex in local)
+    for want in e.get("local_contains", []):
+        text = case.resolve(want, salt)
+        if not any(f in local_text for f in forms(text)):
+            out.append(Finding("task", f"the local model never got {case.shown(text)[:80]!r}", "local"))
+    for want in e.get("local_lacks", []):
+        text = case.resolve(want, salt)
+        if any(f in local_text for f in forms(text)):
+            out.append(Finding("task", f"the local model got {case.shown(text)[:80]!r}, which is not for this turn", "local"))
+    for want in e.get("provider_lacks", []):
+        text = case.resolve(want, salt)
+        for i, ex in enumerate(exchanges):
+            if any(f in ex.sent() for f in forms(text) if len(f) >= 4):
+                out.append(Finding("leak", f"the provider got {case.shown(text)[:80]!r}", f"request {i}: {ex.method} {ex.path}"))
+                break
+    sent = b"".join(ex.sent() for ex in exchanges)
+    for want in e.get("provider_contains", []):
+        text = case.resolve(want, salt)
+        if not any(f in sent for f in forms(text)):
+            out.append(Finding("task", f"no request to the provider held {case.shown(text)[:80]!r}", "requests"))
     return out
 
 

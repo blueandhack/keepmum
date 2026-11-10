@@ -20,6 +20,11 @@ RESULTS = Path(__file__).parent / "results"
 PROVIDERS = {"anthropic": "https://api.anthropic.com", "openai": "https://api.openai.com", "chatgpt": "https://chatgpt.com",
              "antigravity": "https://daily-cloudcode-pa.googleapis.com", "gemini": "https://generativelanguage.googleapis.com",
              "deepseek": "https://api.deepseek.com"}
+# Local mode's server (Ollama by default) and model: the tap sends `/local/...` there in every mode, so
+# what keepmum asks of it is recorded, apart from what goes to the provider.
+LOCAL_URL = os.environ.get("KEEPMUM_E2E_LOCAL_URL", "http://localhost:11434").rstrip("/")
+LOCAL_MODEL = os.environ.get("KEEPMUM_E2E_LOCAL_MODEL", "qwen3:0.6b")
+GUARD_DIR = Path(REAL_HOME) / ".local" / "share" / "keepmum" / "guard"
 
 
 def _environment() -> None:
@@ -41,6 +46,27 @@ def model_ready() -> bool:
         return False
 
 
+def missing_needs(case) -> str | None:
+    """Why this Mac cannot run the case (`needs`), or None."""
+    if "injection" in case.needs:
+        from keepmum import guard
+        from keepmum.llamacpp import find_server
+
+        if not guard.installed():  # HOME is still this Mac's own here
+            return "needs the injection check's model (keepmum guard setup injection)"
+        if find_server() is None:
+            return "needs llama-server (brew install llama.cpp)"
+    if "local" in case.needs:
+        from keepmum.local import models
+
+        have = models(LOCAL_URL)
+        if have is None:
+            return f"needs a local model server at {LOCAL_URL} (KEEPMUM_E2E_LOCAL_URL)"
+        if LOCAL_MODEL not in have:
+            return f"needs {LOCAL_MODEL} at {LOCAL_URL} (KEEPMUM_E2E_LOCAL_MODEL)"
+    return None
+
+
 def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str], keep: Path | None) -> dict:
     from keepmum import launch
     from keepmum.config import load
@@ -56,9 +82,12 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
     salt = secrets.token_bytes(32)
     (cfg_dir / "salt").write_text(salt.hex())
     os.chmod(cfg_dir / "salt", 0o600)
-    (cfg_dir / "config.toml").write_text(case.config)
     ws = scratch / "w" / case.resolve(case.workspace_dir, salt)
     ws.mkdir(parents=True)
+    if "injection" in case.needs and GUARD_DIR.exists():  # the models, read only, from this Mac's own folder
+        data = khome / ".local" / "share" / "keepmum"
+        data.mkdir(parents=True)
+        (data / "guard").symlink_to(GUARD_DIR)
     for rel, content in case.files.items():
         p = ws / case.resolve(rel, salt)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -95,8 +124,11 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         targets = dict.fromkeys(PROVIDERS, scripted.app)
     else:
         targets = dict(PROVIDERS)
+    targets["local"] = LOCAL_URL
     tap = Tap(targets)
     tap_server = ThreadServer(tap.app).start()
+    (cfg_dir / "config.toml").write_text(case.config.replace("{{local}}", f"{tap_server.url}/local")
+                                         .replace("{{local_model}}", LOCAL_MODEL).replace("{{ws}}", str(ws)))
     servers = [tap_server]
     out = scratch / "out"
     out.mkdir()
@@ -138,7 +170,12 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
                    "warned": sorted({h.get("check") for h in proxy.stats.snapshot()["guard"]["hits"]
                                      if h.get("action") == "warned"}),
                    "errors": [{"path": e.get("path"), "status": e.get("status"), "outcome": e.get("outcome")}
-                              for e in events if (e.get("status") or 0) >= 400]}
+                              for e in events if (e.get("status") or 0) >= 400],
+                   # Hits local mode acted on: whether a local model answered, and what was handed back.
+                   "local": [{"check": h.get("check"), "answered": bool(h.get("answered_by")),
+                              "handed_back": (h.get("handed_back") or {}).get("strategy"),
+                              "kept": (h.get("handed_back") or {}).get("kept"), "error": h.get("local_error")}
+                             for h in proxy.stats.snapshot()["guard"]["hits"] if h.get("action") == "local"]}
     finally:
         for s in reversed(servers):
             s.stop()
@@ -146,8 +183,10 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
     after = oracle.snapshot(ws)
     transcript = agent.transcript(stdout, out)
     mcp_log = (out / "mcp.jsonl").read_text() if (out / "mcp.jsonl").exists() else ("" if case.mcp else None)
-    findings = oracle.judge(case, salt, tap.exchanges, before, after, transcript, masked, keepmum, code,
-                            scripted.served if scripted else None, mcp_log)
+    provider = [ex for ex in tap.exchanges if ex.target != "local"]
+    local = [ex for ex in tap.exchanges if ex.target == "local"]  # stays on this Mac: real values belong there
+    findings = oracle.judge(case, salt, provider, before, after, transcript, masked, keepmum, code,
+                            scripted.served if scripted else None, mcp_log, local)
     failed = [f for f in findings if f.failing()]
     # The provider refused to answer (a usage limit): the run says nothing about keepmum.
     limited = any(e["status"] == 429 for e in keepmum["errors"]) and not any(f.cls == "leak" for f in findings)
@@ -157,11 +196,11 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         else ("fail" if failed else "pass"),
         "reason": "the provider's usage limit (429): nothing was tested" if limited else None,
         "known_gap": case.gap(agent.name), "findings": oracle.as_dicts(findings), "exit": code,
-        "requests": len(tap.exchanges), "masked": len(masked),
+        "requests": len(provider), "local_requests": len(local), "masked": len(masked),
         "turns": [s["turn"] for s in scripted.served] if scripted else None,
         "tools": sorted(scripted.tools) if scripted else None,
         "code_mode": next((s.get("code_mode") for s in (scripted.served if scripted else []) if "code_mode" in s), None),
-        "usage": cost.of(tap.exchanges).as_dict() if mode == "live" else None,
+        "usage": cost.of(provider).as_dict() if mode == "live" else None,
     }
     if keep is not None:
         d = keep / f"{case.id}.{agent.name}.{mode}.{rep}"
@@ -172,7 +211,11 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
             "target": ex.target, "method": ex.method, "path": ex.path, "status": ex.status,
             "headers": sorted(ex.headers),  # names only: values may be the agent's login
             "body": case.shown(ex.body.decode("utf-8", "replace")),
-            "reply": case.shown(ex.reply.decode("utf-8", "replace"))}) + "\n" for ex in tap.exchanges))
+            "reply": case.shown(ex.reply.decode("utf-8", "replace"))}) + "\n" for ex in provider))
+        if local:
+            (d / "local.jsonl").write_text("".join(json.dumps({
+                "path": ex.path, "status": ex.status, "body": case.shown(ex.body.decode("utf-8", "replace")),
+                "reply": case.shown(ex.reply.decode("utf-8", "replace"))}) + "\n" for ex in local))
         if mcp_log:
             (d / "mcp.jsonl").write_text(case.shown(mcp_log))
         (d / "workspace.json").write_text(json.dumps({case.shown(k): case.shown(v.decode("utf-8", "replace"))
@@ -256,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
                 reason = f"{agent.name} signs in with Google, not an OpenAI or Anthropic key"
             elif case.mcp and args.mode not in agent.mcp_modes:
                 reason = f"{agent.name} gets no MCP server in {args.mode} runs"
+            elif missing := missing_needs(case):
+                reason = missing
             elif case.model:
                 model_ok = model_ready() if model_ok is None else model_ok
                 if not model_ok:

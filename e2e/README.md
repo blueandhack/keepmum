@@ -167,6 +167,7 @@ Whatever a case asks, `oracle.py` checks these, worst first:
 | `health` | the agent failed or timed out, keepmum met a placeholder it could not restore, keepmum answered with an error, or the script stopped early |
 | `shown` | (reported, not failing) a placeholder in something the user sees but that changes nothing, such as a reasoning summary |
 | `unexercised` | (reported, not failing; live only) a value the case says is masked never reached the model in any form: it copied the value with a command it did not read the output of, so the run tested less than the case means |
+| `kept` | (reported, not failing) local mode: the injection check flagged what the real local model wrote in a result's place (`handback_may_keep`), so the turn stayed local. The check held; the hand-back was not exercised that run |
 
 ## Writing a case
 
@@ -222,6 +223,40 @@ web_calls_min = 1                                  # web searches or fetches the
 warned = ["script"]                               # checks that must warn (let the request through, flagged)
 warn_shown = true                                  # the agent must show the user a `keepmum: …` note
 ```
+
+### Local mode
+
+Cases `local-*` cover the injection check's local mode with the real injection model and a real local
+model server: a flagged result answered on this Mac, handed back as a summary, a rewrite or a notice,
+and the user's skills. The tap sends `/local/…` to `KEEPMUM_E2E_LOCAL_URL` (default Ollama,
+`http://localhost:11434`) in both modes, so what keepmum asks of it is recorded; those requests stay
+on the Mac and are not checked for leaks. The model is `KEEPMUM_E2E_LOCAL_MODEL` (default `qwen3:0.6b`:
+`ollama pull qwen3:0.6b`).
+
+```toml
+needs = ["injection", "local"]   # skipped without the injection model and llama-server, or the local model
+config = """
+[guard]
+injection = "local"
+local_servers = [{ url = "{{local}}", model = "{{local_model}}" }]   # filled in when the run starts
+local_skills = [{ path = "{{ws}}/.skills/careful" }]                  # {{ws}}: the workspace on disk
+"""
+
+[expect]
+local = ["injection"]            # checks whose turn a local model took
+handed_back = "summary"          # summary, rewrite, withhold or answer
+handback_may_keep = true         # the check may flag what the local model wrote: then a local answer
+                                 # stands in for handed_back and provider_contains (reported as `kept`)
+local_calls_min = 1
+local_contains = ["…"]           # text the local model server must get
+local_lacks = ["…"]              # text it must not get (a skill for another check)
+provider_contains = ["…"]        # text some request to the provider must hold
+provider_lacks = ["…"]           # text the provider must never get, in any form: a `leak` if it does
+```
+
+A small local model sometimes copies the planted text into its summary; the check then keeps the turn
+local, which is right, so those cases allow it. Claude Code and Codex run them: agy speaks Gemini, which
+no local server speaks, and pi and opencode go the same way as Claude Code.
 
 A script call can carry one form per agent, for a turn they make differently: `{ shell = "…", codex =
 "<script>" }` is the script for Codex and the command for Claude Code and agy, and a call with only
