@@ -59,7 +59,7 @@ struct SetupSection: View {
     @ViewBuilder private var agents: some View {
             if engine.isBundled {
                 FormSection(title: "Coding agents",
-                            footer: "Each switch points that agent at keepmum. An agent already set up for another gateway, such as Magpie or LiteLLM, keeps it: keepmum goes in front and forwards there, and turning the switch off puts it back. Claude Code's open sessions switch right away; the others on their next session. Gemini CLI has no setting keepmum can rely on, so it is protected one run at a time.") {
+                            footer: "Each switch points that agent at keepmum. An agent already set up for another gateway, such as Magpie or LiteLLM, keeps it: keepmum goes in front and forwards there, and turning the switch off puts it back. Claude Code's open sessions switch right away; the others on their next session. The Antigravity CLI and Gemini CLI are protected one run at a time, through keepmum agy and keepmum gemini. Gemini CLI takes a Google sign-in only with a Code Assist Standard or Enterprise licence since June 18, 2026; for a personal Google account, use the Antigravity CLI.") {
                     ClientRow(engine: engine, id: "claude", name: "Claude Code", icon: "CC", detail: "~/.claude/settings.json")
                     Hairline()
                     ClientRow(engine: engine, id: "codex", name: "Codex", icon: "Cx", detail: "~/.codex/config.toml")
@@ -68,8 +68,11 @@ struct SetupSection: View {
                     Hairline()
                     ClientRow(engine: engine, id: "opencode", name: "opencode", icon: "oc", detail: "~/.config/opencode/opencode.json")
                     Hairline()
+                    TerminalOnlyRow(name: "Antigravity CLI", icon: "A", command: "keepmum agy",
+                                    why: "keepmum points the Antigravity CLI at itself through its environment (CLOUD_CODE_URL), one run at a time")
+                    Hairline()
                     TerminalOnlyRow(name: "Gemini CLI", icon: "G", command: "keepmum gemini",
-                                    why: "Gemini CLI has no setting keepmum can rely on: any project's .env file would override it")
+                                    why: "Gemini CLI has no setting keepmum can rely on: any project's .env file would override it. Since June 18, 2026 it takes an API key, or a Google sign-in with a Code Assist Standard or Enterprise licence")
                 }
             }
     }
@@ -317,8 +320,8 @@ struct ProtectionRow: View {
         if !names.isEmpty && !engine.serviceRunning { return "They cannot connect until keepmum restarts" }
         if names.count > 1 { return names.joined(separator: ", ") }
         if names.count == 1 { return "Every session goes through keepmum" }
-        if !engine.isBundled { return "Use keepmum claude, codex or gemini in a terminal" }
-        return engine.canScan && engine.serviceRunning ? "Only agents started with keepmum claude, codex or gemini are scanned" : "Finish setup to protect every session"
+        if !engine.isBundled { return "Use keepmum claude, codex, agy or gemini in a terminal" }
+        return engine.canScan && engine.serviceRunning ? "Only agents started with keepmum claude, codex, agy or gemini are scanned" : "Finish setup to protect every session"
     }
 
     private var color: Color {

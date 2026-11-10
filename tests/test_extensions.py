@@ -236,3 +236,114 @@ def test_a_line_added_to_global_instructions_or_a_new_skill_is_new(home):
     agents = new[("Codex", "instructions", "AGENTS.md")]
     assert agents["adds_context"] and agents["removable"] is False and "2 lines" in agents["detail"]
     assert "load the vendor" not in ext.state_file().read_text()  # a hash, never the text
+
+
+# --- The Antigravity CLI (agy), which took over from Gemini CLI for Google sign-ins -----------------
+
+def agy_arrives(home):
+    """What an app could add to the Antigravity CLI: an MCP server, a hook on every model call, and a
+    plugin with its own hook, MCP server, rule and skill (layouts from antigravity.google/docs)."""
+    config = home / ".gemini" / "config"
+    config.mkdir(parents=True, exist_ok=True)
+    (config / "mcp_config.json").write_text(json.dumps({"mcpServers": {
+        "vendor": {"serverUrl": "https://mcp.vendor.example/mcp"},
+        "local-notes": {"command": "node", "args": ["notes.js"], "env": {"AUTH_TOKEN": "t0ps3cret"}}}}))
+    (config / "hooks.json").write_text(json.dumps({
+        "vendor-context": {"PreInvocation": [{"type": "command", "command": "cat ~/.vendor/ctx.md"}]},
+        "lint": {"PostToolUse": [{"matcher": "run_command", "hooks": [{"type": "command", "command": "./lint.sh"}]}]},
+        "off": {"enabled": False, "SessionStart": [{"command": "./never.sh"}]}}))
+    plugin = config / "plugins" / "vendor"
+    (plugin / "rules").mkdir(parents=True)
+    (plugin / "skills" / "vendor-api").mkdir(parents=True)
+    (plugin / "plugin.json").write_text(json.dumps({"name": "vendor", "version": "1.0.0"}))
+    (plugin / "hooks.json").write_text(json.dumps({"ctx": {"SessionStart": [{"command": "cat ctx.md"}]}}))
+    (plugin / "mcp_config.json").write_text(json.dumps({"mcpServers": {"vendor": {"serverUrl": "https://x.example"}}}))
+    (plugin / "rules" / "AGENTS.md").write_text("Always use the vendor API.\n")
+    (plugin / "skills" / "vendor-api" / "SKILL.md").write_text("---\nname: vendor-api\n---\n")
+    return config
+
+
+def test_what_an_app_adds_to_the_antigravity_cli_shows_up_as_new(home):
+    ext.ensure_baseline()
+    agy_arrives(home)
+    rows = {k: r for k, r in by_name(ext.check()).items() if k[0] == "Antigravity CLI"}
+    assert {k: r["new"] for k, r in rows.items()} == {
+        ("Antigravity CLI", "MCP server", "vendor"): True, ("Antigravity CLI", "MCP server", "local-notes"): True,
+        ("Antigravity CLI", "hook", "vendor-context"): True, ("Antigravity CLI", "hook", "lint"): True,
+        ("Antigravity CLI", "plugin", "vendor"): True}  # the hook turned off is not there
+    assert rows[("Antigravity CLI", "MCP server", "vendor")]["detail"] == "https://mcp.vendor.example/mcp"
+    assert rows[("Antigravity CLI", "hook", "vendor-context")]["adds_context"] is True  # with every model call
+    assert rows[("Antigravity CLI", "hook", "lint")]["adds_context"] is False
+    assert rows[("Antigravity CLI", "hook", "lint")]["detail"] == "PostToolUse: ./lint.sh"
+    plugin = rows[("Antigravity CLI", "plugin", "vendor")]
+    assert plugin["detail"] == "hooks: SessionStart; MCP: vendor; rules: AGENTS.md; skills: vendor-api"
+    assert plugin["adds_context"] is True and plugin["removable"] is False and plugin["how"] == "agy plugin uninstall vendor"
+    assert "t0ps3cret" not in json.dumps(ext.check()) and "t0ps3cret" not in ext.state_file().read_text()
+
+
+def test_an_antigravity_mcp_server_or_hook_comes_out_alone(home):
+    config = agy_arrives(home)
+    rows = by_name(ext.check())
+    ext.remove(rows[("Antigravity CLI", "MCP server", "vendor")]["id"])
+    ext.remove(rows[("Antigravity CLI", "hook", "vendor-context")]["id"])
+    assert list(json.loads((config / "mcp_config.json").read_text())["mcpServers"]) == ["local-notes"]
+    assert list(json.loads((config / "hooks.json").read_text())) == ["lint", "off"]
+    assert any(p.name.startswith("mcp_config.json.") for p in ext.backup_dir().iterdir())
+
+
+def test_a_disabled_antigravity_plugin_is_not_listed_and_the_dot_folder_manifest_is_read(home):
+    config = agy_arrives(home)
+    (config / "plugins" / "vendor" / "plugin.json").write_text(json.dumps({"name": "vendor", "disabled": True}))
+    other = config / "plugins" / "multi"
+    (other / ".antigravity-plugin").mkdir(parents=True)
+    (other / ".antigravity-plugin" / "plugin.json").write_text(json.dumps({"name": "multi-provider"}))
+    (config / "plugins" / "not-a-plugin").mkdir()
+    plugins = [k[2] for k in by_name(ext.check()) if k[:2] == ("Antigravity CLI", "plugin")]
+    assert plugins == ["multi-provider"]
+
+
+def test_antigravity_rules_instructions_and_skills_are_read(home):
+    gemini = home / ".gemini"
+    (gemini / "config" / "rules").mkdir(parents=True)
+    (gemini / "AGENTS.md").write_text("Be brief.\n")
+    (gemini / "config" / "GEMINI.md").write_text("Use tabs.\n")
+    (gemini / "config" / "rules" / "style.md").write_text("Prefer small diffs.\n")
+    for root in (gemini / "skills" / "a", gemini / "antigravity-cli" / "skills" / "b"):
+        root.mkdir(parents=True)
+        (root / "SKILL.md").write_text("---\nname: x\n---\n")
+    rows = {k[1:]: r for k, r in by_name(ext.check()).items() if k[0] == "Antigravity CLI"}
+    assert set(rows) == {("instructions", "AGENTS.md"), ("instructions", "GEMINI.md"), ("instructions", "style.md"),
+                         ("skill", "a"), ("skill", "b")}
+    assert all(r["adds_context"] for k, r in rows.items() if k[0] == "instructions")
+
+
+def test_an_empty_antigravity_mcp_config_is_not_a_problem(home):
+    (home / ".gemini" / "config").mkdir(parents=True)
+    (home / ".gemini" / "config" / "mcp_config.json").write_text("")
+    assert ext.check()["problems"] == []
+
+
+def test_what_agy_had_before_keepmum_read_it_is_not_new_after_an_upgrade(home):
+    """A state file from a keepmum that did not read the Antigravity CLI yet: its first look comes on
+    the next start, so what it already had is yours and only what comes after is new."""
+    ext.ensure_baseline()
+    state = json.loads(ext.state_file().read_text())
+    state.pop("agents")  # as an earlier keepmum wrote it
+    ext.state_file().write_text(json.dumps(state))
+    agy_arrives(home)
+    assert not [r for r in ext.check()["items"] if r["new"]]  # before its first look: nothing new
+    assert ext.ensure_baseline() is False
+    assert not [r for r in ext.check()["items"] if r["new"]]
+    assert "Antigravity CLI" in json.loads(ext.state_file().read_text())["agents"]
+    hooks = home / ".gemini" / "config" / "hooks.json"
+    data = json.loads(hooks.read_text())
+    data["later"] = {"SessionStart": [{"command": "./later.sh"}]}
+    hooks.write_text(json.dumps(data))
+    assert [(r["agent"], r["name"]) for r in ext.check()["items"] if r["new"]] == [("Antigravity CLI", "later")]
+
+
+def test_a_fresh_look_covers_every_agent(home):
+    agy_arrives(home)
+    assert ext.ensure_baseline() is True
+    state = json.loads(ext.state_file().read_text())
+    assert state["agents"] == list(ext.AGENTS) and not [r for r in ext.check()["items"] if r["new"]]

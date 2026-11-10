@@ -671,6 +671,9 @@ final class Engine {
               addsContext: false, removable: true, how: "", new: false),
         .init(id: "b4", agent: "Gemini CLI", kind: "extension", name: "code-review", detail: "", file: "~/.gemini/extensions/code-review",
               addsContext: false, removable: false, how: "gemini extensions uninstall code-review", new: false),
+        .init(id: "b5", agent: "Antigravity CLI", kind: "plugin", name: "code-review",
+              detail: "hooks: PreInvocation; skills: review", file: "~/.gemini/config/plugins/code-review",
+              addsContext: true, removable: false, how: "agy plugin uninstall code-review", new: false),
     ]
 
     // MARK: Tools (`keepmum tools`): what each network tool may receive

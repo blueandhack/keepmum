@@ -11,7 +11,11 @@ already have (~/.config/keepmum/extensions.json: names, commands and URLs, never
 that, anything not in it is new until you keep it or remove it. Removing edits only that entry,
 after a backup in ~/.config/keepmum/backups, and only if the file still reads the same otherwise.
 Where an edit would not be safe (opencode's commented JSON, Gemini's extension folders, Claude
-Code's own marketplace registry) keepmum says how to remove it with the agent itself.
+Code's own marketplace registry, the Antigravity CLI's plugins) keepmum says how to remove it with
+the agent itself.
+
+The first look is per agent: an agent keepmum starts reading in a later version (the Antigravity
+CLI, in November 2026) gets its own first look, so what it already had is not reported as new.
 """
 
 from __future__ import annotations
@@ -28,8 +32,14 @@ import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-# Hook events that can add text to the model's context: at a session's start, or with each prompt.
-CONTEXT_EVENTS = {"SessionStart", "UserPromptSubmit", "session_start", "user_prompt_submit"}
+# Hook events that can add text to the model's context: at a session's start, or with each prompt
+# (the Antigravity CLI's PreInvocation and PostInvocation, with each model call).
+CONTEXT_EVENTS = {"SessionStart", "UserPromptSubmit", "session_start", "user_prompt_submit",
+                  "PreInvocation", "PostInvocation"}
+# Every agent keepmum reads, and those it read before it read the Antigravity CLI: a state file
+# without "agents" was written then.
+AGENTS = ("Claude Code", "Codex", "Cursor", "Gemini CLI", "Antigravity CLI", "Copilot CLI", "opencode")
+FIRST_AGENTS = ("Claude Code", "Codex", "Cursor", "Gemini CLI", "Copilot CLI", "opencode")
 
 
 class ExtensionError(RuntimeError):
@@ -38,7 +48,7 @@ class ExtensionError(RuntimeError):
 
 @dataclass
 class Item:
-    agent: str           # Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI, opencode
+    agent: str           # one of AGENTS
     kind: str            # plugin, marketplace, hook, trusted hook, MCP server, extension, status line, skill,
                          # instructions (a global CLAUDE.md, AGENTS.md or GEMINI.md, by a hash of its text)
     name: str
@@ -94,6 +104,8 @@ def _read_json(path: Path, lenient: bool = False):
     if not path.is_file():
         return None
     text = path.read_text()
+    if not text.strip():  # an empty file: the Antigravity CLI leaves mcp_config.json so
+        return None
     if lenient:
         from .clients import _jsonc
 
@@ -258,6 +270,91 @@ def _mcp_json(out: list[Item], problems: list[str], agent: str, path: Path, key:
         out.append(Item(agent, "MCP server", name, _server_detail(spec), str(path), loc=["json", key, name]))
 
 
+def _agy_hook_events(group) -> dict[str, list[str]]:
+    """A named hook group of the Antigravity CLI: event -> commands. Tool events nest handlers under
+    a matcher, the others list them directly."""
+    out: dict[str, list[str]] = {}
+    for event, entries in (group or {}).items():
+        if event == "enabled" or not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for h in entry.get("hooks") if isinstance(entry.get("hooks"), list) else [entry]:
+                if isinstance(h, dict) and h.get("command"):
+                    out.setdefault(event, []).append(str(h["command"]))
+    return out
+
+
+def _agy_plugin(root: Path) -> tuple[str, bool, str]:
+    """An Antigravity CLI plugin's name, whether it adds to the model's context, and what it brings:
+    hook events, MCP servers, always-on rules, skills (docs: antigravity.google/docs/build-plugins)."""
+    parts, context = [], False
+    with contextlib.suppress(OSError, ValueError, AttributeError):
+        events = sorted({e for g in (_read_json(root / "hooks.json") or {}).values() if isinstance(g, dict)
+                         and g.get("enabled", True) is not False for e in _agy_hook_events(g)})
+        if events:
+            parts.append("hooks: " + ", ".join(events))
+            context = bool(set(events) & CONTEXT_EVENTS)
+    with contextlib.suppress(OSError, ValueError, AttributeError):
+        servers = (_read_json(root / "mcp_config.json") or {}).get("mcpServers") or {}
+        if servers:
+            parts.append("MCP: " + ", ".join(sorted(servers)))
+    with contextlib.suppress(OSError):
+        rules = sorted(p.name for p in (root / "rules").glob("*.md"))
+        if rules:
+            parts.append("rules: " + ", ".join(rules))
+            context = True
+    with contextlib.suppress(OSError):
+        skills = sorted(d.name for d in (root / "skills").iterdir() if (d / "SKILL.md").is_file())
+        if skills:
+            parts.append("skills: " + ", ".join(skills))
+    return "; ".join(parts), context
+
+
+def _antigravity(out: list[Item], problems: list[str], gemini: Path) -> None:
+    """The Antigravity CLI (agy), which took over from Gemini CLI for Google sign-ins in 2026: its
+    MCP servers, hooks, plugins, rules and skills, from ~/.gemini/config and ~/.gemini (its docs:
+    antigravity.google/docs/mcp, /hooks, /plugins, /rules, /cli/gcli-migration)."""
+    agent, config = "Antigravity CLI", gemini / "config"
+    _mcp_json(out, problems, agent, config / "mcp_config.json")
+    hooks = config / "hooks.json"
+    try:
+        groups = _read_json(hooks) or {}
+    except (OSError, ValueError) as e:
+        problems.append(f"{hooks}: not readable ({type(e).__name__})")
+        groups = {}
+    for name, group in groups.items() if isinstance(groups, dict) else []:
+        if not isinstance(group, dict) or group.get("enabled", True) is False:
+            continue
+        events = _agy_hook_events(group)
+        detail = "; ".join(f"{e}: {', '.join(cmds)}" for e, cmds in sorted(events.items()))
+        out.append(Item(agent, "hook", name, _short(detail), str(hooks), adds_context=bool(set(events) & CONTEXT_EVENTS),
+                        loc=["json", name]))
+    with contextlib.suppress(OSError):
+        for d in sorted((config / "plugins").iterdir()):
+            manifest = next((m for m in (d / ".antigravity-plugin" / "plugin.json", d / "plugin.json") if m.is_file()), None)
+            if manifest is None:
+                continue
+            try:
+                spec = _read_json(manifest) or {}
+            except (OSError, ValueError) as e:
+                problems.append(f"{manifest}: not readable ({type(e).__name__})")
+                spec = {}
+            if spec.get("disabled") is True:
+                continue
+            name = spec.get("name") if isinstance(spec.get("name"), str) and spec.get("name") else d.name
+            parts, context = _agy_plugin(d)
+            out.append(Item(agent, "plugin", name, parts, str(d), adds_context=context, how=f"agy plugin uninstall {name}"))
+    for path in (gemini / "AGENTS.md", gemini / "GEMINI.md", config / "AGENTS.md", config / "GEMINI.md"):
+        _instructions(out, agent, path)
+    with contextlib.suppress(OSError):
+        for rule in sorted((config / "rules").glob("*.md")):
+            _instructions(out, agent, rule)
+    _skills(out, agent, gemini / "skills")
+    _skills(out, agent, gemini / "antigravity-cli" / "skills")
+
+
 def _others(out: list[Item], problems: list[str]) -> None:
     home = Path.home()
     _mcp_json(out, problems, "Cursor", home / ".cursor" / "mcp.json")
@@ -277,6 +374,7 @@ def _others(out: list[Item], problems: list[str]) -> None:
             if d.is_dir() and (d / "gemini-extension.json").is_file():
                 out.append(Item("Gemini CLI", "extension", d.name, "", str(d),
                                 how=f"gemini extensions uninstall {d.name}"))
+    _antigravity(out, problems, gemini)
     _mcp_json(out, problems, "Copilot CLI", home / ".copilot" / "mcp-config.json")
     oc = home / ".config" / "opencode"
     for name in ("opencode.json", "opencode.jsonc"):
@@ -338,12 +436,37 @@ def _entry(item: Item, since: float) -> dict:
 def ensure_baseline() -> bool:
     """The first look: what the agents have now is what you already have. True if it was taken now."""
     with _locked():
+        state = _load()
+    if state is not None:
+        _first_look_for_new_agents()
+        return False
+    with _locked():
         if _load() is not None:
             return False
         items, _ = scan()
         now = time.time()
-        _save({"version": 1, "since": round(now), "known": {i.id: _entry(i, now) for i in items}})
+        _save({"version": 1, "since": round(now), "agents": list(AGENTS),
+               "known": {i.id: _entry(i, now) for i in items}})
         return True
+
+
+def _first_look_for_new_agents() -> None:
+    """An agent keepmum did not read when it first looked: what it has now is what you have."""
+    with _locked():
+        state = _load()
+        if state is None:
+            return
+        looked = state.get("agents", list(FIRST_AGENTS))
+        added = [a for a in AGENTS if a not in looked]
+        if not added:
+            return
+        items, _ = scan()
+        now = time.time()
+        for i in items:
+            if i.agent in added and i.id not in state["known"]:
+                state["known"][i.id] = _entry(i, now)
+        state["agents"] = list(dict.fromkeys([*looked, *added]))
+        _save(state)
 
 
 def check() -> dict:
@@ -352,11 +475,13 @@ def check() -> dict:
     items, problems = scan()
     state = _load()
     known = (state or {}).get("known", {})
+    looked = set((state or {}).get("agents", FIRST_AGENTS))
     current = {i.id for i in items}
     rows = []
     for i in items:
         d = i.as_dict()
-        d["new"] = state is not None and i.id not in known
+        # An agent keepmum has not looked at yet has nothing new: its first look is still to come.
+        d["new"] = state is not None and i.agent in looked and i.id not in known
         if i.id in known:
             d["since"] = known[i.id].get("since")
         rows.append(d)
@@ -368,7 +493,7 @@ def check() -> dict:
 def keep(ids: list[str] | None = None) -> int:
     """Mark items as yours (all new ones when `ids` is empty), and forget the ones that went away."""
     with _locked():
-        state = _load() or {"version": 1, "since": round(time.time()), "known": {}}
+        state = _load() or {"version": 1, "since": round(time.time()), "agents": list(AGENTS), "known": {}}
         items, _ = scan()
         now = time.time()
         current = {i.id: i for i in items}

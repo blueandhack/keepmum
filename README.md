@@ -2,9 +2,9 @@
 
 <h1 align="center">keepmum</h1>
 
-<p align="center"><b>Keep secrets and personal data on your Mac while you use Claude Code, Codex, Gemini CLI, the Antigravity CLI, pi or opencode.</b></p>
+<p align="center"><b>Keep secrets and personal data on your Mac while you use Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi or opencode.</b></p>
 
-keepmum is a local proxy that sits between your coding agent (Claude Code, Codex, Gemini CLI, the Antigravity CLI, pi or opencode) and its model provider (Anthropic, OpenAI or Google). Before a request leaves your Mac, it finds secrets (API keys, tokens, passwords, private keys, connection strings) and, if you want, personal data (names, emails, phones, addresses, account numbers), and replaces each one with a placeholder such as `KEEPMUM_SECRET_7f3a9c2e`. When the model answers, keepmum puts the real values back, so your agent can still edit your `.env` file correctly, but the provider never sees what is in it.
+keepmum is a local proxy that sits between your coding agent (Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi or opencode) and its model provider (Anthropic, OpenAI or Google). Before a request leaves your Mac, it finds secrets (API keys, tokens, passwords, private keys, connection strings) and, if you want, personal data (names, emails, phones, addresses, account numbers), and replaces each one with a placeholder such as `KEEPMUM_SECRET_7f3a9c2e`. When the model answers, keepmum puts the real values back, so your agent can still edit your `.env` file correctly, but the provider never sees what is in it.
 
 Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned request to the provider. The name comes from "keep mum": to say nothing about a secret.
 
@@ -21,8 +21,8 @@ Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned
 ```
 Claude Code ─┐                            ┌──▶ Anthropic API
 Codex       ─┤                            │
-Gemini CLI  ─┤                            │
-Antigravity ─┼─▶ keepmum (on your Mac) ─────┼──▶ OpenAI API
+Antigravity ─┤                            │
+Gemini CLI  ─┼─▶ keepmum (on your Mac) ─────┼──▶ OpenAI API
 pi          ─┤   detect → mask            │
 opencode    ─┘                            └──▶ Google (Gemini API, Code Assist)
   real values  ◀── restore ◀───────────────── placeholders only
@@ -40,7 +40,7 @@ opencode    ─┘                            └──▶ Google (Gemini API, C
 ## Requirements
 
 - A Mac with Apple silicon, and macOS 14 or later
-- Claude Code, Codex, Gemini CLI, the Antigravity CLI (`agy`), pi or opencode
+- Claude Code, Codex, the Antigravity CLI (`agy`), Gemini CLI, pi or opencode
 - For the command line only (the Mac app bundles all of it): Python 3.12+, [uv](https://docs.astral.sh/uv/), and Xcode or its command line tools (to build pf-serve)
 - About 1.7 GB of free memory while keepmum runs (the local model), and 1.6 GB of disk for it; neither with `keepmum model off`. The optional checks add their own while in use: 0.4 GB (injection) and 0.4, 1.1 or 4.9 GB (harm)
 
@@ -48,7 +48,7 @@ opencode    ─┘                            └──▶ Google (Gemini API, C
 
 ### The Mac app (everything included)
 
-Download `Keepmum-<version>.dmg` from the [Releases](https://github.com/blueandhack/keepmum/releases) page (or build it: [mac/README.md](mac/README.md)), drag Keepmum into Applications, open it, and follow **Settings › Setup**: download the model, start the background service, and switch on protection for each coding agent you use (Claude Code, Codex, pi, opencode; Gemini CLI and the Antigravity CLI run through `keepmum gemini` and `keepmum agy`, see [Use](#use)). The app bundles keepmum, its Python runtime and pf-serve; nothing else needs installing. Every session of a protected agent then goes through keepmum; for Claude Code that is the terminal, VS Code and the desktop app.
+Download `Keepmum-<version>.dmg` from the [Releases](https://github.com/blueandhack/keepmum/releases) page (or build it: [mac/README.md](mac/README.md)), drag Keepmum into Applications, open it, and follow **Settings › Setup**: download the model, start the background service, and switch on protection for each coding agent you use (Claude Code, Codex, pi, opencode; the Antigravity CLI and Gemini CLI run through `keepmum agy` and `keepmum gemini`, see [Use](#use)). The app bundles keepmum, its Python runtime and pf-serve; nothing else needs installing. Every session of a protected agent then goes through keepmum; for Claude Code that is the terminal, VS Code and the desktop app.
 
 ### The command line
 
@@ -68,11 +68,13 @@ keepmum selftest                              # sends a canary secret through ke
 ```sh
 keepmum claude          # starts Claude Code with every request scanned; arguments pass through to `claude`
 keepmum codex           # the same for Codex (ChatGPT login or API key); arguments pass through to `codex`
-keepmum gemini          # the same for Gemini CLI (Sign in with Google or an API key); arguments pass through to `gemini`
 keepmum agy             # the same for the Antigravity CLI (signed in with Google, or through a gateway); arguments pass through to `agy`
+keepmum gemini          # the same for Gemini CLI (an API key, or a Code Assist Standard or Enterprise sign-in); arguments pass through to `gemini`
 ```
 
 `keepmum codex` adds `-c` overrides for that run only: a `keepmum` model provider pointed at the proxy, with WebSockets off (keepmum refuses them, since it cannot scan them) and your existing Codex login. Your Codex config file is not changed.
+
+**Gemini CLI and the Antigravity CLI.** Since June 18, 2026, Gemini CLI no longer serves personal Google sign-ins (Google AI Pro, Ultra, and free Gemini Code Assist); Google moved them to the Antigravity CLI ([Google's announcement](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/)). With a personal Google account, use `keepmum agy`. Gemini CLI still works with an API key, and with Sign in with Google under a Code Assist Standard or Enterprise licence, and `keepmum gemini` covers both. `agy plugin import gemini` turns your Gemini CLI extensions into Antigravity plugins and moves their MCP servers into `~/.gemini/config/mcp_config.json`; keepmum's extension watch (below) lists what it brings.
 
 `keepmum gemini` points Gemini CLI at keepmum through its environment, which wins over every `.env` file Gemini CLI reads. It covers both sign-ins: an API key (the Gemini API) and Sign in with Google (Code Assist, whose setup and metrics calls carry no conversation text and pass through; any other Code Assist call is blocked). Vertex AI is refused, not sent. If you already point Gemini CLI at a gateway (`GOOGLE_GEMINI_BASE_URL` or `CODE_ASSIST_ENDPOINT`), keepmum forwards to it. There is no `keepmum protect` for Gemini CLI: it reads its address only from the environment or the first `.env` file it finds walking up from your project, so any project's own `.env` would override a setting keepmum made.
 
@@ -283,11 +285,11 @@ keepmum extensions keep         # you added them: they are yours now (or name id
 keepmum extensions remove <id>  # you did not: take that one entry out, after a backup
 ```
 
-- **What it reads:** plugins, plugin marketplaces, hooks (and the status-line command), Codex's trusted-hook records, MCP servers, skills, and the global instruction file every session reads, in Claude Code (`~/.claude/settings.json`, `~/.claude.json`, `~/.claude/skills`, `~/.claude/CLAUDE.md`), Codex (`~/.codex/config.toml`, `~/.codex/skills`, `~/.codex/AGENTS.md`), Cursor (`~/.cursor/mcp.json`, `hooks.json`), Gemini CLI (`~/.gemini/settings.json`, `extensions/`, `GEMINI.md`), Copilot CLI (`~/.copilot/mcp-config.json`) and opencode.
-- **What counts as new:** the first time keepmum runs, whatever the agents have is yours. After that, anything that appears is new until you keep it or remove it, and an instruction file whose text changed is new again (keepmum keeps a hash of it, never the text).
+- **What it reads:** plugins, plugin marketplaces, hooks (and the status-line command), Codex's trusted-hook records, MCP servers, skills, and the global instruction file every session reads, in Claude Code (`~/.claude/settings.json`, `~/.claude.json`, `~/.claude/skills`, `~/.claude/CLAUDE.md`), Codex (`~/.codex/config.toml`, `~/.codex/skills`, `~/.codex/AGENTS.md`), Cursor (`~/.cursor/mcp.json`, `hooks.json`), Gemini CLI (`~/.gemini/settings.json`, `extensions/`, `GEMINI.md`), the Antigravity CLI (`~/.gemini/config/mcp_config.json`, `hooks.json`, `plugins/` with each plugin's hooks, MCP servers, rules and skills, the global `AGENTS.md`, `GEMINI.md` and `config/rules/`, and `~/.gemini/skills`), Copilot CLI (`~/.copilot/mcp-config.json`) and opencode.
+- **What counts as new:** the first time keepmum runs, whatever the agents have is yours. The same goes for an agent keepmum starts reading after an update: what the Antigravity CLI already had when keepmum began reading it is yours. After that, anything that appears is new until you keep it or remove it, and an instruction file whose text changed is new again (keepmum keeps a hash of it, never the text).
 - **What it points out:** an item that can put instructions in front of the model by itself: a hook that runs at every session start or prompt, a plugin that brings one, a Codex hook trusted without you being asked, and the global instruction files.
 - **Where it tells you:** the Mac app's menu bar and Settings › Extensions, `keepmum doctor`, and one line when `keepmum claude`, `codex`, `gemini` or `agy` starts.
-- **How it removes:** only the entry you choose, after a copy of the file in `~/.config/keepmum/backups/`, and only if the file reads the same otherwise (a Claude Code plugin is disabled, as `/plugin disable` leaves it). Each removal and each keep is in the audit log. It does not edit opencode's commented JSON, Gemini extension folders, skills, instruction files or Claude Code's own marketplace registry; for those it says how to remove them with the agent. Restart the agent afterwards.
+- **How it removes:** only the entry you choose, after a copy of the file in `~/.config/keepmum/backups/`, and only if the file reads the same otherwise (a Claude Code plugin is disabled, as `/plugin disable` leaves it). Each removal and each keep is in the audit log. It does not edit opencode's commented JSON, Gemini extension folders, Antigravity plugins, skills, instruction files or Claude Code's own marketplace registry; for those it says how to remove them with the agent. Restart the agent afterwards.
 
 keepmum itself changes an agent's settings only when you turn on its protection, and only the one setting that points it at keepmum.
 

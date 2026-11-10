@@ -10,7 +10,7 @@ struct ExtensionsSection: View {
     /// The action under way: "all", or an item's id. Its button spins.
     @State private var working: String?
 
-    private static let order = ["Claude Code", "Codex", "Cursor", "Gemini CLI", "Copilot CLI", "opencode"]
+    private static let order = ["Claude Code", "Codex", "Cursor", "Antigravity CLI", "Gemini CLI", "Copilot CLI", "opencode"]
 
     var body: some View {
         let list = engine.extensionList

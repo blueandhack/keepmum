@@ -168,6 +168,7 @@ func agentName(_ client: String?) -> String {
     case "claude-code": "Claude Code"
     case "codex": "Codex"
     case "gemini": "Gemini CLI"
+    case "antigravity": "Antigravity CLI"
     case let other: other
     }
 }

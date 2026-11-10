@@ -1733,7 +1733,7 @@ def extensions_list(ctx: typer.Context, as_json: bool = typer.Option(False, "--j
         for r in sorted(rows, key=lambda r: (not r["new"], r["kind"], r["name"])):
             typer.echo(_extension_line(r))
     if not result["items"]:
-        typer.echo("no plugins, hooks or MCP servers in Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI or opencode")
+        typer.echo("no plugins, hooks or MCP servers in Claude Code, Codex, Cursor, Gemini CLI, the Antigravity CLI, Copilot CLI or opencode")
     for g in result["gone"]:
         typer.echo(f"gone since you last looked: {g['agent']} {g['kind']} {g['name']}")
     for p in result["problems"]:

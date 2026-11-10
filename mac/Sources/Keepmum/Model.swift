@@ -231,6 +231,7 @@ struct Snapshot: Decodable, Sendable {
         case "claude": "keepmum claude"
         case "codex": "keepmum codex"
         case "gemini": "keepmum gemini"
+        case "agy": "keepmum agy"
         case "vscode": "VS Code"
         case "serve": "keepmum serve"
         default: "—"

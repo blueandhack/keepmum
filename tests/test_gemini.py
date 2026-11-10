@@ -319,7 +319,7 @@ def test_stats_name_antigravity():
     from keepmum.stats import client_name, client_of
 
     cid = client_of("antigravity/cli/1.5.3 (aidev_client; os_type=darwin; arch=arm64)")
-    assert (cid, client_name(cid)) == ("antigravity", "Antigravity")
+    assert (cid, client_name(cid)) == ("antigravity", "Antigravity CLI")
 
 
 def test_antigravity_web_tools_keep_placeholders():

@@ -120,7 +120,7 @@ CLIENTS = (
     ("pi/", "pi", "pi"),
     ("opencode", "opencode", "opencode"),
     ("geminicli", "gemini", "Gemini CLI"),  # GeminiCLI/0.66.0/…, GeminiCLI-acp-…
-    ("antigravity", "antigravity", "Antigravity"),  # antigravity/cli/1.5.3 (…)
+    ("antigravity", "antigravity", "Antigravity CLI"),  # antigravity/cli/1.5.3 (…)
 )
 PROVIDERS = {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google"}
 # Events from before keepmum recorded clients came from Claude Code, the only client it served.
