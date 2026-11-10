@@ -80,6 +80,8 @@ a { color: var(--ink); }
 .lede { max-width: 560px; font-size: 22px; line-height: 1.45; }
 .actions { display: flex; flex-wrap: wrap; gap: 12px; }
 .fine { font-size: 16px; font-weight: 600; }
+.release { font-size: 15px; font-variant-numeric: tabular-nums; }
+.hero .release { margin-top: -16px; }
 .hero-mark { flex: 2 1 300px; display: flex; justify-content: center; }
 .hero-mark svg { width: 100%; max-width: 420px; height: auto; }
 @media (max-width: 600px) {
@@ -175,6 +177,7 @@ a { color: var(--ink); }
 .way.app-way { background: var(--sand); }
 .way.app-way .btn { min-height: 52px; padding: 0 24px; font-size: 17px; }
 .way .req { font-size: 15px; color: var(--muted); }
+.way p.release { font-size: 15px; color: var(--muted); margin-top: -8px; }
 .way.cli { background: var(--ink); color: #fff; align-items: stretch; }
 .way.cli p { color: var(--on-ink); }
 .way pre { padding: 20px; border-radius: 14px; background: var(--code); overflow-x: auto; font-family: var(--mono); font-size: 14px; line-height: 1.8; color: #fff; }
