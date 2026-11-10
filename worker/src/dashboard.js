@@ -24,7 +24,7 @@ export function dashboard(data, who) {
     <button type="button" data-range="30">30 days</button>
     <button type="button" data-range="90">90 days</button>
     <button type="button" data-range="all">All</button>
-    <span class="utc" id="tz">Days are UTC</span>
+    <span class="utc" id="tz">Days in your time zone</span>
   </div>
 
   <section class="tiles" id="tiles" aria-label="Summary"></section>
@@ -64,7 +64,7 @@ export function dashboard(data, who) {
       <li><b>Installs in use</b> are update checks: keepmum.app/appcast.xml, once a day per copy with automatic checks on. Copies with checks off, and builds from 0.1.0a4 and earlier (which read the feed on GitHub), are not counted. Nothing is counted when the app opens.</li>
       <li><b>Downloads</b> from the website are keepmum.app/download. <b>From GitHub</b> is the growth in GitHub's own download counts, noted every six hours, less the website's downloads and the upgrades (both redirect to GitHub); it starts the day after the first note.</li>
       <li><b>Upgrades</b> are keepmum.app/update/…, where the update feed sends the app for a new version's DMG, from 0.1.0a5 on.</li>
-      <li>Each count is a day, a kind, a version and a number. No IP address or user agent is kept.</li>
+      <li>Each count is an hour (UTC), a kind, a version and a number, added up here into days in your time zone. Counts from before hours were kept are whole UTC days. GitHub's counts, noted every six hours, fit those days to within six hours. No IP address or user agent is kept.</li>
     </ul>
   </section>
 </main>
@@ -136,7 +136,6 @@ summary { cursor: pointer; font-weight: 600; }
 .notes b { color: var(--text); font-weight: 600; }
 .tip { position: fixed; pointer-events: none; z-index: 5; background: var(--raised); color: var(--text); border: 1px solid var(--sep); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.14); min-width: 150px; }
 .tip .d { font-weight: 600; margin-bottom: 4px; }
-.tip .local { color: var(--text-3); margin: -4px 0 4px; }
 .tip .row { display: flex; gap: 10px; justify-content: space-between; font-variant-numeric: tabular-nums; }
 .tip .row span:first-child { color: var(--text-2); }
 .tip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
@@ -149,20 +148,20 @@ function client(DATA, WHO) {
   const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const fmt = (n) => (n == null ? "—" : n.toLocaleString("en-US"));
   const sum = (a) => a.reduce((s, x) => s + (x || 0), 0);
-  const DAY = 86400000;
-  const iso = (t) => new Date(t).toISOString().slice(0, 10);
-  const todayISO = iso(Date.now());
-  const yesterdayISO = iso(Date.now() - DAY);
-  const label = (d, long) => new Date(d + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC", ...(long ? { weekday: "short" } : {}) });
-  // The counts are kept per UTC day; the page says when each one starts and ends in the browser's
-  // own time zone.
+  const pad = (n) => String(n).padStart(2, "0");
+  // Days are the viewer's own: YYYY-MM-DD in the browser's time zone.
+  const ymd = (dt) => `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+  const dateOf = (d) => { const [y, m, dd] = d.split("-").map(Number); return new Date(y, m - 1, dd); };
+  const addDays = (d, k) => { const dt = dateOf(d); dt.setDate(dt.getDate() + k); return ymd(dt); };
+  const todayISO = ymd(new Date());
+  const yesterdayISO = addDays(todayISO, -1);
+  const label = (d, long) => dateOf(d).toLocaleDateString("en-US", { month: "short", day: "numeric", ...(long ? { weekday: "short" } : {}) });
   const at = (t, opts) => new Date(t).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", ...opts });
-  const isUTC = (t) => new Date(t).getTimezoneOffset() === 0;
   const zone = (t) => new Intl.DateTimeFormat("en-US", { timeZoneName: "short" }).formatToParts(new Date(t)).find((p) => p.type === "timeZoneName")?.value || "";
-  function span(d) {
-    const s = Date.parse(d + "T00:00:00Z"), e = s + DAY;
-    return isUTC(s) && isUTC(e) ? "" : `${at(s, { weekday: "short" })} – ${at(e, { weekday: "short" })} ${zone(e)}`;
-  }
+  // The Worker keeps each count under its UTC hour (2026-11-09T14), which lands on the viewer's day.
+  // Rows from before it kept hours hold a whole UTC day (2026-11-09) and keep their date.
+  const hourly = (k) => k.length > 10;
+  const localDay = (k) => (hourly(k) ? ymd(new Date(k + ":00:00Z")) : k);
 
   // keepmum's versions in release order: 0.1.0a4 < 0.1.0b1 < 0.1.0rc1 < 0.1.0 (as build-app.sh numbers them).
   function vkey(v) {
@@ -173,7 +172,7 @@ function client(DATA, WHO) {
   }
 
   // --- the numbers, by day ---
-  const counts = DATA.counts || [], releases = DATA.releases || [];
+  const counts = (DATA.counts || []).map((r) => ({ ...r, day: localDay(r.day) }));
   const by = (kind) => {
     const m = new Map();
     for (const r of counts) if (r.kind === kind) {
@@ -188,13 +187,17 @@ function client(DATA, WHO) {
   const updatesOn = (d) => (updates.get(d) ? sum([...updates.get(d).values()]) : 0);
   const checksOn = (d) => (checks.get(d) ? sum([...checks.get(d).values()]) : 0);
 
-  // GitHub's totals, noted per day: each day's growth over the day noted before it.
-  const ghDays = [...new Set(releases.map((r) => r.day))].sort();
+  // GitHub's totals, noted every six hours: a day's total is its last note, and its growth is over
+  // the last note of the day noted before it.
+  const notes = (DATA.releases || [])
+    .map((r) => ({ ...r, t: Date.parse(hourly(r.day) ? r.day + ":00:00Z" : r.day + "T00:00:00Z"), day: localDay(r.day) }))
+    .sort((a, b) => a.t - b.t);
   const ghTotal = new Map(), latestPerVersion = new Map();
-  for (const d of ghDays) {
-    for (const r of releases) if (r.day === d) latestPerVersion.set(r.version, r.n);
-    ghTotal.set(d, sum([...latestPerVersion.values()]));
+  for (const r of notes) {
+    latestPerVersion.set(r.version, r.n);
+    ghTotal.set(r.day, sum([...latestPerVersion.values()]));
   }
+  const ghDays = [...ghTotal.keys()].sort();
   const ghGrowth = new Map();
   ghDays.forEach((d, i) => { if (i > 0) ghGrowth.set(d, ghTotal.get(d) - ghTotal.get(ghDays[i - 1])); });
   const directOn = (d) => (ghGrowth.has(d) ? Math.max(0, ghGrowth.get(d) - siteOn(d) - updatesOn(d)) : null);
@@ -219,10 +222,10 @@ function client(DATA, WHO) {
   // --- range ---
   const firstDay = [...counts.map((r) => r.day), ...ghDays].sort()[0] || todayISO;
   function daysFor(range) {
-    const start = range === "all" ? Date.parse(firstDay + "T00:00:00Z") : Date.parse(todayISO + "T00:00:00Z") - (Number(range) - 1) * DAY;
+    let d = range === "all" ? (firstDay < todayISO ? firstDay : todayISO) : addDays(todayISO, 1 - Number(range));
     const out = [];
-    for (let t = start; t <= Date.parse(todayISO + "T00:00:00Z"); t += DAY) out.push(iso(t));
-    return out.length ? out : [todayISO];
+    for (; d <= todayISO; d = addDays(d, 1)) out.push(d);
+    return out;
   }
 
   // --- drawing ---
@@ -244,8 +247,7 @@ function client(DATA, WHO) {
       `<div class="row"><span><i style="background:${s.color}"></i>${s.name}</span><span>${fmt(s.values[i])}</span></div>`).join("");
     const measured = series.some((s) => s.values[i] != null);
     const total = measured && series.length > 1 ? `<div class="row total"><span>Total</span><span>${fmt(sum(series.map((s) => s.values[i])))}</span></div>` : "";
-    const local = span(day);
-    tip.innerHTML = `<div class="d">${label(day, true)}${day === todayISO ? " (so far)" : ""}</div>${local ? `<div class="local">${local}</div>` : ""}${rows || ""}${total}${extra || ""}`;
+    tip.innerHTML = `<div class="d">${label(day, true)}${day === todayISO ? " (so far)" : ""}</div>${rows || ""}${total}${extra || ""}`;
     tip.hidden = false;
     const r = tip.getBoundingClientRect();
     let x = evt.clientX + 14, y = evt.clientY + 14;
@@ -401,8 +403,11 @@ function client(DATA, WHO) {
 
   document.getElementById("who").textContent = WHO;
   document.getElementById("generated").textContent = "As of " + at(DATA.generated, { year: "numeric", month: "short", day: "numeric", timeZoneName: "short" });
-  const tz = document.getElementById("tz"), dayStart = Date.parse(todayISO + "T00:00:00Z");
-  if (!isUTC(dayStart)) tz.textContent = `Days are UTC: they start at ${at(dayStart, { timeZoneName: "short" })}, your time`;
+  const raw = DATA.counts || [];
+  const firstHourly = raw.filter((r) => hourly(r.day)).map((r) => localDay(r.day)).sort()[0];
+  const tz = document.getElementById("tz");
+  tz.textContent = `Days in your time zone, ${zone(Date.now())}` +
+    (!raw.some((r) => !hourly(r.day)) ? "" : firstHourly ? `; UTC days before ${label(firstHourly)}` : "; UTC days so far");
   try { tz.title = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
   let range = "30";
   try { range = localStorage.getItem("range") || "30"; } catch {}

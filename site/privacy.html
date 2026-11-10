@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Privacy · keepmum</title>
-<meta name="description" content="What keepmum and keepmum.app collect: your code and secrets stay on your Mac; keepmum.app counts downloads, update checks and updates per day, with no addresses, and you can opt out.">
+<meta name="description" content="What keepmum and keepmum.app collect: your code and secrets stay on your Mac; keepmum.app counts downloads, update checks and updates per hour, with no addresses, and you can opt out.">
 <meta name="theme-color" content="#E4572E">
 <link rel="canonical" href="https://keepmum.app/privacy">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -34,10 +34,10 @@
 <main id="main" class="doc">
   <div class="wrap">
     <h1>Privacy</h1>
-    <p class="updated">Last updated November 7, 2026</p>
+    <p class="updated">Last updated November 9, 2026</p>
 
     <h2>The short version</h2>
-    <p>keepmum runs on your Mac. Your prompts, code, files and secrets never reach the keepmum project. The project keeps counts (how many downloads, update checks and updates there are each day) and nothing about who: no IP addresses, no accounts, no identifiers. You can opt out of even the counts.</p>
+    <p>keepmum runs on your Mac. Your prompts, code, files and secrets never reach the keepmum project. The project keeps counts (how many downloads, update checks and updates there are each hour) and nothing about who: no IP addresses, no accounts, no identifiers. You can opt out of even the counts.</p>
 
     <h2>On your Mac</h2>
     <p>The keepmum proxy and the Mac app work locally. The values keepmum masks, its logs, its history and the Mac app’s pages stay on your Mac; the app talks only to the proxy on <code>127.0.0.1</code>, apart from update checks and the model downloads you start. Nothing is sent when the app opens or while you use it: no usage data, no crash reports, no analytics. To notice what other apps add to your coding agents, keepmum reads their settings on your Mac and remembers names and hashes, never the settings themselves.</p>
@@ -52,7 +52,7 @@
       <li><strong>Update checks.</strong> With automatic checks on, the Mac app asks keepmum.app once a day whether there is a new version. Each check is counted, with the app’s version.</li>
       <li><strong>Updates.</strong> Each update the app downloads is counted, with the version it updates to.</li>
     </ul>
-    <p>For each of these keepmum stores a day, a kind, a version and a number, such as “November 7, update check, 0.1.0a5, 41”. Nothing else about a request is kept: not your IP address, your browser or your Mac. The counts are kept as long as the project runs. keepmum also reads GitHub’s public download count of each release.</p>
+    <p>For each of these keepmum stores an hour, a kind, a version and a number, such as “November 7, 2 PM UTC, update check, 0.1.0a5, 3”. Nothing else about a request is kept: not your IP address, your browser or your Mac. The counts are kept as long as the project runs. keepmum also reads GitHub’s public download count of each release.</p>
 
     <h2>Opting out</h2>
     <ul>

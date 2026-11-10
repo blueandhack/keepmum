@@ -149,21 +149,24 @@ function newestDMG(xml) {
   return best?.dmg ?? null;
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
+// Counts are kept per UTC hour (2026-11-09T14), so the dashboard can add them up into the viewer's
+// own days. Rows from before it kept hours hold a whole UTC day (2026-11-09).
+const hour = () => new Date().toISOString().slice(0, 13);
+const today = () => hour().slice(0, 10);
 
-/** One more for today. A counting failure never fails the request. */
+/** One more for this hour. A counting failure never fails the request. */
 async function count(env, kind, version) {
   try {
     await env.DB.prepare(
       "INSERT INTO counts (day, kind, version, n) VALUES (?1, ?2, ?3, 1) " +
         "ON CONFLICT (day, kind, version) DO UPDATE SET n = n + 1",
-    ).bind(today(), kind, version).run();
+    ).bind(hour(), kind, version).run();
   } catch (e) {
     console.error("count failed", e);
   }
 }
 
-/** GitHub's running download count of each release's DMG, noted for today (the latest one wins). */
+/** GitHub's running download count of each release's DMG, noted for this hour (the latest one wins). */
 async function snapshotGitHub(env) {
   const headers = { "user-agent": "keepmum-counts", accept: "application/vnd.github+json" };
   if (env.GITHUB_TOKEN) headers.authorization = `Bearer ${env.GITHUB_TOKEN}`;
@@ -172,7 +175,7 @@ async function snapshotGitHub(env) {
     console.error("GitHub releases", r.status, await r.text());
     return;
   }
-  const day = today();
+  const day = hour();
   const rows = [];
   for (const release of await r.json()) {
     for (const asset of release.assets ?? []) {
@@ -192,7 +195,7 @@ async function statsData(env, ctx) {
     env.DB.prepare("SELECT day, version, n FROM releases ORDER BY day").all(),
   ]);
   // The first look of a day takes a GitHub snapshot if the cron has not yet.
-  if (!releases.results.some((r) => r.day === today())) ctx.waitUntil(snapshotGitHub(env));
+  if (!releases.results.some((r) => r.day.startsWith(today()))) ctx.waitUntil(snapshotGitHub(env));
   return { counts: counts.results, releases: releases.results, generated: new Date().toISOString() };
 }
 

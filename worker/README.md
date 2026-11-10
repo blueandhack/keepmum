@@ -12,7 +12,7 @@ A Cloudflare Worker on a few paths of keepmum.app. The rest of the site is GitHu
 
 Every six hours a cron notes GitHub's download count of each release's DMG (`releases` table), so downloads straight from GitHub show up too.
 
-Each row in `counts` is a day, a kind, a version and a number. No IP address, user agent or anything else about a request is stored. Nothing is counted when the app opens: "installs in use" is the once-a-day update check of each copy with automatic checks on. Apps built before the feed moved here (0.1.0a4 and earlier) read GitHub directly and are not counted, though their upgrades to 0.1.0a5 and later are.
+Each row in `counts` is an hour (UTC), a kind, a version and a number; the dashboard adds the hours up into days in the viewer's time zone. Rows from before hours were kept are whole UTC days. No IP address, user agent or anything else about a request is stored. Nothing is counted when the app opens: "installs in use" is the once-a-day update check of each copy with automatic checks on. Apps built before the feed moved here (0.1.0a4 and earlier) read GitHub directly and are not counted, though their upgrades to 0.1.0a5 and later are.
 
 Free on Cloudflare's Workers Free plan up to 100,000 requests a day.
 
