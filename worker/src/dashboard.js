@@ -24,7 +24,7 @@ export function dashboard(data, who) {
     <button type="button" data-range="30">30 days</button>
     <button type="button" data-range="90">90 days</button>
     <button type="button" data-range="all">All</button>
-    <span class="utc">Days are UTC</span>
+    <span class="utc" id="tz">Days are UTC</span>
   </div>
 
   <section class="tiles" id="tiles" aria-label="Summary"></section>
@@ -136,6 +136,7 @@ summary { cursor: pointer; font-weight: 600; }
 .notes b { color: var(--text); font-weight: 600; }
 .tip { position: fixed; pointer-events: none; z-index: 5; background: var(--raised); color: var(--text); border: 1px solid var(--sep); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.14); min-width: 150px; }
 .tip .d { font-weight: 600; margin-bottom: 4px; }
+.tip .local { color: var(--text-3); margin: -4px 0 4px; }
 .tip .row { display: flex; gap: 10px; justify-content: space-between; font-variant-numeric: tabular-nums; }
 .tip .row span:first-child { color: var(--text-2); }
 .tip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
@@ -153,6 +154,15 @@ function client(DATA, WHO) {
   const todayISO = iso(Date.now());
   const yesterdayISO = iso(Date.now() - DAY);
   const label = (d, long) => new Date(d + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC", ...(long ? { weekday: "short" } : {}) });
+  // The counts are kept per UTC day; the page says when each one starts and ends in the browser's
+  // own time zone.
+  const at = (t, opts) => new Date(t).toLocaleString("en-US", { hour: "numeric", minute: "2-digit", ...opts });
+  const isUTC = (t) => new Date(t).getTimezoneOffset() === 0;
+  const zone = (t) => new Intl.DateTimeFormat("en-US", { timeZoneName: "short" }).formatToParts(new Date(t)).find((p) => p.type === "timeZoneName")?.value || "";
+  function span(d) {
+    const s = Date.parse(d + "T00:00:00Z"), e = s + DAY;
+    return isUTC(s) && isUTC(e) ? "" : `${at(s, { weekday: "short" })} – ${at(e, { weekday: "short" })} ${zone(e)}`;
+  }
 
   // keepmum's versions in release order: 0.1.0a4 < 0.1.0b1 < 0.1.0rc1 < 0.1.0 (as build-app.sh numbers them).
   function vkey(v) {
@@ -234,7 +244,8 @@ function client(DATA, WHO) {
       `<div class="row"><span><i style="background:${s.color}"></i>${s.name}</span><span>${fmt(s.values[i])}</span></div>`).join("");
     const measured = series.some((s) => s.values[i] != null);
     const total = measured && series.length > 1 ? `<div class="row total"><span>Total</span><span>${fmt(sum(series.map((s) => s.values[i])))}</span></div>` : "";
-    tip.innerHTML = `<div class="d">${label(day, true)}${day === todayISO ? " (so far)" : ""}</div>${rows || ""}${total}${extra || ""}`;
+    const local = span(day);
+    tip.innerHTML = `<div class="d">${label(day, true)}${day === todayISO ? " (so far)" : ""}</div>${local ? `<div class="local">${local}</div>` : ""}${rows || ""}${total}${extra || ""}`;
     tip.hidden = false;
     const r = tip.getBoundingClientRect();
     let x = evt.clientX + 14, y = evt.clientY + 14;
@@ -389,7 +400,10 @@ function client(DATA, WHO) {
   }
 
   document.getElementById("who").textContent = WHO;
-  document.getElementById("generated").textContent = "As of " + new Date(DATA.generated).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+  document.getElementById("generated").textContent = "As of " + at(DATA.generated, { year: "numeric", month: "short", day: "numeric", timeZoneName: "short" });
+  const tz = document.getElementById("tz"), dayStart = Date.parse(todayISO + "T00:00:00Z");
+  if (!isUTC(dayStart)) tz.textContent = `Days are UTC: they start at ${at(dayStart, { timeZoneName: "short" })}, your time`;
+  try { tz.title = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
   let range = "30";
   try { range = localStorage.getItem("range") || "30"; } catch {}
   for (const b of document.querySelectorAll("[data-range]")) {
