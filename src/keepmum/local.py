@@ -28,12 +28,16 @@ Code) and the OpenAI Responses API (Codex), so those go as they are ("native"). 
 not (404, 405 or 501: mlx_lm.server, older builds) gets the same turn as Chat Completions, which
 every local server speaks, and its answer is turned back into the agent's API ("chat"). With no
 tools that is plain text both ways: earlier tool calls and results become text in the conversation.
-`api = "native"` or `"chat"` on a server fixes the choice. Gemini's API none of them speak: a flagged
-Gemini request is refused, as in block mode.
+`api = "native"` or `"chat"` on a server fixes the choice. Gemini's API (Gemini CLI, and the
+Antigravity CLI) none of them speak: those turns always go as Chat Completions, and the answer comes
+back as Gemini's GenerateContentResponse, wrapped as Code Assist wraps it (`{"response": ...}`) when
+the request came wrapped (`{"request": ...}`: a Google sign-in), one `data:` event per piece when
+streamed with alt=sse, and a JSON array when streamGenerateContent was asked without it.
 """
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import logging
@@ -50,6 +54,9 @@ CHECKS = ("injection", "harm")
 APIS = ("auto", "native", "chat")
 # keepmum's API name -> the local server's path for it.
 PATHS = {"messages": "/v1/messages", "responses": "/v1/responses"}
+# The agent APIs local mode can answer: those above natively or as Chat Completions, Gemini's
+# (generateContent and streamGenerateContent, direct or through Code Assist) only as Chat Completions.
+APIS_LOCAL = (*PATHS, "gemini")
 CHAT_PATH = "/v1/chat/completions"
 DEFAULT_MAX_TOKENS = 4096
 # Where the usual local servers listen, for `keepmum guard local add --preset` and the app.
@@ -313,6 +320,46 @@ def _text(content) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+def _gemini_text(content) -> str:
+    """A Gemini content's text (`parts`, or a bare string or list of parts): tool calls and results as
+    text, thoughts left out."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    parts = content.get("parts") if isinstance(content, dict) else content
+    if not isinstance(parts, list):
+        return ""
+    out = []
+    for p in parts:
+        if isinstance(p, str):
+            out.append(p)
+            continue
+        if not isinstance(p, dict) or p.get("thought") is True:
+            continue
+        if isinstance(p.get("text"), str):
+            out.append(p["text"])
+        elif isinstance(call := p.get("functionCall") or p.get("function_call"), dict):
+            out.append(f"[called the tool {call.get('name')} with {json.dumps(call.get('args'), ensure_ascii=False)}]")
+        elif isinstance(result := p.get("functionResponse") or p.get("function_response"), dict):
+            got = result.get("response")
+            if isinstance(got, dict) and len(got) == 1 and isinstance(next(iter(got.values())), str):
+                got = next(iter(got.values()))  # {"output": "..."}: the text itself
+            out.append("[tool result]\n" + (got if isinstance(got, str) else json.dumps(got, ensure_ascii=False)))
+        elif isinstance(p.get("executableCode"), dict):
+            out.append(str(p["executableCode"].get("code") or ""))
+        elif isinstance(p.get("codeExecutionResult"), dict):
+            out.append("[tool result]\n" + str(p["codeExecutionResult"].get("output") or ""))
+        elif "inlineData" in p or "fileData" in p:
+            out.append("[a file]")
+    return "\n\n".join(x for x in out if x)
+
+
+def gemini_request(body: dict) -> dict:
+    """The GenerateContentRequest in a body: Code Assist wraps it as `request`."""
+    return body["request"] if isinstance(body.get("request"), dict) else body
+
+
 def _chat_messages(body: dict, api: str, route: LocalRoute, skills: str = "") -> list[dict]:
     system = [note(route), skills]
     out: list[dict] = []
@@ -330,6 +377,13 @@ def _chat_messages(body: dict, api: str, route: LocalRoute, skills: str = "") ->
         for m in body.get("messages") or []:
             if isinstance(m, dict):
                 add("assistant" if m.get("role") == "assistant" else "user", _text(m.get("content")))
+    elif api == "gemini":
+        req = gemini_request(body)
+        system.append(_gemini_text(req.get("systemInstruction", req.get("system_instruction"))))
+        contents = req.get("contents")
+        for c in [contents] if isinstance(contents, dict) else contents or []:
+            if isinstance(c, dict):
+                add("assistant" if c.get("role") == "model" else "user", _gemini_text(c))
     else:
         system.append(body.get("instructions") if isinstance(body.get("instructions"), str) else "")
         items = body.get("input")
@@ -355,10 +409,18 @@ def _chat_messages(body: dict, api: str, route: LocalRoute, skills: str = "") ->
     return [{"role": "system", "content": "\n\n".join(s for s in system if s)}, *out]
 
 
-def to_chat(body: dict, api: str, model: str, route: LocalRoute, skills: str = "") -> dict:
-    """The same turn as a Chat Completions request: no tools, the note first, then the skills."""
-    data = {"model": model, "messages": _chat_messages(body, api, route, skills), "stream": bool(body.get("stream"))}
-    limit = body.get("max_tokens") if api == "messages" else body.get("max_output_tokens")
+def to_chat(body: dict, api: str, model: str, route: LocalRoute, skills: str = "", stream: bool | None = None) -> dict:
+    """The same turn as a Chat Completions request: no tools, the note first, then the skills.
+    `stream`: whether the agent asked for a stream, where its API does not say so in the body (Gemini's)."""
+    data = {"model": model, "messages": _chat_messages(body, api, route, skills),
+            "stream": bool(body.get("stream")) if stream is None else stream}
+    if api == "gemini":
+        config = gemini_request(body).get("generationConfig") or {}
+        limit = config.get("maxOutputTokens")
+        body = {k: config[k] for k in ("temperature", "topP") if k in config}
+        body["top_p"] = body.pop("topP", None)
+    else:
+        limit = body.get("max_tokens") if api == "messages" else body.get("max_output_tokens")
     # Codex sets no limit; a server's own default can be small (mlx_lm.server: 512), and a model
     # that thinks first can spend all of it thinking.
     data["max_tokens"] = limit if isinstance(limit, int) and limit > 0 else DEFAULT_MAX_TOKENS
@@ -391,6 +453,22 @@ def _response(model: str, text: str, usage: dict, rid: str, mid: str, created: i
             "usage": {"input_tokens": i, "output_tokens": o, "total_tokens": i + o} if status == "completed" else None}
 
 
+# Chat Completions' finish_reason -> Gemini's finishReason.
+_FINISH = {"stop": "STOP", "length": "MAX_TOKENS", "content_filter": "SAFETY"}
+
+
+def _gemini(model: str, text: str | None, finish: str | None, usage: dict, wrapped: bool) -> dict:
+    """One GenerateContentResponse (a whole answer, or one piece of a stream), as Code Assist wraps it
+    when `wrapped`. `finish` closes it: Chat Completions' finish_reason, or "" for a plain stop."""
+    candidate = {"content": {"role": "model", "parts": [{"text": text or ""}]}, "index": 0}
+    chunk = {"candidates": [candidate], "modelVersion": model}
+    if finish is not None:
+        candidate["finishReason"] = _FINISH.get(finish or "stop", "STOP")
+        i, o = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+        chunk["usageMetadata"] = {"promptTokenCount": i, "candidatesTokenCount": o, "totalTokenCount": i + o}
+    return {"response": chunk} if wrapped else chunk
+
+
 def _ids() -> tuple[str, str]:
     return "local_" + secrets.token_hex(12), "msg_local_" + secrets.token_hex(12)
 
@@ -401,9 +479,10 @@ def thought_only(model: str) -> str:
             "choose a model or setting without thinking for local mode.)")
 
 
-def from_chat(reply: dict, api: str, model: str) -> dict:
+def from_chat(reply: dict, api: str, model: str, wrapped: bool = False, array: bool = False) -> dict | list:
     """A Chat Completions answer as the agent's API. Its thinking (`reasoning`, `reasoning_content`)
-    is left out."""
+    is left out. Gemini: wrapped as Code Assist wraps it, and as a one-chunk JSON array for a
+    streamGenerateContent asked without alt=sse."""
     choice = (reply.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     text = message.get("content") or ""
@@ -413,6 +492,9 @@ def from_chat(reply: dict, api: str, model: str) -> dict:
     rid, mid = _ids()
     if api == "messages":
         return _message(model, text, choice.get("finish_reason"), usage, mid)
+    if api == "gemini":
+        chunk = _gemini(model, text, choice.get("finish_reason") or "", usage, wrapped)
+        return [chunk] if array else chunk
     return _response(model, text, usage, "resp_" + rid, mid, int(time.time()))
 
 
@@ -421,6 +503,24 @@ def answer_text(api: str, data: bytes, stream: bool) -> str:
     server-sent events: for the injection check before the answer goes on to the cloud (handback.py)."""
     text = data.decode("utf-8", "replace")
     out: list[str] = []
+    if api == "gemini":
+        if stream:
+            chunks = []
+            for line in text.splitlines():
+                if line.startswith("data:"):
+                    with contextlib.suppress(ValueError):
+                        chunks.append(json.loads(line[5:]))
+        else:
+            try:
+                chunks = json.loads(text)
+            except ValueError:
+                return ""
+            chunks = chunks if isinstance(chunks, list) else [chunks]
+        for chunk in chunks:
+            chunk = chunk.get("response", chunk) if isinstance(chunk, dict) else None
+            for c in (chunk or {}).get("candidates") or []:
+                out.append(_gemini_text((c or {}).get("content")))
+        return "".join(out)
     if not stream:
         try:
             reply = json.loads(text)
@@ -456,6 +556,7 @@ class ChatStream:
     arrives: feed() each piece, then end() once, which closes it even if the server stopped short."""
     api: str
     model: str
+    wrapped: bool = False  # Gemini through Code Assist: each event's chunk as {"response": ...}
     _buf: bytes = b""
     _text: list[str] = field(default_factory=list)
     _started: bool = False
@@ -501,6 +602,8 @@ class ChatStream:
         return out
 
     def _event(self, kind: str, **data) -> bytes:
+        if self.api == "gemini":  # Gemini's events have no names: one GenerateContentResponse each
+            return f"data: {json.dumps(data['chunk'], ensure_ascii=False)}\r\n\r\n".encode()
         if self.api == "messages":
             return _sse(kind, {"type": kind, **data})
         self._seq += 1
@@ -510,6 +613,8 @@ class ChatStream:
         if self._started:
             return b""
         self._started = True
+        if self.api == "gemini":
+            return b""  # its first piece of text opens it
         if self.api == "messages":
             msg = _message(self.model, "", None, {}, self._mid)
             msg.update(content=[], stop_reason=None)
@@ -523,6 +628,8 @@ class ChatStream:
                               part={"type": "output_text", "text": "", "annotations": []}))
 
     def _delta(self, text: str) -> bytes:
+        if self.api == "gemini":
+            return self._event("", chunk=_gemini(self.model, text, None, {}, self.wrapped))
         if self.api == "messages":
             return self._event("content_block_delta", index=0, delta={"type": "text_delta", "text": text})
         return self._event("response.output_text.delta", item_id=self._mid, output_index=0, content_index=0, delta=text)
@@ -537,6 +644,8 @@ class ChatStream:
             out += self._delta(notice)
         self._done = True
         text = "".join(self._text)
+        if self.api == "gemini":  # the last chunk: no more text, why it stopped, and the usage
+            return out + self._event("", chunk=_gemini(self.model, "", self._stop or "", self._usage, self.wrapped))
         if self.api == "messages":
             return out + (self._event("content_block_stop", index=0)
                           + self._event("message_delta", delta={"stop_reason": _STOP.get(self._stop or "stop", "end_turn"),

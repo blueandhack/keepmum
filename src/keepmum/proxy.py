@@ -55,6 +55,7 @@ from starlette.routing import Route
 from .gateway import ROUTE, api_of_route
 from .gemini import GeminiStreamRestorer, restore_gemini
 from .local import CHAT_PATH as LOCAL_CHAT_PATH
+from .local import APIS_LOCAL
 from .local import PATHS as LOCAL_PATHS
 from .handback import WRITTEN, Handbacks
 from .handback import messages as handback_messages
@@ -590,7 +591,7 @@ class Proxy:
                              f"(`keepmum guard {guard.name} warn` sends such requests with a warning)")
         if not hits:
             return None
-        if guard.mode == "local" and api in LOCAL_PATHS:
+        if guard.mode == "local" and api in APIS_LOCAL:
             entries = self._record_hits(guard, hits, "local", path, origin, self._shown(hits, items, texts))
             return LocalRoute(guard.name, hits, entries)
         self._record_hits(guard, hits, "blocked", path, origin, self._shown(hits, items, texts))
@@ -740,13 +741,14 @@ class Proxy:
         skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
         failures: list[str] = []
         for server in servers:
-            ways = (["chat"] if server.api == "chat" or (server.api == "auto" and (server.url, t.api) in self._chat_only)
+            ways = (["chat"] if t.api not in LOCAL_PATHS or server.api == "chat"  # Gemini: always as Chat Completions
+                    or (server.api == "auto" and (server.url, t.api) in self._chat_only)
                     else ["native", "chat"] if server.api == "auto" else ["native"])
             for way in ways:
                 if way == "native":
                     data, target = prepare_local(body, t.api, server.model, route, skills), server.url + LOCAL_PATHS[t.api]
                 else:
-                    data, target = to_chat(body, t.api, server.model, route, skills), server.url + LOCAL_CHAT_PATH
+                    data, target = to_chat(body, t.api, server.model, route, skills, stream), server.url + LOCAL_CHAT_PATH
                 headers = {"content-type": "application/json"}
                 if t.api == "messages" and way == "native":
                     headers["anthropic-version"] = request.headers.get("anthropic-version", "2023-06-01")
@@ -786,7 +788,11 @@ class Proxy:
                     log.warning("%s: %s; answered by the next local server", path, "; ".join(failures))
                 self.stats.note_guard(route.entries, answered_by={"model": server.model, "url": server.url,
                                                                   "api": way, "passed_over": failures})
-                return await self._local_answer(resp, content, path, server, way, t.api, local_origin, route, after)
+                # Gemini: as Code Assist wraps it when the request came wrapped, and as a JSON array for
+                # a streamGenerateContent asked without alt=sse.
+                shape = {"wrapped": isinstance(body.get("request"), dict),
+                         "array": t.path.endswith(":streamGenerateContent") and not stream} if t.api == "gemini" else {}
+                return await self._local_answer(resp, content, path, server, way, t.api, local_origin, route, after, shape)
         log.error("%s: no local server answered (%s); not sent anywhere else", path, "; ".join(failures))
         self.stats.note_guard(route.entries, local_error="no local server answered: " + "; ".join(failures))
         self._record(path, "blocked", 502, origin=origin, guard=refused)
@@ -794,7 +800,7 @@ class Proxy:
                          f"answered: {'; '.join(failures)}. It was not sent anywhere else.")
 
     async def _local_answer(self, resp: httpx.Response, content: bytes | None, path: str, server, way: str, api: str,
-                            origin, route: LocalRoute, after=None) -> Response:
+                            origin, route: LocalRoute, after=None, shape: dict | None = None) -> Response:
         """A local server's 2xx answer, passed back as it is or, from Chat Completions, in the
         agent's API: `content` when read whole, else streamed from `resp`. `after`, if given, gets
         the answer's text once the agent has it all (handback.py)."""
@@ -804,7 +810,7 @@ class Proxy:
         if way == "chat":
             headers = {k: v for k, v in headers.items() if k.lower() not in ("content-type", "content-length")}
         if content is None:
-            translate = ChatStream(api, server.model) if way == "chat" else None
+            translate = ChatStream(api, server.model, wrapped=bool((shape or {}).get("wrapped"))) if way == "chat" else None
 
             async def body():
                 sent, size = [], 0
@@ -832,7 +838,8 @@ class Proxy:
             return StreamingResponse(body(), status_code=resp.status_code, headers=headers)
         if way == "chat":
             try:
-                content = json.dumps(from_chat(json.loads(content), api, server.model), ensure_ascii=False).encode()
+                content = json.dumps(from_chat(json.loads(content), api, server.model, **(shape or {})),
+                                     ensure_ascii=False).encode()
             except (ValueError, AttributeError, TypeError, IndexError):
                 pass  # not JSON: passed back as it is
             headers["content-type"] = "application/json"

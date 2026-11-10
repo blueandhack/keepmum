@@ -13,8 +13,19 @@ from keepmum.config import ConfigError, load
 from keepmum.detect.pipeline import Pipeline
 from keepmum.detect.rules import RulesDetector
 from keepmum.handback import INSTRUCTIONS, Handbacks
-from keepmum.local import (ChatStream, LocalRoute, Server, Skill, answer_text, note, prepare, read_skill, servers_for,
-                           skills_for, to_chat)
+from keepmum.local import (
+    ChatStream,
+    LocalRoute,
+    Server,
+    Skill,
+    answer_text,
+    note,
+    prepare,
+    read_skill,
+    servers_for,
+    skills_for,
+    to_chat,
+)
 from keepmum.proxy import Proxy
 from keepmum.redact import Redactor
 from keepmum.stats import flows
@@ -78,8 +89,9 @@ def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", se
                       local_skills=lambda check: skills_for(skills or [], check),
                       handback=handback if callable(handback) else (lambda: handback) if handback else None)
         agent = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
-        rs = [await agent.post(path, json=b, headers={"x-api-key": "sk-ant-secret-key", "anthropic-version": "2023-06-01"})
-              for b in bodies]
+        paths = path if isinstance(path, list) else [path] * len(bodies)  # one per request, or the same for all
+        rs = [await agent.post(p, json=b, headers={"x-api-key": "sk-ant-secret-key", "anthropic-version": "2023-06-01"})
+              for p, b in zip(paths, bodies)]
         await proxy.settle()  # warn mode checks after the request: let those finish in this loop
         return rs, seen, proxy
 
@@ -127,13 +139,6 @@ def test_without_a_model_or_a_server_it_is_refused_not_sent():
     assert rs[0].status_code == 502 and "not sent anywhere else" in rs[0].json()["error"]["message"]
     assert "http://localhost:11434 did not answer (ConnectError)" in rs[0].json()["error"]["message"]
     assert seen["upstream"] == [] and proxy.stats.events[-1]["outcome"] == "blocked"
-
-
-def test_gemini_cannot_go_local_so_it_is_refused():
-    body = {"contents": [{"role": "user", "parts": [{"text": "Summarize this"}]},
-                         {"role": "user", "parts": [{"functionResponse": {"name": "web_fetch", "response": {"output": ATTACK}}}]}]}
-    rs, seen, _ = run("local", [body], path="/gemini/v1beta/models/m:generateContent")
-    assert rs[0].status_code == 403 and seen["upstream"] == [] and seen["local"] == []
 
 
 def test_prepare_for_codex_drops_tools_and_keeps_its_instructions_after_the_note():
@@ -738,3 +743,144 @@ def test_a_server_that_refuses_the_requests_shape_is_asked_in_chat_completions()
     rs, seen, _ = run("local", [codex(ATTACK)], servers=[Server("http://localhost:8080", "m")], local={8080: picky},
                       path="/openai/v1/responses")
     assert rs[0].json()["object"] == "response" and [p for _, p, _, _ in seen["local"]] == ["/v1/responses", "/v1/chat/completions"]
+
+
+# --- Every shape a conversation can take on its way to Chat Completions --------------------------
+
+def test_chat_text_reads_odd_content_shapes():
+    from keepmum.local import _text
+
+    assert _text(None) == "" and _text({"type": "text", "text": "one"}) == "one" and _text(3) == "3"
+    assert _text(["plain", 7, {"type": "image"}, {"type": "document"}, {"type": "thinking", "thinking": "x"}]) == \
+        "plain\n\n[an image]\n\n[a document]"
+
+
+def test_gemini_text_reads_odd_content_shapes():
+    from keepmum.local import _gemini_text
+
+    assert _gemini_text(None) == "" and _gemini_text("s") == "s" and _gemini_text({"parts": "no"}) == ""
+    assert _gemini_text(["bare", 5, {"fileData": {"fileUri": "gs://x"}}]) == "bare\n\n[a file]"
+    assert _gemini_text({"parts": [{"function_call": {"name": "f", "args": {}}}]}) == "[called the tool f with {}]"
+
+
+def test_a_string_system_prompt_and_stop_sequences_reach_the_local_server():
+    body = {**conversation(ATTACK), "system": "You are Claude Code.", "stop_sequences": ["END"]}
+    out = prepare(body, "messages", "m", LocalRoute("injection", [{"source": "WebFetch"}]))
+    assert out["system"].startswith("keepmum, a privacy proxy") and out["system"].endswith("You are Claude Code.")
+    assert to_chat(body, "messages", "m", LocalRoute("injection", [{"source": "WebFetch"}]))["stop"] == ["END"]
+
+
+def test_codex_developer_messages_join_the_system_prompt_and_empty_turns_are_skipped():
+    body = {"instructions": "You are Codex.", "input": [
+        {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Sandbox: workspace-write"}]},
+        {"type": "message", "role": "user", "content": ""}, "not an item", {"type": "reasoning", "summary": []},
+        {"type": "message", "role": "user", "content": "hi"}]}
+    out = to_chat(body, "responses", "m", LocalRoute("injection", [{"source": "shell"}]))
+    assert out["messages"][0]["content"].endswith("You are Codex.\n\nSandbox: workspace-write")
+    assert out["messages"][1:] == [{"role": "user", "content": "hi"}]
+
+
+def test_answer_text_skips_what_it_cannot_read():
+    assert answer_text("messages", b"not json", False) == ""
+    assert answer_text("responses", b'data: {bad\n\ndata: [1, 2]\n\ndata: {"type": "other"}\n\n', True) == ""
+
+
+def test_a_chat_stream_skips_a_piece_it_cannot_read():
+    s = ChatStream("messages", "m")
+    out = s.feed(b'data: {broken\n\ndata: {"choices": [{"delta": {"content": "ok"}}]}\n\n') + s.end()
+    assert "".join(e["delta"]["text"] for e in sse_events(out.decode()) if e["type"] == "content_block_delta") == "ok"
+
+
+def test_a_chat_answer_that_is_not_json_is_passed_back_as_it_came():
+    def broken(request, body):
+        return httpx.Response(200, text="plain words")
+    rs, _, _ = run("local", [conversation(ATTACK)], servers=[Server("http://localhost:8080", "m", api="chat")],
+                   local={8080: broken})
+    assert rs[0].status_code == 200 and rs[0].text == "plain words"
+
+
+def test_a_stream_that_breaks_off_is_closed_for_the_agent():
+    class Breaks(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'data: {"choices": [{"delta": {"content": "half"}}]}\n\n'
+            raise httpx.ReadError("connection reset")
+
+    def handler(request, body):
+        return httpx.Response(200, stream=Breaks(), headers={"content-type": "text/event-stream"})
+    rs, _, _ = run("local", [{**conversation(ATTACK), "stream": True}], servers=[Server("http://localhost:8080", "m", api="chat")],
+                   local={8080: handler})
+    kinds = [e["type"] for e in sse_events(rs[0].text)]
+    assert kinds[-1] == "message_stop" and "half" in rs[0].text
+
+
+# --- What a local server is and has (the CLI's and the app's list of servers) ---------------------
+
+def fake_servers(monkeypatch, answers: dict):
+    """httpx.get answered from `answers`: URL -> (status, JSON), or an exception to raise. Anything
+    else: connection refused."""
+    def get(url, timeout=None):
+        got = answers.get(url)
+        if got is None:
+            raise httpx.ConnectError("refused")
+        if isinstance(got, Exception):
+            raise got
+        status, data = got
+        return httpx.Response(status, json=data, request=httpx.Request("GET", url))
+    monkeypatch.setattr(httpx, "get", get)
+
+
+def test_what_ollama_lm_studio_and_llama_cpp_say_they_are_and_have(monkeypatch):
+    from keepmum.local import kind, models
+
+    fake_servers(monkeypatch, {
+        "http://o/v1/models": (200, {"data": [{"id": "qwen3:8b"}, {"id": "gemma3:12b"}, {"nope": 1}, "x"]}),
+        "http://o/api/version": (200, {"version": "0.13"}), "http://o/api/tags": (200, {"models": []}),
+        "http://l/v1/models": (404, {}), "http://l/api/tags": (200, {"models": [{"name": "llama3"}]}),
+        "http://l/api/version": (404, {}), "http://l/props": (500, {}), "http://l/api/v0/models": (200, {"data": []}),
+        "http://c/v1/models": (200, {"data": "not a list"}), "http://c/api/tags": httpx.ReadTimeout("slow"),
+        "http://c/api/version": httpx.ReadTimeout("slow"), "http://c/props": (200, {"default_generation_settings": {}}),
+        "http://x/api/version": (200, ["odd"]), "http://x/props": (200, {}), "http://x/api/v0/models": (200, {"data": {}}),
+    })
+    assert models("http://o/") == ["gemma3:12b", "qwen3:8b"] and kind("http://o") == "Ollama"
+    assert models("http://l") == ["llama3"] and kind("http://l") == "LM Studio"
+    assert models("http://c") is None and kind("http://c") == "llama.cpp"
+    assert models("http://down") is None and kind("http://x") == "local server"
+
+
+def test_why_a_server_cannot_answer_yet():
+    from keepmum.local import missing
+
+    s = Server("http://localhost:11434", "qwen3:8b")
+    assert missing(Server("http://localhost:11434"), ["qwen3:8b"]) == "no model chosen yet"
+    assert missing(s, None, "Ollama") == "nothing answers at http://localhost:11434: open the Ollama app, or `ollama serve`"
+    assert missing(s, None) == "nothing answers at http://localhost:11434"
+    assert missing(s, ["llama3"], "Ollama") == "Ollama at http://localhost:11434 has no model qwen3:8b: `ollama pull qwen3:8b`"
+    assert missing(s, ["llama3"]) == "the local server at http://localhost:11434 has no model qwen3:8b"
+    assert missing(s, ["qwen3:8b"]) is None
+
+
+@pytest.mark.parametrize(("value", "message"), [
+    ('"http://localhost:11434"', "must be list"),
+    ('["http://localhost:11434"]', "must be a table"),
+    ('[{ url = "http://localhost:1", key = "x" }]', "unknown key key"),
+    ('[{ url = "https://ollama.example.com" }]', "must be on this Mac"),
+    ('[{ url = "http://localhost:1", model = 8 }]', "model must be a string"),
+    ('[{ url = "http://localhost:1", checks = [] }]', "checks must list one or both"),
+    ('[{ url = "http://localhost:1", api = "grpc" }]', "api must be"),
+])
+def test_config_refuses_a_bad_local_server(tmp_path, value, message):
+    path = tmp_path / "config.toml"
+    path.write_text(f"[guard]\nlocal_servers = {value}\n")
+    with pytest.raises(ConfigError, match=message):
+        load(path)
+
+
+def test_a_skill_that_cannot_be_opened_says_why(tmp_path):
+    locked = tmp_path / "locked.md"
+    locked.write_text("secret rules")
+    locked.chmod(0)
+    try:
+        with pytest.raises(ValueError, match="Permission denied"):
+            read_skill(str(locked))
+    finally:
+        locked.chmod(0o600)

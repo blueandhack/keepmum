@@ -267,7 +267,7 @@ struct LocalServersSection: View {
 
     var body: some View {
         FormSection(title: "Local servers",
-                    footer: "For Local mode. A flagged request goes to the first server here that answers for its check; one that is not running, lacks its model or fails is passed over, and if none answers the request is refused. Each gets the request on this Mac only, without tools or your API key. Ollama, LM Studio and llama.cpp take Claude Code's and Codex's requests as they are; other servers, such as MLX, get them as Chat Completions. Use a capable model (8B or larger): a small one may repeat a planted instruction, or help with what the harm check flagged.") {
+                    footer: "For Local mode. A flagged request goes to the first server here that answers for its check; one that is not running, lacks its model or fails is passed over, and if none answers the request is refused. Each gets the request on this Mac only, without tools or your API key. Ollama, LM Studio and llama.cpp take Claude Code's and Codex's requests as they are; other servers, such as MLX, get them as Chat Completions, and so does every server for the Antigravity CLI and Gemini CLI, whose answers come back in Gemini's format. Use a capable model (8B or larger): a small one may repeat a planted instruction, or help with what the harm check flagged.") {
             if rows.isEmpty {
                 FormRow(title: "No local servers",
                         detail: used ? "A check is in Local mode with nowhere to send what it flags, so it refuses it. Add a server." : "Add Ollama, LM Studio, llama.cpp, MLX or another server on this Mac",

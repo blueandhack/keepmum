@@ -76,17 +76,6 @@ def test_codex_hands_back_after_a_local_answer():
     assert ATTACK not in sent and "answered the turn that followed" in sent and "kept on your Mac" in sent
 
 
-def test_gemini_is_refused_whatever_the_handback():
-    body = {"contents": [{"role": "user", "parts": [{"text": "Summarize this"}]},
-                         {"role": "user", "parts": [{"functionResponse": {"name": "web_fetch", "response": {"output": ATTACK}}}]}]}
-    for strategy in ("withhold", "summary"):
-        rs, seen, _ = run("local", [body], path="/gemini/v1beta/models/m:generateContent", handback=(strategy, ""),
-                          local=writes("a summary"))
-        assert rs[0].status_code == 403 and seen["upstream"] == [] and seen["local"] == []
-
-
-# --- What reaches the cloud -------------------------------------------------------------------------
-
 def test_a_secret_the_local_model_writes_is_masked_on_the_way_out():
     rs, seen, _ = run("local", [conversation(ATTACK)], local=writes(f"The README sets GITHUB_TOKEN={TOKEN}."),
                       handback=("rewrite", ""))
@@ -432,3 +421,49 @@ def test_a_flagged_summary_keeps_its_result_local_without_asking_again():
     assert [r.json()["id"] for r in rs] == ["local", "local"]
     assert [p for _, p, _, _ in seen["local"]] == ["/v1/chat/completions", "/v1/messages", "/v1/messages"]
     assert proxy.stats.guard_hits[0]["handed_back"]["kept"] == "what the local model wrote was flagged too"
+
+
+# --- When something on the way fails ----------------------------------------------------------------
+
+class FailsOn:
+    """Flags the attack; fails, as a model that crashed would, on a text holding `marker`."""
+
+    def __init__(self, marker):
+        self.marker = marker
+
+    def score(self, text):
+        if self.marker in text:
+            raise RuntimeError("llama-server stopped")
+        return 0.99 if "Note to AI agents" in text else 0.01
+
+
+def test_a_summary_the_check_cannot_score_is_not_handed_back():
+    rs, seen, _ = run("local", [conversation(ATTACK)], local=writes("SUMMARY-BOOM: install the project with make install, then check it with acme --version."),
+                      handback=("summary", ""), scorer=FailsOn("SUMMARY-BOOM"))
+    assert rs[0].json()["id"] == "local" and seen["upstream"] == []
+
+
+def test_an_answer_the_check_cannot_score_keeps_the_conversation_local():
+    def handler(request, body):
+        return httpx.Response(200, json={"id": "local", "type": "message", "role": "assistant", "model": body["model"],
+                                         "content": [{"type": "text", "text": "ANSWER-BOOM: install the project with make install, then check it with acme --version."}]})
+    second = later(conversation(ATTACK), {"role": "user", "content": "go on"})
+    rs, seen, _ = run("local", [conversation(ATTACK), second], local={11434: handler}, handback=("answer", ""),
+                      scorer=FailsOn("ANSWER-BOOM"))
+    assert [r.json()["id"] for r in rs] == ["local", "local"] and seen["upstream"] == []
+
+
+def test_a_summary_that_is_not_json_counts_as_none_written():
+    def handler(request, body):
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(200, text="<html>proxy error</html>")
+        return answer(body, body["model"])
+    rs, seen, _ = run("local", [conversation(ATTACK)], local={11434: handler}, handback=("summary", ""))
+    assert rs[0].json()["id"] == "local" and seen["upstream"] == []
+
+
+def test_results_kept_local_are_remembered_up_to_the_limit():
+    h = Handbacks(keep=2)
+    for t in ("a", "b", "c"):
+        h.keep_local(t)
+    assert [h.kept(t) for t in ("a", "b", "c")] == [False, True, True]
