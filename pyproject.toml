@@ -1,6 +1,6 @@
 [project]
 name = "keepmum"
-version = "0.1.0a6"
+version = "0.1.0a7"
 description = "Local secret and PII redaction proxy for Claude Code"
 readme = "README.md"
 requires-python = ">=3.12"
