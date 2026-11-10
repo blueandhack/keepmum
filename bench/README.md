@@ -68,6 +68,33 @@ uv run --group torch python bench/horizon_parity.py SRC OUT/prompt-injection-gua
 - Shield Small runs from its ONNX weights with the windowing its card describes; its repo's `classify.py` is not executed.
 - Real benign files are added at run time and not committed: this repo's docs and source, and the README of every package in `.venv`.
 
+### On public data (`guard_public.py`)
+
+The same question on public datasets: false alarms measured on real coding-agent tool output, and catch rates on
+attacks written by others. Data lands in `bench/data/guard-public/` (kept out of git), results in
+`results/guard-public-<stamp>.md`.
+
+```sh
+uv run --group torch python bench/guard_public.py build             # every source; --only swe-chat,prodnull
+uv run --group torch python bench/guard_public.py run               # keepmum,horizon-base,horizon-large,wolf-small,wolf
+uv run --group torch python bench/guard_public.py run --rescore bench/results/guard-public-<stamp>.json
+```
+
+| Source | Role | Licence |
+| --- | --- | --- |
+| [SWE-chat](https://huggingface.co/datasets/SALT-NLP/SWE-chat) | benign: real Claude Code, Codex and Gemini CLI sessions | ODC-BY, **gated** |
+| [SWE-Hero](https://huggingface.co/datasets/nvidia/SWE-Hero-openhands-trajectories) | benign: OpenHands on real repositories | CC BY 4.0 |
+| [AgentDojo](https://github.com/ethz-spylab/agentdojo) v1.2 | both: ground-truth calls replayed, clean and with its attacks (no model called) | MIT |
+| [InjecAgent](https://github.com/uiuc-kang-lab/InjecAgent) | injected tool responses | MIT |
+| [LLMail-Inject](https://huggingface.co/datasets/microsoft/llmail-inject-challenge) phase 2 | attack emails written to beat defences | MIT |
+| [CodeIPI](https://github.com/UKGovernmentBEIS/inspect_evals) | both: issues, code comments, READMEs, configs | MIT |
+| [prodnull](https://huggingface.co/datasets/prodnull/prompt-injection-repo-dataset) | both: repository files | Apache-2.0, **gated** |
+
+- Gated sources need their terms accepted on Hugging Face by the account `hf auth whoami` shows; `build` skips them otherwise.
+- AgentDojo runs in its own environment (`uv run --no-project --with agentdojo==0.1.34`, by `guard_public_agentdojo.py`).
+- The threshold is set to flag 1% of one half of the SWE-chat and SWE-Hero output; the other half gives the false-alarm rate. `keepmum` is the check as keepmum runs it (the GGUF in llama-server), also reported at each sensitivity level.
+- Not independent of every model: Horizon-Labs trained on LLMail phase 1 (phase 2 is used here), and Wolf Defender's card reports AgentDojo results.
+
 ## Harm content (`harm.py`)
 
 Which local model could flag harmful requests in user prompts without blocking ordinary coding

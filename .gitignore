@@ -12,6 +12,8 @@ bench/data/secrets.jsonl
 bench/data/pii.jsonl
 bench/data/long.jsonl
 bench/data/extra.jsonl
+# Rebuilt by bench/guard_public.py from pinned public sources; SWE-chat's are real users' sessions.
+bench/data/guard-public/
 
 # Rendered by docs/video/flow.swift; regenerate rather than commit a 7 MB binary.
 docs/video/*.mp4

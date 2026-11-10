@@ -43,6 +43,7 @@ DETECTORS = {
     # Trained on injections in documents and tool outputs; the tokenizer runs their obfuscation normalizer.
     "horizon-small": ("hf", "Horizon-Labs/prompt-injection-guard-small", {"INJECTION"}, 2048, "Apache-2.0", "141M"),
     "horizon-base": ("hf", "Horizon-Labs/prompt-injection-guard-base", {"INJECTION"}, 2048, "Apache-2.0", "308M"),
+    "horizon-large": ("hf", "Horizon-Labs/prompt-injection-guard-large", {"INJECTION"}, 2048, "Apache-2.0", "568M, on bge-m3"),
     "sentinel": ("hf", "rootfs/function-call-sentinel", {"INJECTION_RISK", "LABEL_1"}, 512, "Apache-2.0", ""),
     "vektor-v2": ("hf", "theinferenceloop/vektor-guard-v2",
                   {"instruction_override", "indirect_injection", "jailbreak", "tool_call_hijacking"}, 2048, "Apache-2.0", ""),
