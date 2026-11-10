@@ -467,3 +467,65 @@ def test_results_kept_local_are_remembered_up_to_the_limit():
     for t in ("a", "b", "c"):
         h.keep_local(t)
     assert [h.kept(t) for t in ("a", "b", "c")] == [False, True, True]
+
+
+# --- The app's flow diagram ---------------------------------------------------------------------------
+
+def test_the_flow_counts_a_summary_handed_back_once_and_later_turns_as_plain_requests():
+    from keepmum.stats import flows
+    second = later(conversation(ATTACK), {"role": "assistant", "content": "ok"}, {"role": "user", "content": "go on"})
+    rs, _, proxy = run("local", [conversation(ATTACK), second], local=writes("README: install with make."),
+                       handback=("summary", ""))
+    assert [r.json()["id"] for r in rs] == ["up", "up"]
+    events = list(proxy.stats.events)
+    assert events[0]["handed_back"] == "summary" and "handed_back" not in events[1]  # the second only resends it
+    f = flows(events, 0)
+    kinds = {o["kind"]: o["n"] for o in f["out"]}
+    assert kinds.pop("handed") == 1 and sum(kinds.values()) == 1 and "local" not in kinds
+    assert f["handback"] == {"summary": 1} and f["local"] == []
+    assert sum(b["n"] for b in f["back"]) == 2  # both went to the provider, and its replies came back
+
+
+def test_the_flow_counts_an_answer_locally_then_the_turn_that_hands_it_back():
+    from keepmum.stats import flows
+    second = later(conversation(ATTACK), {"role": "assistant", "content": "ok"}, {"role": "user", "content": "go on"})
+    third = later(second, {"role": "assistant", "content": "done"}, {"role": "user", "content": "thanks"})
+    rs, _, proxy = run("local", [conversation(ATTACK), second, third], handback=("answer", ""))
+    assert [r.json()["id"] for r in rs] == ["local", "up", "up"]
+    events = list(proxy.stats.events)
+    assert [e.get("handed_back") for e in events] == [None, "answer", None]
+    f = flows(events, 0)
+    assert {o["kind"] for o in f["out"]} >= {"local", "handed"} and f["handback"] == {"answer": 1}
+    assert f["local"] == [{"client": events[0]["client"], "n": 1}]  # the local model's answer, back to its client
+    assert {o["kind"]: o["n"] for o in f["out"]}["local"] == 1
+
+
+def test_a_withheld_result_hands_back_and_its_flight_says_so():
+    rs, _, proxy = run("local", [conversation(ATTACK)], servers=[], handback=("withhold", ""))
+    assert rs[0].json()["id"] == "up" and proxy.stats.events[-1]["handed_back"] == "withhold"
+    assert proxy.stats.inflight == {} and proxy.stats._handed == {}  # closed with its reply
+
+
+def test_first_sent_names_each_replacement_once():
+    h = Handbacks()
+    h.add("a" * 50, "notice a", "withhold")
+    h.add("b" * 60, "summary b", "summary")
+    seen: list = []
+    body, n = h.apply({"x": ["a" * 50, "b" * 60, "a" * 50]}, seen)
+    assert n == 3 and body == {"x": ["notice a", "summary b", "notice a"]}
+    assert h.first_sent(seen) == ["withhold", "summary"]
+    assert h.first_sent(seen) == []  # sent before: a resend
+    h.add("b" * 60, "a new summary", "rewrite")  # a new replacement is a new hand-back
+    seen = []
+    h.apply({"x": "b" * 60}, seen)
+    assert h.first_sent(seen) == ["rewrite"]
+
+
+def test_flows_reads_older_events_without_hand_backs():
+    from keepmum.stats import flows
+    old = [{"ts": 1, "outcome": "forwarded", "scan_ms": 3, "new": 0, "client": "codex", "provider": "openai"},
+           {"ts": 2, "outcome": "local", "scan_ms": None, "client": "codex", "provider": "local",
+            "guard": [{"check": "harm"}]}]
+    f = flows(old, 0)
+    assert f["handback"] == {} and f["local"] == [{"client": "codex", "n": 1}]
+    assert {o["kind"] for o in f["out"]} == {"clean", "local"}

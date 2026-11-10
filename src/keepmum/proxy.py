@@ -394,7 +394,8 @@ class Proxy:
         started = time.perf_counter()
         # Results handed back to the cloud (handback.py) go as their replacements; a local model
         # still gets the request as the agent wrote it.
-        original, (body, _) = body, self._handed_back(body)
+        seen: list = []  # the handed-back results this request carries
+        original, (body, _) = body, self._handed_back(body, seen)
         first = handed = None
         while True:
             try:
@@ -412,7 +413,8 @@ class Proxy:
                     if handed.get("kept"):  # what the local model wrote was flagged: this turn stays local
                         self.stats.note_guard(refused.entries, handed_back=handed)
                         return await self._answer_locally(request, t, original, refused, origin, texts)
-                    first, (body, _) = refused, self._handed_back(original)
+                    seen = []
+                    first, (body, _) = refused, self._handed_back(original, seen)
                     continue  # scanned again: what the local model wrote is checked like any result
                 if first is not None:
                     log.info("%s: the injection check flagged what the local model wrote too; answered locally", path)
@@ -423,6 +425,8 @@ class Proxy:
             break
         if first is not None:
             self.stats.note_guard(first.entries, handed_back=handed)
+        # The first request to carry a replacement to the cloud is its hand-back on the flow diagram.
+        handed_back = next(iter(self.handbacks.first_sent(seen)), None)
         scan_ms = (time.perf_counter() - started) * 1000
         payload = json.dumps(masked, ensure_ascii=False).encode("utf-8", "replace")
         url = self._url(request, t)
@@ -432,7 +436,7 @@ class Proxy:
 
             payload = zstandard.ZstdCompressor().compress(payload)
             headers.append(("content-encoding", "zstd"))
-        flight = self.stats.depart(origin, "masked" if new else "clean")
+        flight = self.stats.depart(origin, "masked" if new else "clean", handed_back=handed_back)
         try:
             if wants_stream(t, masked, request.url.query):
                 return await self._stream(url, headers, payload, path, t, scan_ms, counts, new, origin=origin, found=found,
@@ -608,13 +612,14 @@ class Proxy:
                          "request was not sent. Remove that result from the conversation (rewind, or /clear), or run "
                          "`keepmum guard injection warn` to send such requests with a warning.")
 
-    def _handed_back(self, body: dict) -> tuple[dict, int]:
+    def _handed_back(self, body: dict, seen: list | None = None) -> tuple[dict, int]:
         """The body with the results handed back so far replaced: while the injection check is in
-        local mode and hands back. Turned off, or set to stay, the request goes as the agent wrote it."""
+        local mode and hands back. Turned off, or set to stay, the request goes as the agent wrote it.
+        `seen` gets the replaced results' keys (Handbacks.first_sent)."""
         guard = next((g for g in self.guards if g.name == "injection"), None)
         if guard is None or guard.mode != "local" or self._handback()[0] == "stay":
             return body, 0
-        return self.handbacks.apply(body)
+        return self.handbacks.apply(body, seen)
 
     async def _hand_back(self, route: LocalRoute, texts: dict, path: str) -> dict | None:
         """[guard] local_handback (handback.py): a replacement for each result the injection check
@@ -628,7 +633,7 @@ class Proxy:
             return None  # what the local model wrote for it was flagged before: it stays local
         if strategy == "withhold":
             for text, source in flagged.items():
-                self.handbacks.add(text, handback_notice(strategy, source))
+                self.handbacks.add(text, handback_notice(strategy, source), strategy)
             log.info("%s: the flagged result withheld; the request goes on to the cloud", path)
             return {"strategy": strategy}
         skills = self.local_skills("injection") if callable(self.local_skills) else []
@@ -654,7 +659,7 @@ class Proxy:
                         "kept": "what the local model wrote was flagged too"}
             done.append((text, handback_wrap(strategy, source, out, custom=bool(instructions))))
         for text, replacement in done:
-            self.handbacks.add(text, replacement)
+            self.handbacks.add(text, replacement, strategy)
         log.info("%s: the local model %s at %s wrote a %s of the flagged result; checking it", path, server.model,
                  server.url, strategy)
         return {"strategy": strategy, "model": server.model, "url": server.url}
@@ -710,7 +715,7 @@ class Proxy:
                                                                   "kept": "the local model's answer was flagged too"})
                 return
         for text, source in flagged.items():
-            self.handbacks.add(text, handback_notice("answer", source))
+            self.handbacks.add(text, handback_notice("answer", source), "answer")
         self.stats.note_guard(route.entries, handed_back={"strategy": "answer"})
 
     async def _answer_locally(self, request: Request, t: Target, body: dict, route: LocalRoute, origin,

@@ -102,6 +102,9 @@ struct Snapshot: Decodable, Sendable {
         var `guard`: [Check]? = nil
         /// Its number in the live feed's requests out at a provider, while the engine is running.
         var flight: Int? = nil
+        /// The first request to take a flagged result's replacement to the cloud (local mode's hand-back):
+        /// the strategy (answer, summary, rewrite, withhold). Absent otherwise, and from older engines.
+        var handedBack: String? = nil
         var id: String { "\(ts):\(path):\(outcome):\(status)" }
 
         /// One check's hit, as an event carries it: never the text.
@@ -287,6 +290,8 @@ struct Flows: Decodable, Sendable {
     struct Provider: Decodable, Sendable { var id: String; var name: String; var replies: Int }
     struct Out: Decodable, Sendable { var client: String; var provider: String?; var kind: String; var n: Int }
     struct Back: Decodable, Sendable { var provider: String; var client: String; var restored: Bool; var n: Int; var values: Int }
+    /// The local model's answers going back to a client (local mode).
+    struct Local: Decodable, Sendable { var client: String; var n: Int }
     var window: Double = 3600
     var clients: [Client] = []
     var providers: [Provider] = []
@@ -295,6 +300,11 @@ struct Flows: Decodable, Sendable {
     var unresolved: Int = 0
     /// The optional checks' results ("flagged", "refused"), each by check (injection, harm); nil from older engines.
     var checks: [String: [String: Int]]?
+    /// Requests handed back to the cloud after a local turn, by strategy (answer, summary, rewrite, withhold).
+    var handback: [String: Int]?
+    /// Replies from the local model, by client; nil from older engines.
+    var local: [Local]?
+    var localReplies: [Local] { local ?? [] }
 }
 
 @MainActor
@@ -618,7 +628,8 @@ final class StatsStore {
         for event in fresh {
             let client = event.client ?? "claude-code", provider = event.provider ?? "anthropic"
             let result = event.outcome == "upstream_error" ? "failed"
-                : event.kind == .blocked && !event.checks.isEmpty ? "refused" : event.kind.rawValue
+                : event.kind == .blocked && !event.checks.isEmpty ? "refused"
+                : event.handedBack != nil && [.masked, .clean].contains(event.kind) ? "handed" : event.kind.rawValue
             let restored = event.restored.values.reduce(0, +) > 0
             if let n = event.flight, let out = open.removeValue(forKey: n) {
                 // Seen leaving: the reply sets off now, or once the request has landed if it is
@@ -631,7 +642,7 @@ final class StatsStore {
             }
             let start = born()
             pulses.append(Pulse(kind: .out(result), client: client, provider: provider, born: start))
-            if !FlowGeometry.unsent.contains(result) {
+            if !FlowGeometry.unanswered.contains(result) {  // a local answer comes back from this Mac
                 pulses.append(Pulse(kind: .back(restored: restored, result: result), client: client, provider: provider, born: start))
             }
         }
@@ -746,12 +757,14 @@ struct SampleFeed {
         let k = window <= 3600 ? 1 : (window <= 86400 ? 9 : 52)
         var f = Flows()
         f.window = window
-        f.clients = [.init(id: "claude-code", name: "Claude Code", sent: 412 * k), .init(id: "codex", name: "Codex", sent: 96 * k),
+        f.clients = [.init(id: "claude-code", name: "Claude Code", sent: 418 * k), .init(id: "codex", name: "Codex", sent: 96 * k),
                      .init(id: "pi", name: "pi", sent: 31 * k)]
-        f.providers = [.init(id: "anthropic", name: "Anthropic", replies: 435 * k), .init(id: "openai", name: "OpenAI", replies: 94 * k)]
+        f.providers = [.init(id: "anthropic", name: "Anthropic", replies: 438 * k), .init(id: "openai", name: "OpenAI", replies: 94 * k)]
         f.out = [.init(client: "claude-code", provider: "anthropic", kind: "clean", n: 258 * k),
                  .init(client: "claude-code", provider: "anthropic", kind: "masked", n: 144 * k),
                  .init(client: "claude-code", provider: "anthropic", kind: "flagged", n: 4 * k),
+                 .init(client: "claude-code", provider: "anthropic", kind: "handed", n: 3 * k),
+                 .init(client: "claude-code", provider: nil, kind: "local", n: 3 * k),
                  .init(client: "claude-code", provider: nil, kind: "blocked", n: 4 * k),
                  .init(client: "claude-code", provider: nil, kind: "refused", n: 2 * k),
                  .init(client: "codex", provider: "openai", kind: "clean", n: 70 * k),
@@ -761,13 +774,16 @@ struct SampleFeed {
                  .init(client: "pi", provider: "anthropic", kind: "masked", n: 10 * k),
                  .init(client: "pi", provider: nil, kind: "blocked", n: 2 * k)]
         f.back = [.init(provider: "anthropic", client: "claude-code", restored: true, n: 101 * k, values: 130 * k),
-                  .init(provider: "anthropic", client: "claude-code", restored: false, n: 305 * k, values: 0),
+                  .init(provider: "anthropic", client: "claude-code", restored: false, n: 308 * k, values: 0),
                   .init(provider: "openai", client: "codex", restored: true, n: 11 * k, values: 19 * k),
                   .init(provider: "openai", client: "codex", restored: false, n: 83 * k, values: 0),
                   .init(provider: "anthropic", client: "pi", restored: true, n: 9 * k, values: 7 * k),
                   .init(provider: "anthropic", client: "pi", restored: false, n: 20 * k, values: 0)]
         f.unresolved = 2  // placeholders made by another keepmum, or before a restart
-        f.checks = ["flagged": ["injection": 2 * k, "harm": 1 * k, "commands": 1 * k], "refused": ["injection": 1 * k, "harm": 1 * k]]
+        f.checks = ["flagged": ["injection": 2 * k, "harm": 1 * k, "commands": 1 * k], "refused": ["injection": 1 * k, "harm": 1 * k],
+                    "local": ["injection": 3 * k]]
+        f.handback = ["summary": 2 * k, "answer": 1 * k]
+        f.local = [.init(client: "claude-code", n: 3 * k)]
         return f
     }
 

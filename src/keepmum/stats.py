@@ -165,10 +165,15 @@ def flows(events, since: float) -> dict:
     then a check flagged it). A warning is an event of its own, after
     the request's: it moves its request out of masked, clean or observed into flagged, once per
     request, and only when that request is counted (a check may finish before a streamed reply).
-    `checks` counts each result's requests by check (injection, harm)."""
+    `checks` counts each result's requests by check (injection, harm).
+
+    Local mode has two more: "handed", the request that first took a flagged result's replacement
+    (the local model's answer, summary or rewrite, or a notice) to the cloud, counted by strategy in
+    `handback`; and the local model's answers coming back, by client, in `local`."""
     out, back = Counter(), Counter()
     values, unresolved = Counter(), 0
     checks = {"flagged": Counter(), "refused": Counter(), "local": Counter()}
+    handback, local = Counter(), Counter()
     warned: dict[str, dict] = {}  # request id (or the event's own place) -> its warnings
     for i, e in enumerate(events):
         if e.get("ts", 0) < since:
@@ -189,6 +194,7 @@ def flows(events, since: float) -> dict:
         kind = event_kind(e)
         if kind == "local":  # answered by the local model (local.py): it never left this Mac
             out[(client, None, "local")] += 1
+            local[client] += 1
             checks["local"].update({g.get("check", "injection") for g in e.get("guard") or []})
             continue
         if kind == "blocked":
@@ -198,6 +204,9 @@ def flows(events, since: float) -> dict:
             else:
                 out[(client, None, "blocked")] += 1
             continue
+        if e.get("handed_back") and kind in ("masked", "clean"):
+            kind = "handed"
+            handback[e["handed_back"]] += 1
         out[(client, provider, kind)] += 1
         n = sum((e.get("restored") or {}).values())
         back[(provider, client, n > 0)] += 1
@@ -224,6 +233,8 @@ def flows(events, since: float) -> dict:
                  for (p, c, r), n in sorted(back.items(), key=str)],
         "unresolved": unresolved,
         "checks": {k: dict(v) for k, v in checks.items() if v},
+        "handback": dict(handback),
+        "local": [{"client": c, "n": n} for c, n in local.most_common()],
     }
 
 
@@ -277,14 +288,20 @@ class Stats:
         # dashboard draws them waiting there. Client, provider and kind; never content.
         self.inflight: dict[int, dict] = {}
         self._flight = 0
+        # Flights that hand a flagged result back to the cloud (handback.py): the strategy, which
+        # `record` puts on the request's event. Apart from inflight, which drops a request gone stale.
+        self._handed: dict[int, str] = {}
 
-    def depart(self, origin: tuple[str, str] | None, kind: str) -> int:
-        """A scanned request is leaving for its provider: its number, which `record` closes."""
+    def depart(self, origin: tuple[str, str] | None, kind: str, handed_back: str | None = None) -> int:
+        """A scanned request is leaving for its provider: its number, which `record` closes.
+        `handed_back`: the strategy, when it is the first to carry a flagged result's replacement."""
         with self._lock:
             self._flight += 1
             client, provider = origin or (None, None)
             self.inflight[self._flight] = {"id": self._flight, "ts": round(time.time(), 6), "client": client,
-                                           "provider": provider, "kind": kind}
+                                           "provider": provider, "kind": "handed" if handed_back else kind}
+            if handed_back:
+                self._handed[self._flight] = handed_back
             return self._flight
 
     def live(self, after: float = 0.0) -> dict:
@@ -335,6 +352,8 @@ class Stats:
                 event["tools"] = tools
             if guard:  # a check's hits: check, action, source, score, categories, never the text
                 event["guard"] = guard
+            if flight is not None and (handed := self._handed.pop(flight, None)):
+                event["handed_back"] = handed  # the strategy, never what was written
             kept = event
             if flight is not None:  # its reply is done: no longer out at the provider
                 self.inflight.pop(flight, None)

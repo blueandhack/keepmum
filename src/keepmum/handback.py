@@ -115,12 +115,15 @@ def _key(text: str) -> bytes:
 
 class Handbacks:
     """Flagged results and what replaces each on the way to the cloud, in memory, most recent `keep`.
-    Also the replacements themselves: one the check flags is never handed back in turn."""
+    Also the replacements themselves: one the check flags is never handed back in turn. And, until a
+    request carrying it first goes to the cloud, the strategy each replacement came from: that
+    request is the hand-back the app's flow diagram counts (`first_sent`); later ones only resend it."""
 
     def __init__(self, keep: int = 1024):
         self._by: OrderedDict[bytes, tuple[int, str]] = OrderedDict()  # text hash -> (its length, replacement)
         self._lengths: Counter[int] = Counter()  # of the flagged texts: most strings are passed over on length
         self._made: dict[bytes, None] = {}
+        self._unsent: dict[bytes, str] = {}  # flagged text hash -> strategy, until first sent
         # Flagged results whose summary or rewrite the check flagged: they stay local, not asked again.
         self._kept: OrderedDict[bytes, None] = OrderedDict()
         self._keep = keep
@@ -129,7 +132,7 @@ class Handbacks:
     def __len__(self) -> int:
         return len(self._by)
 
-    def add(self, text: str, replacement: str) -> None:
+    def add(self, text: str, replacement: str, strategy: str = "withhold") -> None:
         key = _key(text)
         with self._lock:
             old = self._by.pop(key, None)
@@ -139,9 +142,11 @@ class Handbacks:
                 self._made.pop(_key(old[1]), None)
             self._by[key] = (len(text), replacement)
             self._made[_key(replacement)] = None
+            self._unsent[key] = strategy
             while len(self._by) > self._keep:
-                _, (n, gone) = self._by.popitem(last=False)
+                gone_key, (n, gone) = self._by.popitem(last=False)
                 self._made.pop(_key(gone), None)
+                self._unsent.pop(gone_key, None)
                 self._lengths[n] -= 1
                 if not self._lengths[n]:
                     del self._lengths[n]
@@ -161,9 +166,15 @@ class Handbacks:
         with self._lock:
             return _key(text) in self._made
 
-    def apply(self, body):
+    def first_sent(self, keys) -> list[str]:
+        """The strategies of the replacements (by `apply`'s `seen` keys) that no request has carried
+        to the cloud before; from now on they have been."""
+        with self._lock:
+            return [s for k in dict.fromkeys(keys) if (s := self._unsent.pop(k, None))]
+
+    def apply(self, body, seen: list | None = None):
         """The body with every string that is a flagged result replaced, and how many were. Parts
-        that do not change are shared with `body`, not copied."""
+        that do not change are shared with `body`, not copied. `seen` gets each replaced text's key."""
         with self._lock:
             if not self._by:
                 return body, 0
@@ -173,8 +184,10 @@ class Handbacks:
         def walk(value):
             nonlocal count
             if isinstance(value, str):
-                if len(value) in lengths and (r := by.get(_key(value))) is not None:
+                if len(value) in lengths and (r := by.get(key := _key(value))) is not None:
                     count += 1
+                    if seen is not None:
+                        seen.append(key)
                     return r[1]
                 return value
             if isinstance(value, dict):

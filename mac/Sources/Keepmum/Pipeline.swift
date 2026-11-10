@@ -7,8 +7,10 @@ enum FlowGeometry {
     static let turnaround: TimeInterval = 0.25
     /// How long a pulse is kept: a poll's stagger, a request, the turnaround, its reply, and its ring.
     static let horizon: TimeInterval = 6
-    /// Results that never reach a provider, so no reply comes back.
+    /// Results that never reach a provider.
     static let unsent: Set<String> = ["blocked", "refused", "failed", "local"]
+    /// Results with no reply: all of those but "local", whose answer comes back from the local model.
+    static let unanswered: Set<String> = ["blocked", "refused", "failed"]
 
     /// How long a route of this length takes, kept within bounds for very short and very long ones.
     static func duration(_ length: CGFloat) -> TimeInterval { min(max(Double(length / speed), 0.9), 1.8) }
@@ -40,8 +42,13 @@ enum FlowPulseStyle: String, CaseIterable, Identifiable {
 
 /// The live flow as two Sankey diagrams on shared columns.
 ///
-///   Requests out:   clients ─▶ keepmum scans ─▶ clean / masked / observed / blocked ┆─▶ providers
-///   Replies back:   clients ◀─ keepmum restores (values put back / nothing to) ◀─┆── providers
+///   Requests out:   clients ─▶ keepmum scans ─▶ clean / masked / handed back / … / local ┆─▶ providers
+///   Replies back:   clients ◀─ keepmum restores (values put back / nothing to) ◀─ local model ┆◀─ providers
+///
+/// Local mode has a route of each kind. A request answered on this Mac ends at its result, under the
+/// local model, whose answer comes back from there, on this side of the line. A request handed back
+/// (a flagged result replaced by the local model's answer, summary or rewrite, or a notice) goes on
+/// to its provider like any other.
 ///
 /// Band width is the number of requests in the window. A request sets off as it leaves this Mac,
 /// waits at its provider (a breathing dot) for as long as the provider takes, and its reply sets
@@ -93,6 +100,11 @@ struct BandLayout {
         var col: Int
         var color: Color
         var rect: CGRect = .zero
+        /// Kept at the bottom, under every other column's nodes, so no band between them crosses it.
+        var under = false
+        /// The height its label needs: a thin node takes this much of its column, gap included, with the
+        /// bar in the middle, so the label beside it never has to move off it to clear the next one.
+        var slot: CGFloat = 0
     }
     struct Link {
         var from: String
@@ -157,27 +169,56 @@ struct BandLayout {
         }
         let present = order.filter { max(inSum[$0.id] ?? 0, outSum[$0.id] ?? 0) > 0 }
         let byCol = Dictionary(grouping: present, by: \.col)
-        // One scale for both sides of every node: the fullest column fills the height.
-        var scale = CGFloat.greatestFiniteMagnitude
+        let live = links.filter { $0.value > 0 }
+        func thick(_ v: Int, _ scale: CGFloat) -> CGFloat { v > 0 ? max(CGFloat(v) * scale, 1.5) : 0 }
+        /// A node's bar at a scale: as tall as the bands on its fuller side.
+        func bar(_ id: String, _ scale: CGFloat) -> CGFloat {
+            max(live.filter { $0.to == id }.reduce(0) { $0 + thick($1.value, scale) },
+                live.filter { $0.from == id }.reduce(0) { $0 + thick($1.value, scale) }, 2)
+        }
+        /// The height a node takes in its column, the gap after it included.
+        func block(_ n: Node, _ h: CGFloat) -> CGFloat { max(h + gap, n.slot) }
+        let underNodes = present.filter(\.under)
+        /// Whether every column fits the height at this scale: its nodes, then any kept under them.
+        func fits(_ scale: CGFloat) -> Bool {
+            let under = underNodes.map { bar($0.id, scale) }.max().map { $0 + gap } ?? 0
+            return byCol.values.allSatisfy { col in
+                let main = col.filter { !$0.under }
+                return main.reduce(-gap) { $0 + block($1, bar($1.id, scale)) } + under <= height + 0.5
+            }
+        }
+        // One scale for both sides of every node: the largest at which the fullest column fits, its
+        // labels' room included. Without labels' room it would be total over height; with it, less.
+        var hi: CGFloat = 0
         for (_, col) in byCol {
             let total = col.reduce(0) { $0 + max(inSum[$1.id] ?? 0, outSum[$1.id] ?? 0) }
-            let room = height - gap * CGFloat(max(col.count - 1, 0))
-            if total > 0 { scale = min(scale, room / CGFloat(total)) }
+            if total > 0 { hi = max(hi, height / CGFloat(total)) }
         }
-        if scale == .greatestFiniteMagnitude { scale = 0 }
-        func thick(_ v: Int) -> CGFloat { v > 0 ? max(CGFloat(v) * scale, 1.5) : 0 }
+        var lo: CGFloat = 0
+        if fits(hi) { lo = hi } else {
+            for _ in 0..<40 {
+                let m = (lo + hi) / 2
+                if fits(m) { lo = m } else { hi = m }
+            }
+        }
+        let scale = lo
 
-        var links = links.filter { $0.value > 0 }
-        for i in links.indices { links[i].t = thick(links[i].value) }
+        var links = live
+        for i in links.indices { links[i].t = thick(links[i].value, scale) }
         var nodes = [String: Node]()
         for (c, col) in byCol {
             var y = top
             for var n in col {
-                let h = max(links.filter { $0.to == n.id }.reduce(0) { $0 + $1.t },
-                            links.filter { $0.from == n.id }.reduce(0) { $0 + $1.t }, 2)
-                n.rect = CGRect(x: xs[c], y: y, width: Self.bar, height: h)
+                let h = bar(n.id, scale)
+                if n.under {
+                    n.rect = CGRect(x: xs[c], y: top + height - h, width: Self.bar, height: h)
+                } else {
+                    let b = block(n, h)
+                    // A thin node sits in the middle of its slot, where its label is.
+                    n.rect = CGRect(x: xs[c], y: y + max(0, (b - gap - h) / 2), width: Self.bar, height: h)
+                    y += b
+                }
                 nodes[n.id] = n
-                y += h + gap
             }
         }
         // Stack each node's bands in the order of the nodes at their other end: fewest crossings.
@@ -258,7 +299,13 @@ private struct FlowBands {
 
     /// What keepmum did with each request: sent (clean, masked, observed, flagged by a check) or not
     /// (failed upstream, blocked by keepmum, refused by a check).
-    static let results = ["clean", "masked", "observed", "flagged", "failed", "blocked", "refused", "local"]
+    static let results = ["clean", "masked", "observed", "handed", "flagged", "failed", "blocked", "refused", "local"]
+    /// The local model, in the replies' Result column: on this Mac.
+    static let localModel = "m:local"
+    /// Results that are usually thin: their labels take one line each, so several fit below the others.
+    static let oneLine: Set = ["handed", "flagged", "failed", "blocked", "refused", "local"]
+    /// The room a label takes in its column: a title, or a title over a detail.
+    static func slot(_ oneLine: Bool) -> CGFloat { oneLine ? 18 : 34 }
 
     init(flows: Flows, size: CGSize, open: [Pulse] = []) {
         self.flows = flows
@@ -278,10 +325,11 @@ private struct FlowBands {
         for o in flows.out { if let p = o.provider, !providers.contains(p) { providers.append(p) } }
 
         // Requests out.
-        var nodes = clients.map { BandLayout.Node(id: "c:" + $0, col: 0, color: Self.clientColor($0)) }
+        let two = Self.slot(false)
+        var nodes = clients.map { BandLayout.Node(id: "c:" + $0, col: 0, color: Self.clientColor($0), slot: two) }
         nodes.append(.init(id: "keepmum", col: 1, color: Theme.text))
-        nodes += Self.results.map { BandLayout.Node(id: "r:" + $0, col: 2, color: Self.resultColor($0)) }
-        nodes += providers.map { BandLayout.Node(id: "p:" + $0, col: 3, color: Self.providerColor($0)) }
+        nodes += Self.results.map { BandLayout.Node(id: "r:" + $0, col: 2, color: Self.resultColor($0), slot: Self.slot(Self.oneLine.contains($0))) }
+        nodes += providers.map { BandLayout.Node(id: "p:" + $0, col: 3, color: Self.providerColor($0), slot: two) }
         var links: [BandLayout.Link] = []
         for c in flows.clients {
             links.append(.init(from: "c:" + c.id, to: "keepmum", value: c.sent, color: Self.clientColor(c.id)))
@@ -297,10 +345,11 @@ private struct FlowBands {
         out = BandLayout(nodes: nodes, links: links, xs: xs, top: outTop, height: half)
 
         // Replies back, right to left: providers, restore, clients.
-        var bnodes = providers.map { BandLayout.Node(id: "p:" + $0, col: 3, color: Self.providerColor($0)) }
-        bnodes += [BandLayout.Node(id: "restored", col: 1, color: Theme.restored),
-                   BandLayout.Node(id: "plain", col: 1, color: Self.resultColor("clean"))]
-        bnodes += clients.map { BandLayout.Node(id: "c:" + $0, col: 0, color: Self.clientColor($0)) }
+        var bnodes = providers.map { BandLayout.Node(id: "p:" + $0, col: 3, color: Self.providerColor($0), slot: two) }
+        bnodes.append(BandLayout.Node(id: Self.localModel, col: 2, color: Theme.restored, under: true))
+        bnodes += [BandLayout.Node(id: "restored", col: 1, color: Theme.restored, slot: two),
+                   BandLayout.Node(id: "plain", col: 1, color: Self.resultColor("clean"), slot: two)]
+        bnodes += clients.map { BandLayout.Node(id: "c:" + $0, col: 0, color: Self.clientColor($0), slot: two) }
         var blinks: [BandLayout.Link] = []
         for p in providers {
             for (node, r) in [("restored", true), ("plain", false)] {
@@ -308,9 +357,13 @@ private struct FlowBands {
                 blinks.append(.init(from: "p:" + p, to: node, value: n, color: r ? Theme.restored : Self.resultColor("clean")))
             }
         }
+        // The local model's answers: real values never left this Mac, so there is nothing to put back.
+        blinks.append(.init(from: Self.localModel, to: "plain", value: flows.localReplies.reduce(0) { $0 + $1.n },
+                            color: Theme.restored))
         for c in clients {
             for (node, r) in [("restored", true), ("plain", false)] {
                 let n = flows.back.filter { $0.client == c && $0.restored == r }.reduce(0) { $0 + $1.n }
+                    + (r ? 0 : flows.localReplies.filter { $0.client == c }.reduce(0) { $0 + $1.n })
                 blinks.append(.init(from: node, to: "c:" + c, value: n, color: r ? Theme.restored : Self.resultColor("clean")))
             }
         }
@@ -335,7 +388,7 @@ private struct FlowBands {
         case "masked": Theme.masked
         case "observed", "flagged": Theme.warning
         case "blocked", "refused": Theme.blocked
-        case "local": Theme.restored
+        case "local", "handed": Theme.restored
         case "failed": Theme.textSecondary
         default: Theme.neutral
         }
@@ -412,8 +465,13 @@ private struct FlowBands {
         for b in mine {
             nodes.formUnion([b.restored ? "restored" : "plain", "c:" + b.client, "p:" + b.provider])
         }
+        if id.hasPrefix("c:"), flows.localReplies.contains(where: { $0.client == key && $0.n > 0 }) {
+            nodes.formUnion([Self.localModel, "plain", id])
+        }
         return nodes
     }
+
+    private var localTotal: Int { flows.localReplies.reduce(0) { $0 + $1.n } }
 
     private func totals(_ id: String) -> (Int, String) {
         let key = String(id.dropFirst(2))
@@ -421,7 +479,8 @@ private struct FlowBands {
         if id.hasPrefix("p:") { return (flows.providers.first { $0.id == key }?.replies ?? 0, "requests") }
         if id.hasPrefix("r:") { return (flows.out.filter { $0.kind == key }.reduce(0) { $0 + $1.n }, "requests") }
         if id == "restored" { return (flows.back.filter(\.restored).reduce(0) { $0 + $1.n }, "replies") }
-        if id == "plain" { return (flows.back.filter { !$0.restored }.reduce(0) { $0 + $1.n }, "replies") }
+        if id == "plain" { return (flows.back.filter { !$0.restored }.reduce(0) { $0 + $1.n } + localTotal, "replies") }
+        if id == Self.localModel { return (localTotal, "answers") }
         return (flows.clients.reduce(0) { $0 + $1.sent }, "scanned")
     }
 
@@ -430,9 +489,11 @@ private struct FlowBands {
         if id.hasPrefix("c:") { return flows.clients.first { $0.id == key }?.name ?? key }
         if id.hasPrefix("p:") { return flows.providers.first { $0.id == key }?.name ?? key }
         if id.hasPrefix("r:") {
-            return ["refused": "Refused by a check", "local": "Answered on this Mac"][key] ?? key.prefix(1).uppercased() + key.dropFirst()
+            return ["refused": "Refused by a check", "local": "Answered on this Mac", "handed": "Handed back"][key]
+                ?? key.prefix(1).uppercased() + key.dropFirst()
         }
-        return ["keepmum": "keepmum", "restored": "Real values put back", "plain": "Nothing to put back"][id] ?? id
+        return ["keepmum": "keepmum", "restored": "Real values put back", "plain": "Nothing to put back",
+                Self.localModel: "Your local model"][id] ?? id
     }
 
     func draw(_ ctx: inout GraphicsContext, now: Date, pulses: [Pulse], style: FlowPulseStyle = .comet, hover: CGPoint? = nil) {
@@ -504,7 +565,7 @@ private struct FlowBands {
         for c in flows.clients {
             if let n = out.nodes["c:" + c.id] { leftOut.append((n.rect, c.name, c.sent.compact, Theme.text, false)) }
             if let n = back.nodes["c:" + c.id] {
-                let got = sum(flows.back.filter { $0.client == c.id }.map(\.n))
+                let got = sum(flows.back.filter { $0.client == c.id }.map(\.n)) + sum(flows.localReplies.filter { $0.client == c.id }.map(\.n))
                 let values = sum(flows.back.filter { $0.client == c.id }.map(\.values))
                 leftBack.append((n.rect, c.name, values > 0 ? "\(got.compact) · \(values.compact) restored" : got.compact, Theme.text, false))
             }
@@ -517,19 +578,26 @@ private struct FlowBands {
             }
             return parts.isEmpty ? otherwise : parts.joined(separator: ", ")
         }
+        // A hand-back says what replaced the flagged result, as the checks say which check: "2 summaries, 1 answer".
+        func byStrategy() -> String {
+            let n = flows.handback ?? [:]
+            let parts = [("summary", "summary", "summaries"), ("rewrite", "rewrite", "rewrites"), ("withhold", "notice", "notices"),
+                         ("answer", "answer", "answers")].compactMap { s, one, many in n[s].map { "\($0.compact) \($0 == 1 ? one : many)" } }
+            return parts.isEmpty ? "result replaced" : parts.joined(separator: ", ")
+        }
         let detail = ["clean": "sent as is", "masked": "as placeholders", "observed": "sent unmasked", "failed": "upstream failed",
                       "blocked": "never sent", "flagged": byCheck("flagged", "sent with a warning"),
-                      "refused": byCheck("refused", "never sent"), "local": byCheck("local", "by your local model")]
-        // Results that are usually thin take one line each, so four of them fit below the others.
-        let oneLine: Set = ["flagged", "failed", "blocked", "refused", "local"]
+                      "refused": byCheck("refused", "never sent"), "local": byCheck("local", "by your local model"),
+                      "handed": byStrategy()]
         let title = ["clean": "Clean", "masked": "Masked", "observed": "Observed", "failed": "Failed", "blocked": "Blocked",
-                     "flagged": "Flagged", "refused": "Refused by a check", "local": "Answered on this Mac"]
+                     "flagged": "Flagged", "refused": "Refused by a check", "local": "Answered on this Mac", "handed": "Handed back"]
         let tint: [String: Color] = ["masked": Theme.masked, "blocked": Theme.blocked, "refused": Theme.blocked, "local": Theme.restored,
-                                     "observed": Self.resultColor("observed"), "flagged": Self.resultColor("flagged")]
+                                     "handed": Theme.restored, "observed": Self.resultColor("observed"),
+                                     "flagged": Self.resultColor("flagged")]
         for r in Self.results {
             guard let n = out.nodes["r:" + r] else { continue }
             let v = sum(flows.out.filter { $0.kind == r }.map(\.n))
-            mid.append((n.rect, "\(title[r]!) \(v.compact)", detail[r]!, tint[r] ?? Theme.text, oneLine.contains(r)))
+            mid.append((n.rect, "\(title[r]!) \(v.compact)", detail[r]!, tint[r] ?? Theme.text, Self.oneLine.contains(r)))
         }
         for (id, n) in out.nodes where id.hasPrefix("p:") {
             let p = String(id.dropFirst(2))
@@ -546,29 +614,49 @@ private struct FlowBands {
             restore.append((n.rect, "Real values put back", "\(replies.compact) replies · \(values.compact) values", Theme.restored, false))
         }
         if let n = back.nodes["plain"] {
-            restore.append((n.rect, "Nothing to put back", "\(sum(flows.back.filter { !$0.restored }.map(\.n)).compact) replies", Theme.text, false))
+            restore.append((n.rect, "Nothing to put back", "\((sum(flows.back.filter { !$0.restored }.map(\.n)) + localTotal).compact) replies",
+                            Theme.text, false))
+        }
+        var local: [L] = []
+        if let n = back.nodes[Self.localModel] {
+            local.append((n.rect, "Your local model", "\(localTotal.compact) \(localTotal == 1 ? "answer" : "answers")", Theme.restored, false))
         }
 
-        func place(_ items: [L], x: CGFloat, anchor: UnitPoint) {
+        /// Top down, each label beside its bar (the layout leaves each the room, `slot`), or below the
+        /// one before; with `floor`, the last no lower than it, the ones before moved up to make room
+        /// (only in a diagram too short for its labels).
+        func place(_ items: [L], x: CGFloat, anchor: UnitPoint, floor: CGFloat? = nil) {
+            let items = items.sorted(by: { $0.0.midY < $1.0.midY })
+            func height(_ inline: Bool) -> CGFloat { inline ? 18 : 30 }
+            var ys: [CGFloat] = []
             var next = -CGFloat.infinity  // the first y below the label before
-            for (rect, t, d, color, inline) in items.sorted(by: { $0.0.midY < $1.0.midY }) {
-                let y = max(rect.midY - (inline ? 0 : 8), next)
+            for (rect, _, _, _, inline) in items {
+                ys.append(max(rect.midY - (inline ? 0 : 8), next))
+                next = ys[ys.count - 1] + height(inline)
+            }
+            if var last = floor {
+                for i in ys.indices.reversed() {
+                    ys[i] = min(ys[i], last)
+                    if i > 0 { last = ys[i] - height(items[i - 1].4) }
+                }
+            }
+            for ((_, t, d, color, inline), y) in zip(items, ys) {
                 let title = Text(t).font(.km(.callout).weight(.semibold)).foregroundStyle(color)
                 if inline {
                     let line = Text("\(title)\(Text("  " + d).font(.km(.caption)).foregroundStyle(Theme.textSecondary))")
                     ctx.draw(line, at: CGPoint(x: x, y: y), anchor: anchor)
-                    next = y + 18
                 } else {
                     ctx.draw(title, at: CGPoint(x: x, y: y), anchor: anchor)
                     ctx.draw(Text(d).font(.km(.caption)).foregroundStyle(Theme.textSecondary), at: CGPoint(x: x, y: y + 14), anchor: anchor)
-                    next = y + 30
                 }
             }
         }
         place(leftOut, x: xs[0] - 10, anchor: .trailing)
         place(leftBack, x: xs[0] - 10, anchor: .trailing)
-        place(mid, x: xs[2] + BandLayout.bar + 8, anchor: .leading)
+        // Above the rule between the two diagrams.
+        place(mid, x: xs[2] + BandLayout.bar + 8, anchor: .leading, floor: backTop - 44 - 14)
         place(restore, x: xs[1] + BandLayout.bar + 8, anchor: .leading)
+        place(local, x: xs[2] + BandLayout.bar + 8, anchor: .leading)
         place(rightOut, x: xs[3] + BandLayout.bar + 8, anchor: .leading)
         place(rightBack, x: xs[3] + BandLayout.bar + 8, anchor: .leading)
     }
@@ -590,6 +678,8 @@ private struct FlowBands {
         let (layout, keys): (BandLayout, [(String, String)]) = switch kind {
         case .out(let r):
             (out, [("c:" + client, "keepmum"), ("keepmum", "r:" + r)] + (FlowGeometry.unsent.contains(r) ? [] : [("r:" + r, "p:" + provider)]))
+        case .back(_, "local"):  // the local model's answer: from this Mac, nothing to put back
+            (back, [(Self.localModel, "plain"), ("plain", "c:" + client)])
         case .back(let restored, _):
             (back, [("p:" + provider, restored ? "restored" : "plain"), (restored ? "restored" : "plain", "c:" + client)])
         }
