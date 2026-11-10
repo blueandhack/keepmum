@@ -8,7 +8,8 @@ import { beforeEach, test } from "node:test";
 
 const here = new URL("..", import.meta.url);
 const SCHEMA = readFileSync(new URL("schema.sql", here), "utf8");
-const FEED = readFileSync(new URL("../mac/appcast.xml", here), "utf8");
+// The update feed as it was at 0.1.0a6, kept here so a new release does not change what these expect.
+const FEED = readFileSync(new URL("test/appcast.xml", here), "utf8");
 const SPARKLE = "Keepmum/0.1.0a6 Sparkle/2.10.1";
 const SAFARI = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Safari/605.1.15";
 

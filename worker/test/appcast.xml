@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>keepmum</title>
+    <link>https://github.com/blueandhack/keepmum</link>
+    <description>Releases of the keepmum Mac app</description>
+    <language>en</language>
+    <item>
+      <title>keepmum 0.1.0a6</title>
+      <pubDate>Mon, 09 Nov 2026 09:14:26 GMT</pubDate>
+      <sparkle:version>10006</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a6</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a6</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The sixth alpha of keepmum fixes the menu bar panel, which could open well below the menu bar with an empty frame under it.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a6.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2 through 0.1.0a5:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a6.dmg.sha256`
+
+## Fixes
+
+- **The menu bar panel opened too low.** Once a row such as the update notice or an error line had appeared and gone again, the panel's window kept its taller size, and the panel showed in the middle of it, below the menu bar, with an empty frame underneath. The window now shrinks back to the panel's height, its top under the menu bar.
+
+This release was not run against real models (the live end-to-end check was skipped); the change is to the menu bar panel alone.</description>
+      <enclosure url="https://keepmum.app/update/v0.1.0a6/Keepmum-0.1.0a6.dmg" length="37663715" type="application/octet-stream" sparkle:edSignature="jMVI7wIVfvNh6yB74iadDm+ut9g3vYSJv6uLWo9RN+n6EUfqwW1ZYkKpVCajPFyGphspfgXt9dl76XRZoR5JCA=="></enclosure>
+    </item>
+    <item>
+      <title>keepmum 0.1.0a5</title>
+      <pubDate>Mon, 09 Nov 2026 09:00:14 GMT</pubDate>
+      <sparkle:version>10005</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a5</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The fifth alpha of keepmum protects the Antigravity CLI, notices what other apps add to your coding agents, and closes several ways a secret could leave your Mac in a form keepmum did not recognize. Each fix below was found by running real agents through keepmum.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a5.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2, 0.1.0a3 or 0.1.0a4:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a5.dmg.sha256`
+
+## What's new
+
+- **The Antigravity CLI.** `keepmum agy` starts it with every request scanned, signed in with Google or through its gateway mode. Its web tools keep placeholders, and an MCP tool it calls gets only the values that server may receive.
+- **What other apps add to your agents.** keepmum watches the plugins, hooks, MCP servers, skills and global instructions of Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI and opencode. When something changes, the menu bar says so (for example "Codex changed: postman@postman"). **Settings › Extensions** lists what is new, with Keep and Remove; removals and keeps appear on the Audit page.
+- **Secrets printed encoded are masked.** Hex dumps (`xxd`, `hexdump -C`, `od` in any layout), `od -c`, plain hex and base64 in a command's output are decoded and scanned. A block that holds a secret is masked whole, so `xxd .env` or `base64 &lt; .env` cannot carry a key out in hex or in pieces.
+- **A warning for Codex scripts keepmum cannot check.** When a Codex script runs a command and hands a value it works out to a network tool, Codex shows a `keepmum: …` note after the call, the menu bar lights a dot, and macOS shows a notification. The script still runs; the hit is on the Logs page and in the audit log.
+- **Start, stop and restart from the menu bar.** A Background service row says what the service is doing, with Start, Stop, Restart, and Allow when Login Items needs your approval.
+- **The Live flow draws requests as they happen:** a request sets off as it leaves your Mac and waits at its provider until the reply arrives.
+- **Python 3.15.** The app's engine runs on Python 3.15.2 (was 3.12).
+- **Update checks and downloads go through keepmum.app**, which counts them by version and keeps no addresses. To leave your Mac out of the counts: Settings › General › Updates › Count this Mac. Updates work the same either way.
+
+## Fixes
+
+- **Codex scripts.** Codex 0.147 and later run commands from a JavaScript `exec` script. Its commands are now checked like any shell command, and an MCP tool the script calls gets only what its server may receive.
+- **opencode's Code Mode.** opencode 2.x reaches MCP servers and the web (`fetch`) from scripts, which keepmum did not know: a token could reach any MCP server or URL. Scripts now follow the same rules as Codex's.
+- **A password with spaces or quotes was sent in the agent's history.** keepmum puts a value back escaped for the shell (`'p@ss w0rd '\''x'\''`), and the agent sends the command it ran back to the model; that escaped form was not recognized, so it went out as it read. Every escaped form now maps back to its placeholder, and the model sees the command it wrote.
+- **Commands wrapped in `bash -lc '…'`.** A value is now quoted for the inner shell too. Before, a name with a space was split in two, and its halves went out in error messages; a password's `$…` was expanded.
+- **Masking that hid too much.** A search URL with a name in it is masked as the name only. A line's trailing `$` (`cat -A`, `sed -n l`, a grep anchor) is no longer masked with the token before it. In `grep '^GITHUB_TOKEN=' .env`, the quote after `=` is no longer read as the start of a secret.
+- **The Antigravity CLI's commands** get values quoted for the shell (a password with `"` broke them).
+- **Shutdown** no longer spins at full CPU when every warn-mode check has already finished.
+- **The menu panel** keeps its window to its height when a row appears or goes away.</description>
+      <enclosure url="https://keepmum.app/update/v0.1.0a5/Keepmum-0.1.0a5.dmg" length="37659913" type="application/octet-stream" sparkle:edSignature="cgOjpVqhB6No2+XVRsJ+dHJpwsUx6PVRR+sVhLtJwJBp+sDFLeFgPFXhGr4nQvOSwgeXB0xbq+DMUbrXaNqzDw=="></enclosure>
+    </item>
+    <item>
+      <title>keepmum 0.1.0a4</title>
+      <pubDate>Fri, 06 Nov 2026 09:03:03 GMT</pubDate>
+      <sparkle:version>10004</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a4</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a4</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The fourth alpha of keepmum can answer flagged requests with a model on your Mac instead of the cloud, lets you tune how sensitive the optional checks are, and shows what a check flagged on the Logs page.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a4.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2 or 0.1.0a3:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a4.dmg.sha256`
+
+## What's new
+
+- **Local mode for the injection and harm checks.** Besides Off, Warn and Block, each check can be set to **Local**. A request it flags then goes to a model on your Mac instead of the cloud provider, and your agent gets that model's answer.
+  - The local model gets the request with its real values, which never leave your Mac. It never gets your API key, and it gets no tools, so it can only answer in text.
+  - Later requests that still carry the flagged text stay local too, until you rewind or `/clear`.
+  - Works with Claude Code and Codex. Gemini CLI's flagged requests are refused, as in Block.
+- **Several local servers.** Ollama, LM Studio, llama.cpp's llama-server, MLX or another server on your Mac, each with its own model, for both checks or just one. A flagged request goes to the first server that answers; if none does, it is refused, never sent. Ollama, LM Studio and llama.cpp take the agent's request as it is. Other servers get it as Chat Completions, and the answer goes back in the agent's own format. Settings › Checks › Local servers, or `keepmum guard local add`.
+- **Sensitivity for the checks.** If a check flags too much, turn it down: Settings › Checks › Sensitivity, or `keepmum guard sensitivity injection|harm &lt;level&gt;`. Each level shows what it caught and flagged on keepmum's test sets.
+  - **Prompt injection:** High (the default), Medium, Low or Lowest, or a number of your own. Medium catches 97% of the test injections instead of 99%, and flags 5% of security code instead of 7%.
+  - **Harmful requests:** High, Medium (the default), Low or Lowest. Lower levels miss more harmful requests; see the README for each model's numbers.
+- **Check details on the Logs page.** Click a check's hit to see:
+  - what happened and what to do next
+  - the score against the threshold, the check's mode and model
+  - where the request was going, and which local model answered
+  - what was flagged and what you had asked, with every masked value shown as its type, like `‹EMAIL›`
+
+  The text is kept in memory only, never in the audit log or on disk, and only while **Text around values** is on (Settings › General › Logs page). The Outcome column now says Refused, Local, Replaced or Warned.
+- **Settings in panes.** Setup, Masking, Tools, Checks, General and Check this Mac, each on its own pane, in two columns on a wide window.
+- **A new installer window.** The DMG shows where to drag Keepmum, and the mounted disk carries Keepmum's icon.
+
+## Fixes
+
+- File names such as `guard-20261104-231405.md` are no longer taken for secrets. The model and the entropy check flagged some, which filled the Logs page with masked names that were never sensitive. A key whose format keepmum knows is still masked, even inside a file name.
+- Claude Code's AskUserQuestion results, which hold your own answers, are no longer checked for prompt injection.
+- Settings › Tools now shows progress on Trust again and Keep these, and an error if one fails, instead of doing nothing visible.
+
+## Known limitations
+
+- Local mode is only as good as your local model. A small one may repeat a planted instruction as advice, or help with what the harm check flagged. Use a capable model (8B or larger).
+- Lower sensitivity means fewer false alarms and fewer real catches; the harm check gives up catches quickly below Medium.
+- Shell commands still receive real values (so `git push` works), and your agent's local transcripts hold real values: keepmum protects what leaves your Mac, not what is stored on it.
+
+Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/keepmum/issues).</description>
+      <enclosure url="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a4/Keepmum-0.1.0a4.dmg" length="34562222" type="application/octet-stream" sparkle:edSignature="gCuzuezWqyqvjo+vLMUegySxnJ96BxQMGvCnW9aao5SwEQ/g4Veu3UMAfyrEHEnDQWW/AU6dkodF6Yk8r6OlCw=="></enclosure>
+    </item>
+    <item>
+      <title>keepmum 0.1.0a3</title>
+      <pubDate>Thu, 05 Nov 2026 18:49:19 GMT</pubDate>
+      <sparkle:version>10003</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a3</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a3</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The third alpha of keepmum adds a check on what comes back: the shell commands a model asks your agent to run. The flow diagram also shows what the optional checks did.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a3.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2:** Keepmum updates itself if you allowed update checks (Settings › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a3.dmg.sha256`
+
+## What's new
+
+- **A risky-commands check (optional, off by default).** keepmum reads the shell commands in the model's replies before your agent sees them: Claude Code's Bash, Codex's shell tools, and Gemini CLI's `run_shell_command`. It checks them against seven rules:
+  - a download run as a script (`curl … | sh`)
+  - decoded text run as a script
+  - deleting your home folder or the system
+  - erasing a disk
+  - a fork bomb
+  - credential files sent over the network
+  - environment variables sent over the network
+
+  **Warn** logs a hit and lets the command through. **Block** hands the agent, in its place, a command that prints why keepmum refused it and fails, so the model can explain or ask you. No model and no download: Settings › Checks › Risky commands, or `keepmum guard commands warn`.
+- **The checks in the flow diagram.** Requests sent with a warning get a **Flagged** band, and requests a check stopped get a **Refused** band, each naming which check. Blocked now means only keepmum's own refusals.
+
+## Known limitations
+
+- The commands check covers the clear cases. A command built to hide what it does gets past it; the rules on where real values may be sent still apply.
+- Official one-line installers (`curl … | bash`) are flagged too. If you install tools through your agent often, use warn rather than block.
+- Shell commands still receive real values (so `git push` works), and your agent's local transcripts hold real values: keepmum protects what leaves your Mac, not what is stored on it.
+
+Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/keepmum/issues).</description>
+      <enclosure url="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a3/Keepmum-0.1.0a3.dmg" length="46024518" type="application/octet-stream" sparkle:edSignature="+Dj8L5Jg3p9y6wT9QwuIJ7BQ5F3TCtwPJr2uXmZJPiah4kpEY4soOSG6h376wn0DEL7FiRIxIYLL0T/w/bWLCw=="></enclosure>
+    </item>
+    <item>
+      <title>keepmum 0.1.0a2</title>
+      <pubDate>Thu, 05 Nov 2026 09:40:17 GMT</pubDate>
+      <sparkle:version>10002</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a2</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The second alpha of keepmum adds two optional checks that run on your Mac, a switch for personal data, and updates: from this version on, the app updates itself.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a2.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a1:** quit Keepmum, then drag the new version into Applications to replace it. That is needed once: 0.1.0a1 cannot update itself, and this version can.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a2.dmg.sha256`
+
+## What's new
+
+- **Updates.** On its first launch the app asks whether to check for updates once a day. A check downloads keepmum's update list from github.com, so GitHub sees your IP address and keepmum's version; nothing else is sent. Updates are signed by keepmum and notarized by Apple, and both are checked before one is installed. Settings › Updates has "Check now", and can download and install updates automatically.
+- **A prompt-injection check (optional, off by default).** It looks at what tools return (web pages, files, MCP replies) for instructions planted for your agent. **Warn** logs a hit and sends the request; **Block** refuses it. It uses Horizon Labs' Prompt Injection Guard Small (Apache-2.0), a 164 MB download that runs locally on the GPU.
+- **A harm check (optional, off by default).** It looks at what you type for requests a company policy may not allow, and names their categories. Three model sizes are available: Small (164 MB, the default), Qwen3Guard 0.6B, and Qwen3Guard 4B (the most accurate).
+- **Settings › Checks** sets both checks up. What they flag shows on the Logs and Activity pages, and `keepmum guard` does the same on the command line.
+- **Personal data** has its own switch in the app and `keepmum pii on|off`. Every setting that used to need config.toml now has a place in the app.
+
+## Known limitations
+
+- The checks are an early warning on top of masking, not a replacement for it. The injection check flags about 9% of security writing that quotes attacks, so warn suits security work better than block.
+- Shell commands still receive real values (so `git push` works). The host check stops the common case, but a command built to hide where it sends things gets past it. Use a sandbox with a network allowlist alongside keepmum.
+- Your agent's local transcripts hold real values: keepmum protects what leaves your Mac, not what is stored on it.
+
+Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/keepmum/issues).</description>
+      <enclosure url="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a2/Keepmum-0.1.0a2.dmg" length="47147884" type="application/octet-stream" sparkle:edSignature="xcB5YeU4KCTWe9z8NwxMB0/Dt29HKok32mpy5sx8L8VhUUFRa1A0urATBys3PxJAPsHCXl+/zkcSJNqwjddxDw=="></enclosure>
+    </item>
+  </channel>
+</rss><!-- sparkle-signatures:
+edSignature: 3JICZgTyWrcZD6pJbk+4lKqEUQqtfyQJqZfHHilVqwM4h89KQGozKSumJzTgWztYwnNzgUJq5uJyd7QdMIyVCA==
+length: 20234
+-->
