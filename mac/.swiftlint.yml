@@ -1,0 +1,69 @@
+# SwiftLint for the Mac app: mac/lint.sh runs it (the pinned version, checked), and so does the Mac lint
+# job in CI, with --strict: a warning fails it. Rules that catch mistakes are on; rules that fight
+# this code's settled style are off, each with why. Turn one off in place with a reason:
+#   // swiftlint:disable:next rule_name - why
+included:
+  - Sources
+
+disabled_rules:
+  - identifier_name                   # short names (x, y, n, p, c) for geometry, counts and closures
+  - trailing_comma                    # either way
+  - large_tuple                       # labeled tuples for small local records (a label's rect, title, detail)
+  - nesting                           # Snapshot.Event.Check: the feed's shape, nested as it is nested
+  - implicit_optional_initialization  # `= nil` on Decodable fields says "absent from older engines"
+  - optional_data_string_conversion   # String(decoding:as:) on purpose: a command's output is shown even
+                                      # when it is not valid UTF-8, with replacement characters
+  # Size metrics: the views and the layout are long by nature, and a number is not a review.
+  - file_length
+  - type_body_length
+  - function_body_length
+  - cyclomatic_complexity
+  - function_parameter_count
+
+opt_in_rules:
+  # SwiftUI and AppKit
+  - private_swiftui_state
+  - discarded_notification_center_observer
+  - weak_delegate
+  - unowned_variable_capture
+  # Collections: the clearer and cheaper call
+  - contains_over_filter_count
+  - contains_over_filter_is_empty
+  - contains_over_first_not_nil
+  - contains_over_range_nil_comparison
+  - empty_count
+  - empty_string
+  - empty_collection_literal
+  - first_where
+  - last_where
+  - sorted_first_last
+  - flatmap_over_map_reduce
+  - joined_default_parameter
+  - array_init
+  - is_disjoint
+  - legacy_multiple
+  # Mistakes
+  - identical_operands
+  - duplicate_conditions
+  - redundant_nil_coalescing
+  - unhandled_throwing_task
+  - async_without_await
+  - self_in_property_initialization
+  - fatal_error_message
+  - yoda_condition
+  - toggle_bool
+  - prefer_type_checking
+  - compiler_protocol_init
+  - discouraged_direct_init
+
+line_length:
+  warning: 200
+  ignores_comments: true
+  ignores_urls: true
+  # Prose in a string (a footer, a sample) reads best on one line; code is held to the limit.
+  excluded_lines_patterns:
+    - '"[^"]{100,}'
+
+
+type_name:
+  min_length: 3

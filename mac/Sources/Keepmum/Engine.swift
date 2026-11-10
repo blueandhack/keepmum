@@ -227,7 +227,12 @@ final class Engine {
                 let c = try decoder.singleValueContainer()
                 if let s = try? c.decode(String.self) { self = .one(s) } else { self = .many((try? c.decode([String].self)) ?? []) }
             }
-            var text: String { switch self { case .one(let s): s; case .many(let a): a.joined(separator: ", ") } }
+            var text: String {
+                switch self {
+                case .one(let s): s
+                case .many(let a): a.joined(separator: ", ")
+                }
+            }
         }
     }
 
@@ -957,7 +962,9 @@ final class Engine {
         e.audit = [
             .init(seq: 4211, ts: now - 600, event: "config", summary: "detect.observe true -> false", weakens: false, by: "keepmum observe off (from Keepmum.app)"),
             .init(seq: 4188, ts: now - 2_400, event: "config", summary: "detect.observe false -> true", weakens: true, by: "keepmum observe on (from Keepmum.app)"),
-            .init(seq: 3906, ts: now - 9_000, event: "exclude", summary: "~/Projects/open-source-docs excluded: goes straight to the provider, unscanned", weakens: true, by: "keepmum exclude (from Keepmum.app)"),
+            .init(seq: 3906, ts: now - 9_000, event: "exclude",
+                  summary: "~/Projects/open-source-docs excluded: goes straight to the provider, unscanned", weakens: true,
+                  by: "keepmum exclude (from Keepmum.app)"),
             .init(seq: 3874, ts: now - 26_000, event: "start", summary: "keepmum serve started (pid 812, rules + pf-serve)", weakens: false, by: nil),
             .init(seq: 3873, ts: now - 26_100, event: "stop", summary: "keepmum serve stopped (pid 640)", weakens: false, by: nil),
             .init(seq: 2950, ts: now - 90_000, event: "config", summary: "allowlist.strings +3f9a0c21b7e4", weakens: true, by: "keepmum rules allow (from Keepmum.app)"),

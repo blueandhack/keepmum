@@ -1,0 +1,28 @@
+name: Mac lint
+
+# SwiftLint on the Mac app (mac/lint.sh, mac/.swiftlint.yml): the pinned release, checked against its
+# SHA-256, with --strict, so a warning fails the run. Apart from mac-app.yml, which builds the whole
+# app with its engine: this takes seconds and runs only when the app's Swift or the lint changed.
+on:
+  push:
+    branches: [main]
+    paths: ["mac/Sources/**", "mac/.swiftlint.yml", "mac/lint.sh", ".github/workflows/mac-lint.yml"]
+  pull_request:
+    paths: ["mac/Sources/**", "mac/.swiftlint.yml", "mac/lint.sh", ".github/workflows/mac-lint.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  swiftlint:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The pinned SwiftLint, as lint.sh unpacked it after checking it: keyed on lint.sh, which pins it.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: mac/build/tools
+          key: mac-swiftlint-${{ hashFiles('mac/lint.sh') }}
+      - run: ./lint.sh
+        working-directory: mac

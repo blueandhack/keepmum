@@ -137,7 +137,8 @@ private struct ToolRow: View {
             if server.paused {
                 Banner(tone: .warning, icon: "exclamationmark.shield",
                        title: "Its tools changed",
-                       message: "\(server.changed.map(short).joined(separator: ", ")) no longer \(server.changed.count == 1 ? "matches" : "match") what you trusted, so \(server.label) gets placeholders only.") {
+                       message: "\(server.changed.map(short).joined(separator: ", ")) no longer "
+                           + "\(server.changed.count == 1 ? "matches" : "match") what you trusted, so \(server.label) gets placeholders only.") {
                     PillButton(title: "Trust again", loading: trusting, action: trust).disabled(busy)
                 }
             } else if let (kinds, calls) = suggestion {

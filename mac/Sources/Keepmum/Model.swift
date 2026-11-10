@@ -345,7 +345,7 @@ final class StatsStore {
             var tick = 0
             while !Task.isCancelled {
                 await self?.refresh()
-                if tick % 3 == 0 { await self?.refreshFlows(); await self?.loadTools() }
+                if tick.isMultiple(of: 3) { await self?.refreshFlows(); await self?.loadTools() }
                 tick += 1
                 try? await Task.sleep(for: .seconds(1))
             }
@@ -670,7 +670,7 @@ struct SampleFeed {
         let weights: [(String, Int)] = [("SECRET", 5), ("EMAIL", 3), ("PERSON", 3), ("PHONE", 1), ("ACCOUNT", 1)]
         for i in stride(from: 89, through: 0, by: -1) {  // more than the hour on screen, like the real feed
             var masked: [String: Int] = [:]
-            let burst = (i % 9 == 0) ? 3 : 1
+            let burst = i.isMultiple(of: 9) ? 3 : 1
             for (t, w) in weights where Int.random(in: 0..<10) < w * burst { masked[t, default: 0] += Int.random(in: 1...3) }
             let reqs = Int.random(in: 2...9)
             snap.timeline.append(.init(t: (now / 60).rounded(.down) * 60 - Double(i * 60), requests: reqs, masked: masked,
@@ -804,7 +804,7 @@ struct SampleFeed {
         tick += 1
         let now = Date().timeIntervalSince1970
         snap.uptimeS = now - snap.started
-        if tick % 2 == 0 {
+        if tick.isMultiple(of: 2) {
             let e = event(at: now)
             snap.recent.append(e)
             if snap.recent.count > 200 { snap.recent.removeFirst() }
@@ -812,8 +812,11 @@ struct SampleFeed {
             snap.requests[e.outcome, default: 0] += 1
             if e.scanMs != nil { snap.funnel.scanned += 1 }
             if !e.redacted.isEmpty { snap.funnel.withFindings += 1 }
-            if (e.new ?? 0) > 0 { snap.funnel.withNew = (snap.funnel.withNew ?? 0) + 1 }
-            else if e.scanMs != nil { snap.funnel.clean = (snap.funnel.clean ?? 0) + 1 }
+            if (e.new ?? 0) > 0 {
+                snap.funnel.withNew = (snap.funnel.withNew ?? 0) + 1
+            } else if e.scanMs != nil {
+                snap.funnel.clean = (snap.funnel.clean ?? 0) + 1
+            }
             for (k, v) in e.redacted {
                 snap.redacted[k, default: 0] += v; snap.funnel.masked += v
                 snap.detection.funnel["masked", default: 0] += v

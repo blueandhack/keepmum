@@ -136,7 +136,7 @@ struct AuditPage: View {
     }
 
     private func label(days: Int) -> String {
-        days % 365 == 0 ? "\(days / 365) year\(days == 365 ? "" : "s")" : "\(days) days"
+        days.isMultiple(of: 365) ? "\(days / 365) year\(days == 365 ? "" : "s")" : "\(days) days"
     }
 
     private func export(csv: Bool) {

@@ -49,6 +49,7 @@ open build/Keepmum.app
 - `Keepmum --snapshot dir` renders every page in light and dark to PNGs and exits, with the Settings page in full and the overview in observe mode; with `--live` it renders the overview from the running proxy.
 - **Design.** Every color, text style, space and radius comes from the tokens in `Sources/Keepmum/Tokens.swift`; the controls built on them are in `Components.swift`. Coral, keepmum's own, marks what is selected or pressable; blue is masked, green restored, crimson blocked, amber let through.
 - Development-signed builds run only on this Mac. For other Macs, see Releasing.
+- **Lint.** `./lint.sh` runs SwiftLint with `.swiftlint.yml`, strict, so a warning fails it; `./lint.sh --fix` first applies what SwiftLint can fix itself. It downloads the pinned SwiftLint once into `build/tools` and checks it against its SHA-256 before unpacking it. The config turns on rules that catch mistakes (SwiftUI state left public, `filter(…).count > 0` for `contains`, observers dropped) and turns off, each with why, the ones that fight this code's style: short names, labeled tuples, size metrics. A line holding long prose in a string may pass 200 characters; code may not. The Mac lint workflow runs it on every change to the app's Swift, and `release.sh` runs it after the tests.
 
 ## Releasing
 

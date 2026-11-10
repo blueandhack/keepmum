@@ -433,6 +433,7 @@ No language model judges spans at request time. The Apple on-device model and Qw
 ```sh
 uv sync
 uv run pytest                                # detection, proxy (Messages and Responses APIs), streams, settings, clients
+mac/lint.sh                                  # SwiftLint on the Mac app (pinned, checked; mac/README.md)
 uv run python bench/gen.py                   # generate the benchmark datasets
 uv run python bench/run.py                   # accuracy and speed; see bench/README.md
 swift docs/video/flow.swift flow.mp4         # the 67-second flow video (detect, mask, send, restore, guard, and the checks), 1080p

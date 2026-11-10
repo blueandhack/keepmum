@@ -84,6 +84,7 @@ if [ -z "${SKIP_WORKER:-}" ]; then
   echo "keepmum.app's Worker: deployed at ${deployed:0:9}"
 fi
 (cd "$ROOT" && uv run --frozen pytest -q -p no:cacheprovider)
+./lint.sh  # SwiftLint on the app (.swiftlint.yml): a finding stops the release, as a failing test does
 # The live suite: real agents and models through keepmum (e2e/README.md). A failure stops the
 # release, as a failing test does; SKIP_LIVE=1 skips it, and says so.
 if [ -z "${SKIP_LIVE:-}" ]; then

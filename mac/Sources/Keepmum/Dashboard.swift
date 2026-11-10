@@ -25,8 +25,16 @@ struct Dashboard: View {
     @Bindable var store: StatsStore
     @Bindable var engine: Engine
     @AppStorage("appearance") private var appearance: Appearance = .system
-    @State var page: Page = .overview
-    @State var settingsPane: SettingsPane = .setup
+    @State private var page: Page
+    @State private var settingsPane: SettingsPane
+
+    /// `page` and `settingsPane`: where it opens (the snapshot renderer opens each in turn).
+    init(store: StatsStore, engine: Engine, page: Page = .overview, settingsPane: SettingsPane = .setup) {
+        self.store = store
+        self.engine = engine
+        _page = State(initialValue: page)
+        _settingsPane = State(initialValue: settingsPane)
+    }
 
     var body: some View {
         HStack(spacing: 0) {

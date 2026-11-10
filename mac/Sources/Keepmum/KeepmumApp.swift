@@ -293,6 +293,8 @@ enum DashboardWindow {
         guard !watching else { return }
         watching = true
         // SwiftUI does not reliably call onDisappear when the window closes; AppKit always says so.
+        // Both observers last as long as the app (`watching`): there is nothing to remove them for.
+        // swiftlint:disable:next discarded_notification_center_observer - kept for the app's life
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
             let window = note.object as? NSWindow
             MainActor.assumeIsolated {
@@ -301,6 +303,7 @@ enum DashboardWindow {
                 applyDockPolicy()
             }
         }
+        // swiftlint:disable:next discarded_notification_center_observer - kept for the app's life
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
             let window = note.object as? NSWindow
             MainActor.assumeIsolated {
@@ -461,7 +464,7 @@ enum Snapshotter {
         renderer.scale = scale
         guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else {
-            FileHandle.standardError.write("snapshot failed: \(path)\n".data(using: .utf8)!)
+            FileHandle.standardError.write(Data("snapshot failed: \(path)\n".utf8))
             exit(1)
         }
         try? png.write(to: URL(fileURLWithPath: path))

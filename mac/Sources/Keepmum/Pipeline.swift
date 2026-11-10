@@ -62,7 +62,7 @@ struct FlowBandsView: View {
     var open: [Pulse] = []
     var live: Bool
     /// The pointer, while it is over the diagram: what is under it is highlighted.
-    @State var hover: CGPoint?
+    @State private var hover: CGPoint?
     @AppStorage(FlowPulseStyle.key) private var style: FlowPulseStyle = .comet
 
     var body: some View {
@@ -560,8 +560,8 @@ private struct FlowBands {
         func sum(_ xs: [Int]) -> Int { xs.reduce(0, +) }
 
         // (node rect, title, detail, title color) per column, then placed without overlaps.
-        typealias L = (CGRect, String, String, Color, Bool)  // the last: title and detail on one line
-        var leftOut: [L] = [], leftBack: [L] = [], mid: [L] = [], rightOut: [L] = [], rightBack: [L] = [], restore: [L] = []
+        typealias Tag = (CGRect, String, String, Color, Bool)  // the last: title and detail on one line
+        var leftOut: [Tag] = [], leftBack: [Tag] = [], mid: [Tag] = [], rightOut: [Tag] = [], rightBack: [Tag] = [], restore: [Tag] = []
         for c in flows.clients {
             if let n = out.nodes["c:" + c.id] { leftOut.append((n.rect, c.name, c.sent.compact, Theme.text, false)) }
             if let n = back.nodes["c:" + c.id] {
@@ -617,7 +617,7 @@ private struct FlowBands {
             restore.append((n.rect, "Nothing to put back", "\((sum(flows.back.filter { !$0.restored }.map(\.n)) + localTotal).compact) replies",
                             Theme.text, false))
         }
-        var local: [L] = []
+        var local: [Tag] = []
         if let n = back.nodes[Self.localModel] {
             local.append((n.rect, "Your local model", "\(localTotal.compact) \(localTotal == 1 ? "answer" : "answers")", Theme.restored, false))
         }
@@ -625,7 +625,7 @@ private struct FlowBands {
         /// Top down, each label beside its bar (the layout leaves each the room, `slot`), or below the
         /// one before; with `floor`, the last no lower than it, the ones before moved up to make room
         /// (only in a diagram too short for its labels).
-        func place(_ items: [L], x: CGFloat, anchor: UnitPoint, floor: CGFloat? = nil) {
+        func place(_ items: [Tag], x: CGFloat, anchor: UnitPoint, floor: CGFloat? = nil) {
             let items = items.sorted(by: { $0.0.midY < $1.0.midY })
             func height(_ inline: Bool) -> CGFloat { inline ? 18 : 30 }
             var ys: [CGFloat] = []
