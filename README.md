@@ -176,6 +176,7 @@ keepmum guard local                                  # the servers, in the order
 keepmum guard local move 2 1 / set 1 --model … / remove 2
 keepmum guard injection local        # a flagged request is answered by that model, never sent
 keepmum guard local skill add ~/.claude/skills/careful-answers   # your instructions for those local turns (SKILL.md); --check harm for one check
+keepmum guard local handback summary   # after a flagged tool result: stay, answer, summary, rewrite or withhold, then the cloud
 keepmum guard injection off          # stop a check; `keepmum guard remove injection|harm` also deletes its model
 keepmum guard                        # status of both
 ```
@@ -193,6 +194,17 @@ All three checks are off by default, and keepmum downloads the injection and har
 Where it goes is a list of local servers (`keepmum guard local add`), each a URL on this Mac and a model there, for both checks or one (`--check harm`: a bigger model for harm, say). A flagged request goes to the first that answers for its check: one that is not running, lacks its model or answers with an error is passed over. If none answers, or none is set, the request is refused, never sent. Ollama (`--preset ollama`, the default), LM Studio (`lmstudio`) and llama.cpp's llama-server (`llamacpp`) speak the APIs Claude Code and Codex use, so the request goes as it is; a server that does not, such as `mlx_lm.server` (`mlx`), gets it as Chat Completions, earlier tool calls and results as text, and its answer goes back in the agent's API (`--api chat` asks that way from the start). Claude Code, Codex, pi and opencode can go local; Gemini CLI's API is one none of them speak, so its flagged requests are refused.
 
 **Skills for local turns.** You can give the local model your own instructions for these turns, in Claude Code's SKILL.md format: `keepmum guard local skill add <path>` with a SKILL.md or a skill's folder, for both checks or one (`--check injection`), or Settings › Checks › Skills for local turns. Each local turn gets keepmum's note first (why the turn stayed on your Mac, and that the model has no tools), then your skills, then the agent's own instructions. keepmum reads each skill on every local turn, so edits apply at once; one it cannot read, or one over 20,000 characters, is left out with a warning in the log. The audit log records skills added and removed, not their text or later edits.
+
+**Back to the cloud.** By default a flagged tool result keeps the rest of the conversation on the local model (`stay`). `keepmum guard local handback <strategy>`, or Settings › Checks › After a local turn, hands it back to the cloud model. The flagged result is replaced in that request and in every later one that carries it:
+
+| Strategy | What the cloud model gets in the result's place |
+| --- | --- |
+| `answer` | The local model answers the flagged turn first. From the next turn on: a notice, plus the local answer earlier in the conversation |
+| `summary` | The local model's summary of the result, written before the turn goes anywhere |
+| `rewrite` | The result with what it says to the agent taken out by the local model, the rest kept as it was |
+| `withhold` | A notice. No local model is involved |
+
+`--instructions "…"` (or `--instructions-file`) replaces keepmum's instruction for summary and rewrite with yours. Your injection skills follow it. The cloud model never gets the flagged result itself. What replaces it is masked like the rest of the request, and the injection check scans it as a tool result. If the check flags it, the turn stays local. This applies to the injection check only: a harm hit is what you typed, and handing it back would send it, reworded, to the provider the check kept it from. The audit log marks moving away from `stay`, and setting your own instructions, as weaker protection. It records your instructions as a fingerprint, not their text.
 
 **Warn** sends the request at once and runs the check afterwards, so it adds no delay. A hit is logged, counted in the stats feed and audited once, with the check, the tool (for injection), the score, the length and, for harm, the model's categories (Violent, Jailbreak, …), never the text. With `[log] context` on, the Mac app's Logs page also shows, in memory only, what was flagged and what the user had typed, every masked value in them shown as its type. **Block** runs the check first. The agent gets an error that names the tool or the categories, and every retry that still carries the flagged text is refused too: rewind or `/clear` to drop it. If a check fails, block mode refuses the request and warn mode sends it.
 

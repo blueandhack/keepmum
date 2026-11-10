@@ -46,6 +46,10 @@
                      { url = "http://localhost:1234", model = "qwen/qwen3-8b", checks = ["harm"] }]
     # skills for those local turns, after keepmum's note: a SKILL.md, or a folder holding one (checks as above)
     local_skills = [{ path = "~/.claude/skills/careful-answers" }, { path = "~/notes/harm.md", checks = ["harm"] }]
+    # after a local turn of the injection check (handback.py): "stay" on the local model, or back to the cloud
+    # with the flagged result replaced: "answer" (after the local answer), "summary", "rewrite" or "withhold"
+    local_handback = "stay"
+    local_handback_instructions = ""  # your own instruction for summary and rewrite, in place of keepmum's
 
     [log]
     level = "info"
@@ -73,7 +77,7 @@ _SCHEMA = {
     "log": {"level": str, "previews": bool, "context": bool},
     "audit": {"keep_days": int},
     "guard": {"injection": str, "injection_threshold": float, "harm": str, "harm_model": str, "harm_sensitivity": str, "commands": str, "local_url": str, "local_model": str,
-              "local_servers": list, "local_skills": list},
+              "local_servers": list, "local_skills": list, "local_handback": str, "local_handback_instructions": str},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
 _HOST = re.compile(r"(?i)(?:[a-z0-9_-]+\.)*[a-z0-9-]+\.[a-z]{2,63}|localhost|\d{1,3}(?:\.\d{1,3}){3}")
@@ -134,6 +138,9 @@ class Config:
     guard_local_servers: list = field(default_factory=list)
     # local.Skill entries: the user's skills for local mode's turns.
     guard_local_skills: list = field(default_factory=list)
+    # What follows a local turn of the injection check (handback.py), and the user's own instruction.
+    guard_local_handback: str = "stay"
+    guard_local_handback_instructions: str = ""
     path: Path | None = None
 
 
@@ -281,6 +288,14 @@ def load(path: Path | None = None) -> Config:
         raise ConfigError(f"{path}: {str(e).replace('guard.local_url[1].url', 'guard.local_url').replace('guard.local_url[1].', 'guard.local_')}")
     try:
         cfg.guard_local_skills = parse_skills(guard.get("local_skills", []), "guard.local_skills")
+    except ValueError as e:
+        raise ConfigError(f"{path}: {e}")
+    from .handback import parse as parse_handback
+
+    try:
+        cfg.guard_local_handback, cfg.guard_local_handback_instructions = parse_handback(
+            guard.get("local_handback", cfg.guard_local_handback),
+            guard.get("local_handback_instructions", cfg.guard_local_handback_instructions))
     except ValueError as e:
         raise ConfigError(f"{path}: {e}")
     # A harm check turned on before "small" existed, without a model set, keeps the default it had.

@@ -104,6 +104,7 @@ struct SettingsPage: View {
             return (AnyView(ChecksSection(engine: engine)),
                     engine.status?.guard?.local != nil ? AnyView(VStack(alignment: .leading, spacing: Space.xl) {
                         LocalServersSection(engine: engine)
+                        LocalHandbackSection(engine: engine)
                         LocalSkillsSection(engine: engine)
                     }) : nil)
         case .extensions:

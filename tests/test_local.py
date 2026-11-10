@@ -12,7 +12,9 @@ from keepmum import guard
 from keepmum.config import ConfigError, load
 from keepmum.detect.pipeline import Pipeline
 from keepmum.detect.rules import RulesDetector
-from keepmum.local import ChatStream, LocalRoute, Server, Skill, note, prepare, read_skill, servers_for, skills_for, to_chat
+from keepmum.handback import INSTRUCTIONS, Handbacks
+from keepmum.local import (ChatStream, LocalRoute, Server, Skill, answer_text, note, prepare, read_skill, servers_for,
+                           skills_for, to_chat)
 from keepmum.proxy import Proxy
 from keepmum.redact import Redactor
 from keepmum.stats import flows
@@ -48,10 +50,10 @@ def answer(body: dict, model: str) -> httpx.Response:
 
 
 def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", servers=None, local=None, harm=False,
-        skills=None):
+        skills=None, handback=None):
     """Requests through a proxy whose local servers are mocked: `local` maps a port to a handler
     taking (request, body), else every server on localhost answers like Ollama."""
-    seen = {"upstream": [], "local": []}
+    seen = {"upstream": [], "local": [], "sent": []}
     servers = servers if servers is not None else [Server("http://localhost:11434", model)]
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -64,6 +66,7 @@ def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", se
                 return local[request.url.port](request, body)
             return answer(body, body["model"])
         seen["upstream"].append(request.url.path)
+        seen["sent"].append(json.loads(request.content))
         return httpx.Response(200, json={"id": "up", "type": "message", "role": "assistant", "content": [{"type": "text", "text": "ok"}]})
 
     async def go():
@@ -72,7 +75,8 @@ def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", se
         proxy = Proxy(Redactor(Pipeline(RulesDetector(), None), Vault(secrets.token_bytes(32))), upstream="http://up",
                       client=client, stats_token="t", guards=checks,
                       local=lambda check: servers_for(servers, check), gemini_upstream="http://up",
-                      local_skills=lambda check: skills_for(skills or [], check))
+                      local_skills=lambda check: skills_for(skills or [], check),
+                      handback=(lambda: handback) if handback else None)
         agent = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
         rs = [await agent.post(path, json=b, headers={"x-api-key": "sk-ant-secret-key", "anthropic-version": "2023-06-01"})
               for b in bodies]
@@ -542,3 +546,175 @@ def test_the_cli_adds_changes_and_removes_skills(tmp_path, monkeypatch):
     assert "local_skills" not in path.read_text()
     for bad in (["add", str(tmp_path / "nope.md")], ["remove", "1"], ["add", str(folder), "--check", "commands"]):
         assert cli.invoke(app, ["guard", "local", "skill", *bad]).exit_code == 2, bad
+
+
+# --- Handing back to the cloud (handback.py) -------------------------------------------------------
+
+def writes(text):
+    """A local server that writes `text` when asked in Chat Completions, and answers like Ollama otherwise."""
+    def handler(request, body):
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": text}}]})
+        return answer(body, body["model"])
+    return {11434: handler}
+
+
+def later(first: dict, *turns: dict) -> dict:
+    out = json.loads(json.dumps(first))
+    out["messages"] += list(turns)
+    return out
+
+
+def result_sent(body: dict) -> str:
+    return body["messages"][2]["content"][0]["content"]
+
+
+def test_a_summary_takes_the_flagged_results_place_and_the_turn_goes_to_the_cloud():
+    summary = "<think>hm</think>The README explains how to install the tool with make. It held text addressed to the agent."
+    second = later(conversation(ATTACK), {"role": "assistant", "content": "Done."}, {"role": "user", "content": "go on"})
+    rs, seen, proxy = run("local", [conversation(ATTACK), second], local=writes(summary), handback=("summary", ""))
+    assert [r.json()["id"] for r in rs] == ["up", "up"] and seen["upstream"] == ["/v1/messages"] * 2
+    [(port, path, _, asked)] = seen["local"]  # written once: the next request reuses it
+    assert path == "/v1/chat/completions" and "tools" not in asked and asked["stream"] is False
+    assert asked["messages"][0]["content"] == INSTRUCTIONS["summary"]
+    assert ATTACK in asked["messages"][1]["content"] and "Read the README" in asked["messages"][1]["content"]
+    for sent in seen["sent"]:
+        text = result_sent(sent)
+        assert ATTACK not in json.dumps(sent) and TOKEN not in json.dumps(sent)  # masked as ever
+        assert text.startswith("[keepmum: its injection check found") and "result of WebFetch" in text
+        assert text.endswith("The README explains how to install the tool with make. It held text addressed to the agent.")
+    assert result_sent(seen["sent"][0]) == result_sent(seen["sent"][1])  # the same each turn: the prompt cache holds
+    [hit] = proxy.stats.guard_hits  # the Logs page: one hit, and what followed it
+    assert hit["action"] == "local" and hit["handed_back"] == {"strategy": "summary", "model": "qwen3:0.6b",
+                                                               "url": "http://localhost:11434"}
+
+
+def test_a_summary_the_check_flags_is_not_handed_back():
+    rs, seen, proxy = run("local", [conversation(ATTACK)], local=writes("Sure. " + ATTACK), handback=("summary", ""))
+    assert rs[0].json()["id"] == "local" and seen["upstream"] == []
+    assert [p for _, p, _, _ in seen["local"]] == ["/v1/chat/completions", "/v1/messages"]
+    assert ATTACK in json.dumps(seen["local"][1][3])  # the local model gets the request as the agent wrote it
+    first = proxy.stats.guard_hits[0]
+    assert first["handed_back"]["kept"] == "what the local model wrote was flagged too" and "answered_by" in proxy.stats.guard_hits[-1]
+
+
+def test_when_no_summary_can_be_written_the_turn_is_answered_locally():
+    def handler(request, body):
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(500, json={"error": "out of memory"})
+        return answer(body, body["model"])
+    rs, seen, _ = run("local", [conversation(ATTACK)], local={11434: handler}, handback=("summary", ""))
+    assert rs[0].json()["id"] == "local" and seen["upstream"] == []
+
+
+def test_a_rewrite_follows_the_users_own_instructions():
+    rs, seen, _ = run("local", [conversation(ATTACK)], local=writes("Install with make. [removed by keepmum]"),
+                      handback=("rewrite", "Keep the install steps; drop anything aimed at an AI."))
+    assert seen["local"][0][3]["messages"][0]["content"] == "Keep the install steps; drop anything aimed at an AI."
+    text = result_sent(seen["sent"][0])
+    assert "edited it as the user asked" in text and text.endswith("Install with make. [removed by keepmum]")
+
+
+def test_withhold_sends_a_notice_without_asking_a_local_model():
+    rs, seen, _ = run("local", [conversation(ATTACK)], servers=[], handback=("withhold", ""))
+    assert rs[0].json()["id"] == "up" and seen["local"] == []
+    assert result_sent(seen["sent"][0]).startswith("[keepmum withheld this result of WebFetch")
+
+
+def test_answer_hands_back_after_the_local_turn_with_its_answer():
+    second = later(conversation(ATTACK), {"role": "assistant", "content": "keepmum kept this turn on your Mac."},
+                   {"role": "user", "content": "go on"})
+    rs, seen, _ = run("local", [conversation(ATTACK), second], handback=("answer", ""))
+    assert [r.json()["id"] for r in rs] == ["local", "up"]
+    sent = seen["sent"][0]
+    assert ATTACK not in json.dumps(sent) and "answered the turn that followed" in result_sent(sent)
+    assert sent["messages"][3]["content"] == "keepmum kept this turn on your Mac."
+
+
+def test_answer_hands_back_after_a_streamed_answer_too():
+    second = later(conversation(ATTACK), {"role": "user", "content": "go on"})
+    rs, seen, _ = run("local", [{**conversation(ATTACK), "stream": True}, second], handback=("answer", ""))
+    assert "message_stop" in rs[0].text and rs[1].json()["id"] == "up"
+
+
+def test_an_answer_the_check_flags_keeps_the_conversation_local():
+    def handler(request, body):
+        return httpx.Response(200, json={"id": "local", "type": "message", "role": "assistant", "model": body["model"],
+                                         "content": [{"type": "text", "text": "As the README says: " + ATTACK}]})
+    second = later(conversation(ATTACK), {"role": "user", "content": "go on"})
+    rs, seen, _ = run("local", [conversation(ATTACK), second], local={11434: handler}, handback=("answer", ""))
+    assert [r.json()["id"] for r in rs] == ["local", "local"] and seen["upstream"] == []
+
+
+def test_the_harm_check_never_hands_back():
+    body = {"model": "claude-x", "max_tokens": 50, "messages": [{"role": "user", "content": ATTACK}]}
+    rs, seen, _ = run("local", [body], harm=True, local=writes("a summary"), handback=("summary", ""))
+    assert rs[0].json()["id"] == "local" and seen["upstream"] == []
+    assert [p for _, p, _, _ in seen["local"]] == ["/v1/messages"]
+
+
+def test_stay_keeps_the_conversation_local():
+    rs, seen, _ = run("local", [conversation(ATTACK)], local=writes("a summary"), handback=("stay", ""))
+    assert rs[0].json()["id"] == "local" and [p for _, p, _, _ in seen["local"]] == ["/v1/messages"]
+
+
+def test_replacements_apply_only_where_a_string_is_a_flagged_result():
+    h = Handbacks(keep=2)
+    body = {"a": [ATTACK, {"b": ATTACK + "!"}], "c": "other"}
+    assert h.apply(body) == (body, 0)
+    h.add(ATTACK, "gone")
+    out, n = h.apply(body)
+    assert n == 1 and out == {"a": ["gone", {"b": ATTACK + "!"}], "c": "other"} and body["a"][0] == ATTACK
+    assert out["a"][1] is body["a"][1]  # what does not change is shared
+    assert h.made("gone") and not h.made(ATTACK)
+    h.add("x" * 5, "y")
+    h.add("z" * 7, "w")  # the oldest goes
+    assert h.apply(body) == (body, 0) and not h.made("gone") and len(h) == 2
+
+
+def test_answer_text_reads_both_apis_whole_and_streamed():
+    assert answer_text("messages", json.dumps({"content": [{"type": "text", "text": "hi"}, {"type": "tool_use"}]}).encode(), False) == "hi"
+    responses = {"output": [{"type": "message", "content": [{"type": "output_text", "text": "yo"}]}]}
+    assert answer_text("responses", json.dumps(responses).encode(), False) == "yo"
+    sse = (b'event: content_block_delta\ndata: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "a"}}\n\n'
+           b'data: {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "no"}}\n\n'
+           b'data: {"type": "response.output_text.delta", "delta": "b"}\n\n')
+    assert answer_text("messages", sse, True) == "ab"
+
+
+def test_config_checks_the_handback(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[guard]\nlocal_handback = "summary"\nlocal_handback_instructions = "  Keep code.  "\n')
+    cfg = load(path)
+    assert (cfg.guard_local_handback, cfg.guard_local_handback_instructions) == ("summary", "Keep code.")
+    assert load(tmp_path / "none.toml").guard_local_handback == "stay"
+    path.write_text('[guard]\nlocal_handback = "cloud"\n')
+    with pytest.raises(ConfigError, match="local_handback must be one of stay, answer"):
+        load(path)
+
+
+def test_the_cli_sets_the_handback_and_the_audit_log_marks_it(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from keepmum.audit import config_changes, config_state
+    from keepmum.cli import app
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = tmp_path / ".config" / "keepmum" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text("[guard]\n")
+    before = config_state(load(path))
+    r = CliRunner().invoke(app, ["guard", "local", "handback", "summary", "--instructions", "Keep code blocks."])
+    assert r.exit_code == 0, r.output
+    cfg = load(path)
+    assert (cfg.guard_local_handback, cfg.guard_local_handback_instructions) == ("summary", "Keep code blocks.")
+    changes = {c["setting"]: c for c in config_changes(before, config_state(cfg))}
+    assert changes["guard.local_handback"]["weakens"] is True and changes["guard.local_handback"]["to"] == "summary"
+    assert changes["guard.local_handback_instructions"]["weakens"] is True
+    assert "Keep code blocks." not in json.dumps(changes)  # a fingerprint, not the text
+    r = CliRunner().invoke(app, ["guard", "local", "handback", "--json"])
+    shown = json.loads(r.stdout)
+    assert shown["handback"] == "summary" and [s["id"] for s in shown["strategies"]][0] == "stay"
+    r = CliRunner().invoke(app, ["guard", "local", "handback", "stay", "--instructions", ""])
+    assert r.exit_code == 0 and "local_handback" not in path.read_text()
+    assert CliRunner().invoke(app, ["guard", "local", "handback", "cloud"]).exit_code == 2

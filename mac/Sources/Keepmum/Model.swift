@@ -186,6 +186,15 @@ struct Snapshot: Decodable, Sendable {
         }
         var answeredBy: Answered?
         var localError: String?
+        /// Local mode, injection: how the conversation went back to the cloud (handback.py), or
+        /// why it stayed local (`kept`).
+        struct HandedBack: Decodable, Sendable, Equatable {
+            var strategy: String
+            var model: String?
+            var url: String?
+            var kept: String?
+        }
+        var handedBack: HandedBack?
         var id: String { "\(ts)-\(check)-\(source ?? "")-\(score)-\(chars)" }
         var date: Date { Date(timeIntervalSince1970: ts) }
     }

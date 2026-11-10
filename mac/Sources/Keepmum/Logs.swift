@@ -267,6 +267,8 @@ extension Snapshot.GuardHit {
         case "blocked" where check == "commands": ("Replaced", "hand.raised.fill", Theme.blocked)
         case "blocked": ("Refused", "hand.raised.fill", Theme.blocked)
         case "local" where localError != nil: ("Refused", "hand.raised.fill", Theme.blocked)
+        case "local" where handedBack?.kept == nil && ["summary", "rewrite", "withhold"].contains(handedBack?.strategy ?? ""):
+            ("Replaced", "arrow.uturn.up", Theme.restored)
         case "local": ("Local", "desktopcomputer", Theme.restored)
         default: ("Warned", "flag.fill", Theme.warning)
         }
@@ -296,6 +298,18 @@ extension Snapshot.GuardHit {
         case (_, "local"):
             if let e = localError {
                 return "The request was meant for a local model, but it was refused instead: \(e). \(providerName) received nothing."
+            }
+            if let h = handedBack {
+                if let kept = h.kept {
+                    return "A model on this Mac answered instead of \(providerName), without tools: \(kept), so the conversation stayed local. \(providerName) received nothing."
+                }
+                switch h.strategy {
+                case "summary": return "A model on this Mac summarised this result, without tools, and the summary went to \(providerName) in its place, masked and checked. \(providerName) never received the result itself."
+                case "rewrite": return "A model on this Mac rewrote this result without what it said to the agent, and that went to \(providerName) in its place, masked and checked. \(providerName) never received the result itself."
+                case "withhold": return "\(providerName) got a notice in this result's place, and the turn went on. It never received the result itself."
+                case "answer": return "A model on this Mac answered the turn instead of \(providerName), without tools. Then the conversation went back to \(providerName), with the local answer and a notice in this result's place."
+                default: break
+                }
             }
             return "A model on this Mac answered instead of \(providerName), without tools; \(providerName) received nothing."
         default:
@@ -398,8 +412,12 @@ struct CheckDetail: View {
                 if let mode = h.mode { field("Mode", modeName(mode)) }
                 if let model = h.model { field(h.isRule ? "Checked by" : "Model", model) }
                 field("Agent", agentName(h.client))
-                field(h.action == "warned" && !h.isRule ? "Sent to" : h.isRule ? "Reply from" : "Meant for",
+                field((h.action == "warned" && !h.isRule) || h.outcome.0 == "Replaced" ? "Sent to" : h.isRule ? "Reply from" : "Meant for",
                       h.providerName)
+                if let b = h.handedBack, b.kept == nil, let model = b.model, let url = b.url {
+                    field(b.strategy == "summary" ? "Summarised by" : "Rewritten by",
+                          "\(LocalServersSection.shortName(model)) at \(url.replacingOccurrences(of: "http://", with: ""))")
+                }
                 if let a = h.answeredBy {
                     field("Answered by", "\(LocalServersSection.shortName(a.model)) at \(a.url.replacingOccurrences(of: "http://", with: ""))"
                           + (a.api == "chat" ? ", as Chat Completions" : ""))

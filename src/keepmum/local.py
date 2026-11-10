@@ -411,6 +411,36 @@ def from_chat(reply: dict, api: str, model: str) -> dict:
     return _response(model, text, usage, "resp_" + rid, mid, int(time.time()))
 
 
+def answer_text(api: str, data: bytes, stream: bool) -> str:
+    """The text of an answer as the agent got it, in its API (Messages or Responses), whole or as
+    server-sent events: for the injection check before the answer goes on to the cloud (handback.py)."""
+    text = data.decode("utf-8", "replace")
+    out: list[str] = []
+    if not stream:
+        try:
+            reply = json.loads(text)
+        except ValueError:
+            return ""
+        items = reply.get("content") if api == "messages" else [
+            c for o in reply.get("output") or [] if isinstance(o, dict) for c in o.get("content") or []]
+        return "".join(c.get("text") or "" for c in items or [] if isinstance(c, dict)
+                       and c.get("type") in ("text", "output_text"))
+    for line in text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        try:
+            event = json.loads(line[5:])
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "content_block_delta" and (event.get("delta") or {}).get("type") == "text_delta":
+            out.append(event["delta"].get("text") or "")
+        elif event.get("type") == "response.output_text.delta" and isinstance(event.get("delta"), str):
+            out.append(event["delta"])
+    return "".join(out)
+
+
 def _sse(event: str, data: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 

@@ -56,7 +56,13 @@ from .gateway import ROUTE, api_of_route
 from .gemini import GeminiStreamRestorer, restore_gemini
 from .local import CHAT_PATH as LOCAL_CHAT_PATH
 from .local import PATHS as LOCAL_PATHS
-from .local import ChatStream, from_chat, skills_text, to_chat
+from .handback import WRITTEN, Handbacks
+from .handback import messages as handback_messages
+from .handback import notice as handback_notice
+from .handback import wrap as handback_wrap
+from .handback import written as handback_written
+from .local import DEFAULT_MAX_TOKENS as LOCAL_MAX_TOKENS
+from .local import ChatStream, answer_text, from_chat, skills_text, to_chat
 from .local import LocalRoute
 from .local import prepare as prepare_local
 from .redact import Redactor
@@ -85,6 +91,8 @@ ANTIGRAVITY_METADATA = CODE_ASSIST_METADATA | {"fetchUserInfo", "fetchAvailableM
                                                "writeTrajectoryAcls"}
 GOOGLE_PREFIXES = ("/gemini", "/codeassist", "/antigravity")
 MESSAGES = frozenset({"/v1/messages", "/v1/messages/count_tokens"})
+# Of a streamed local answer, what is kept to check before it is handed back (handback.py "answer").
+MAX_ANSWER_BYTES = 4 * 1024 * 1024
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
 # Not forwarded upstream; accept-encoding is replaced so responses arrive uncompressed, and
 # x-keepmum-client (set by `keepmum protect` in client configs) is for keepmum's stats only.
@@ -195,7 +203,7 @@ class Proxy:
                  chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
                  gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM,
                  tools=None, guards=None, commands=None, local=None, antigravity_upstream: str = ANTIGRAVITY_UPSTREAM,
-                 local_skills=None):
+                 local_skills=None, handback=None):
         self.redactor = redactor
         # The checks on a request's texts (guard.Guard): "injection" on tool results, "harm" on what
         # the user typed. Warn-mode checks run after the request is sent, in `_background`.
@@ -207,6 +215,10 @@ class Proxy:
         self.local = local
         # The user's skills for a check's local turns: a callable giving its local.Skill list, or None.
         self.local_skills = local_skills
+        # What follows a local turn of the injection check: a callable giving ([guard] local_handback,
+        # local_handback_instructions), and the results handed back so far (handback.py).
+        self._handback = handback if callable(handback) else (lambda: ("stay", ""))
+        self.handbacks = Handbacks()
         # (server URL, API) pairs a server answered 404/405/501 for and then answered as Chat
         # Completions: asked that way from then on, until keepmum restarts.
         self._chat_only: set[tuple[str, str]] = set()
@@ -379,17 +391,31 @@ class Proxy:
             self._record(path, "rejected", 400, origin=origin)
             return api_error(400, "invalid_request_error", "request body is not a JSON object keepmum can read; nothing was sent")
         started = time.perf_counter()
-        try:
-            masked, counts, new, found, texts = await anyio.to_thread.run_sync(self._redact, body, t.api, origin)
-        except Exception as e:  # any detector or redaction failure: block, never send raw
-            log.error("blocked %s: scan failed (%s)", path, type(e).__name__)
-            self._record(path, "blocked", 500, origin=origin)
-            return api_error(500, "api_error", "could not scan this request, so it was not sent")
-        refused = await self._guarded(texts, path, origin, kind="masked" if new else "clean", api=t.api)
-        if isinstance(refused, LocalRoute):
-            return await self._answer_locally(request, t, body, refused, origin)
-        if refused is not None:
-            return refused
+        # Results handed back to the cloud (handback.py) go as their replacements; a local model
+        # still gets the request as the agent wrote it.
+        original, (body, _) = body, self._handed_back(body)
+        first = handed = None
+        while True:
+            try:
+                masked, counts, new, found, texts = await anyio.to_thread.run_sync(self._redact, body, t.api, origin)
+            except Exception as e:  # any detector or redaction failure: block, never send raw
+                log.error("blocked %s: scan failed (%s)", path, type(e).__name__)
+                self._record(path, "blocked", 500, origin=origin)
+                return api_error(500, "api_error", "could not scan this request, so it was not sent")
+            refused = await self._guarded(texts, path, origin, kind="masked" if new else "clean", api=t.api)
+            if isinstance(refused, LocalRoute):
+                if first is None and (handed := await self._hand_back(refused, texts, path)):
+                    first, (body, _) = refused, self._handed_back(original)
+                    continue  # scanned again: what the local model wrote is checked like any result
+                if first is not None:
+                    log.info("%s: the injection check flagged what the local model wrote too; answered locally", path)
+                    self.stats.note_guard(first.entries, handed_back={**handed, "kept": "what the local model wrote was flagged too"})
+                return await self._answer_locally(request, t, original, refused, origin, texts)
+            if refused is not None:
+                return refused
+            break
+        if first is not None:
+            self.stats.note_guard(first.entries, handed_back=handed)
         scan_ms = (time.perf_counter() - started) * 1000
         payload = json.dumps(masked, ensure_ascii=False).encode("utf-8", "replace")
         url = self._url(request, t)
@@ -575,7 +601,101 @@ class Proxy:
                          "request was not sent. Remove that result from the conversation (rewind, or /clear), or run "
                          "`keepmum guard injection warn` to send such requests with a warning.")
 
-    async def _answer_locally(self, request: Request, t: Target, body: dict, route: LocalRoute, origin) -> Response:
+    def _handed_back(self, body: dict) -> tuple[dict, int]:
+        """The body with the results handed back so far replaced: while the injection check is in
+        local mode and hands back. Turned off, or set to stay, the request goes as the agent wrote it."""
+        guard = next((g for g in self.guards if g.name == "injection"), None)
+        if guard is None or guard.mode != "local" or self._handback()[0] == "stay":
+            return body, 0
+        return self.handbacks.apply(body)
+
+    async def _hand_back(self, route: LocalRoute, texts: dict, path: str) -> dict | None:
+        """[guard] local_handback (handback.py): a replacement for each result the injection check
+        flagged, so the turn can go to the cloud. What was done, for the Logs page; None leaves
+        the turn to the local model (stay, answer, or no replacement could be written)."""
+        strategy, instructions = self._handback()
+        if route.check != "injection" or strategy not in ("withhold", *WRITTEN):
+            return None
+        flagged = self._flagged_texts(route, texts)
+        if not flagged or any(self.handbacks.made(text) for text in flagged):
+            return None  # what keepmum wrote in a result's place was flagged: it stays local
+        if strategy == "withhold":
+            for text, source in flagged.items():
+                self.handbacks.add(text, handback_notice(strategy, source))
+            log.info("%s: the flagged result withheld; the request goes on to the cloud", path)
+            return {"strategy": strategy}
+        skills = self.local_skills("injection") if callable(self.local_skills) else []
+        skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
+        prompt = (texts.get("harm") or [(None, None, None)])[-1][1]
+        done, server = [], None
+        for text, source in flagged.items():
+            got = await self._write_locally(strategy, text, source, prompt, instructions, skills, path)
+            if got is None:
+                return None
+            out, server = got
+            done.append((text, handback_wrap(strategy, source, out, custom=bool(instructions))))
+        for text, replacement in done:
+            self.handbacks.add(text, replacement)
+        log.info("%s: the local model %s at %s wrote a %s of the flagged result; checking it", path, server.model,
+                 server.url, strategy)
+        return {"strategy": strategy, "model": server.model, "url": server.url}
+
+    @staticmethod
+    def _flagged_texts(route: LocalRoute, texts: dict | None) -> dict[str, str | None]:
+        """The texts of a route's hits, each with its source (the tool)."""
+        items = (texts or {}).get(route.check) or []
+        return {items[h["at"]][1]: items[h["at"]][0] for h in route.hits
+                if isinstance(h.get("at"), int) and 0 <= h["at"] < len(items)}
+
+    async def _write_locally(self, strategy: str, text: str, source: str | None, prompt: str | None,
+                             instructions: str, skills: str, path: str) -> tuple[str, object] | None:
+        """A summary or rewrite of a flagged result from the injection check's local servers, the first
+        that writes one, in Chat Completions (every local server speaks it), with no tools."""
+        servers = self.local("injection") if callable(self.local) else []
+        failures = []
+        for server in servers:
+            data = {"model": server.model, "stream": False, "max_tokens": LOCAL_MAX_TOKENS,
+                    "messages": handback_messages(strategy, text, source, prompt, instructions, skills)}
+            try:
+                resp = await self.client.post(server.url + LOCAL_CHAT_PATH, json=data)
+            except httpx.HTTPError as e:
+                failures.append(f"{server.url} did not answer ({type(e).__name__})")
+                continue
+            if not 200 <= resp.status_code < 300:
+                failures.append(f"{server.model} at {server.url}: HTTP {resp.status_code}")
+                continue
+            try:
+                out = handback_written(resp.json())
+            except (ValueError, AttributeError, TypeError):
+                out = ""
+            if out:
+                return out, server
+            failures.append(f"{server.model} at {server.url}: no text")
+        log.warning("%s: no local model wrote a %s of the flagged result (%s); answered locally", path, strategy,
+                    "; ".join(failures) or "no local server is set for the injection check")
+        return None
+
+    async def _after_answer(self, route: LocalRoute, flagged: dict, answer: str, path: str) -> None:
+        """local_handback "answer": once the local model has answered, the flagged results are withheld
+        from the next request on, which goes to the cloud, unless the injection check flags the answer."""
+        guard = next((g for g in self.guards if g.name == "injection"), None)
+        if answer.strip() and guard is not None:
+            try:
+                hits = await anyio.to_thread.run_sync(guard.check, [("the local model", answer, True)], True)
+            except Exception as e:  # unchecked: not handed back
+                log.warning("%s: the local answer was not checked (%s); the conversation stays local", path, type(e).__name__)
+                return
+            if hits:
+                log.info("%s: the injection check flagged the local answer; the conversation stays local", path)
+                self.stats.note_guard(route.entries, handed_back={"strategy": "answer",
+                                                                  "kept": "the local model's answer was flagged too"})
+                return
+        for text, source in flagged.items():
+            self.handbacks.add(text, handback_notice("answer", source))
+        self.stats.note_guard(route.entries, handed_back={"strategy": "answer"})
+
+    async def _answer_locally(self, request: Request, t: Target, body: dict, route: LocalRoute, origin,
+                              texts: dict | None = None) -> Response:
         """Local mode: the flagged request goes to a model on this Mac, as the agent wrote it (real
         values included: it stays on this Mac) but with that model's name, no tools and a note
         (local.py), and its answer goes back to the agent. Never the agent's API key. The servers
@@ -592,6 +712,12 @@ class Proxy:
                              "`keepmum guard local add --model <name>`.")
         stream = wants_stream(t, body, request.url.query)
         local_origin = (origin[0] if origin else None, "local")
+        after = None
+        if route.check == "injection" and self._handback()[0] == "answer":
+            flagged = {k: v for k, v in self._flagged_texts(route, texts).items() if not self.handbacks.made(k)}
+            if flagged:
+                async def after(answer: str) -> None:
+                    await self._after_answer(route, flagged, answer, path)
         skills = self.local_skills(route.check) if callable(self.local_skills) else []
         skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
         failures: list[str] = []
@@ -638,17 +764,18 @@ class Proxy:
                     log.warning("%s: %s; answered by the next local server", path, "; ".join(failures))
                 self.stats.note_guard(route.entries, answered_by={"model": server.model, "url": server.url,
                                                                   "api": way, "passed_over": failures})
-                return self._local_answer(resp, content, path, server, way, t.api, local_origin, route)
+                return await self._local_answer(resp, content, path, server, way, t.api, local_origin, route, after)
         log.error("%s: no local server answered (%s); not sent anywhere else", path, "; ".join(failures))
         self.stats.note_guard(route.entries, local_error="no local server answered: " + "; ".join(failures))
         self._record(path, "blocked", 502, origin=origin, guard=refused)
         return api_error(502, "api_error", f"the {route.check} check sent this request to a local model, and none "
                          f"answered: {'; '.join(failures)}. It was not sent anywhere else.")
 
-    def _local_answer(self, resp: httpx.Response, content: bytes | None, path: str, server, way: str, api: str,
-                      origin, route: LocalRoute) -> Response:
+    async def _local_answer(self, resp: httpx.Response, content: bytes | None, path: str, server, way: str, api: str,
+                            origin, route: LocalRoute, after=None) -> Response:
         """A local server's 2xx answer, passed back as it is or, from Chat Completions, in the
-        agent's API: `content` when read whole, else streamed from `resp`."""
+        agent's API: `content` when read whole, else streamed from `resp`. `after`, if given, gets
+        the answer's text once the agent has it all (handback.py)."""
         hits = guard_summary(route.hits, "local")
         how = "" if way == "native" else ", as Chat Completions"
         headers = self._response_headers(resp)
@@ -658,9 +785,14 @@ class Proxy:
             translate = ChatStream(api, server.model) if way == "chat" else None
 
             async def body():
+                sent, size = [], 0
                 try:
                     async for chunk in resp.aiter_raw():
-                        yield translate.feed(chunk) if translate else chunk
+                        out = translate.feed(chunk) if translate else chunk
+                        if after and size < MAX_ANSWER_BYTES:
+                            sent.append(out)
+                            size += len(out)
+                        yield out
                 except httpx.HTTPError as e:  # too late for another server: end what was sent
                     log.warning("%s: the local model at %s broke off its answer (%s)", path, server.url, type(e).__name__)
                 finally:
@@ -668,7 +800,10 @@ class Proxy:
                     self._record(path, "local", resp.status_code, origin=origin, guard=hits)
                     log.info("%s -> local model %s at %s%s: %d (streamed)", path, server.model, server.url, how, resp.status_code)
                 if translate:
-                    yield translate.end()
+                    sent.append(end := translate.end())
+                    yield end
+                if after:
+                    await after(answer_text(api, b"".join(sent), True))
 
             if translate:
                 headers["content-type"] = "text/event-stream"
@@ -681,6 +816,8 @@ class Proxy:
             headers["content-type"] = "application/json"
         self._record(path, "local", resp.status_code, origin=origin, guard=hits)
         log.info("%s -> local model %s at %s%s: %d", path, server.model, server.url, how, resp.status_code)
+        if after:
+            await after(answer_text(api, content, False))
         return Response(content, status_code=resp.status_code, headers=headers)
 
     async def _check_later(self, guard, items, path: str, origin, kind: str = "clean", request: str | None = None,

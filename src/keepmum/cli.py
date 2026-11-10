@@ -549,7 +549,8 @@ def _guard_status() -> dict:
         "commands": {"mode": cfg.guard_commands, "rules": [label for _, label, _ in RULES + SENDS]},
         "local": {"servers": [{"url": x.url, "model": x.model, "checks": list(x.checks), "api": x.api}
                               for x in cfg.guard_local_servers],
-                  "skills": [{"path": x.path, "checks": list(x.checks)} for x in cfg.guard_local_skills]},
+                  "skills": [{"path": x.path, "checks": list(x.checks)} for x in cfg.guard_local_skills],
+                  "handback": cfg.guard_local_handback, "handback_instructions": cfg.guard_local_handback_instructions},
         "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
                  "installed": {size: harm.installed(size) for size in harm.SIZES},
                  "server": server, "licence": harm.LICENCE,
@@ -986,6 +987,71 @@ def guard_local_skill_remove(number: int = typer.Argument(..., help="The skill's
     skills = list(cfg.guard_local_skills)
     skills.pop(number - 1)
     _save_skills(cfg, skills, f"keepmum guard local skill remove {number}")
+
+
+HANDBACK_HELP = {
+    "stay": "the conversation stays on the local model until you rewind or clear it",
+    "answer": "the local model answers the flagged turn; then the result is withheld and the cloud model takes over",
+    "summary": "the local model summarises the flagged result; the summary goes to the cloud model in its place",
+    "rewrite": "the local model takes out what the result addresses to the agent; the rest goes to the cloud model",
+    "withhold": "no local model: a notice takes the result's place, and the turn goes to the cloud model",
+}
+
+
+@local_app.command("handback")
+def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer, summary, rewrite or withhold. None: show it."),
+                         instructions: str = typer.Option(None, "--instructions", help="Your own instruction for summary and rewrite, in place of keepmum's (\"\" for keepmum's again)."),
+                         instructions_file: str = typer.Option(None, "--instructions-file", help="The same, read from a file."),
+                         as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """What follows a local turn of the injection check: stay local, or hand the conversation back to the cloud model."""
+    import json
+    from pathlib import Path
+
+    from .config import ConfigError
+    from .handback import INSTRUCTIONS, MAX_INSTRUCTIONS, STRATEGIES, WRITTEN
+
+    if instructions is not None and instructions_file is not None:
+        typer.echo("keepmum guard local handback: --instructions or --instructions-file, not both", err=True)
+        raise typer.Exit(2)
+    if instructions_file is not None:
+        try:
+            instructions = Path(instructions_file).expanduser().read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            typer.echo(f"keepmum guard local handback: {instructions_file}: {e}", err=True)
+            raise typer.Exit(2)
+    if strategy is not None and strategy not in STRATEGIES:
+        typer.echo(f"keepmum guard local handback: {strategy}: use {', '.join(STRATEGIES)}", err=True)
+        raise typer.Exit(2)
+    if instructions is not None and len(instructions.strip()) > MAX_INSTRUCTIONS:
+        typer.echo(f"keepmum guard local handback: the instructions are over {MAX_INSTRUCTIONS:,} characters", err=True)
+        raise typer.Exit(2)
+    cfg = _config()
+    command = "keepmum guard local handback" + (f" {strategy}" if strategy else "")
+    try:
+        if strategy is not None and strategy != cfg.guard_local_handback:
+            _update_config(cfg.path, "guard", "local_handback", None if strategy == "stay" else strategy, command)
+        if instructions is not None and instructions.strip() != cfg.guard_local_handback_instructions:
+            _update_config(cfg.path, "guard", "local_handback_instructions", instructions.strip() or None,
+                           command + " --instructions")
+    except (ConfigError, OSError) as e:
+        typer.echo(f"keepmum guard local handback: {e}", err=True)
+        raise typer.Exit(1)
+    if strategy is not None or instructions is not None:
+        typer.echo("Running proxies use it on their next flagged result.", err=True)
+        cfg = _config()
+    now, own = cfg.guard_local_handback, cfg.guard_local_handback_instructions
+    if as_json:
+        typer.echo(json.dumps({"handback": now, "instructions": own, "default_instructions": INSTRUCTIONS,
+                               "strategies": [{"id": k, "about": v} for k, v in HANDBACK_HELP.items()]}))
+        return
+    typer.echo(f"{now}: {HANDBACK_HELP[now]}")
+    if now in WRITTEN:
+        typer.echo("instructions: " + ("your own (" + f"{len(own):,} characters)" if own else "keepmum's"))
+    if cfg.guard_injection != "local" and strategy is None:
+        typer.echo(f"(the injection check is {cfg.guard_injection}: this applies in local mode, `keepmum guard injection local`)")
+    if now != "stay" and strategy is None:
+        typer.echo("The cloud model never gets the flagged result itself. What the local model writes is checked first;"
+                   " if the check flags it, that turn stays local.")
 
 
 @guard_app.command("sensitivity")

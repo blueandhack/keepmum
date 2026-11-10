@@ -266,6 +266,9 @@ def config_state(cfg) -> dict:
                           + ("" if x.api == "auto" else f" ({x.api})") for x in cfg.guard_local_servers],
         "local_skills": [x.path + ("" if tuple(x.checks) == ("injection", "harm") else f" for {', '.join(x.checks)}")
                          for x in cfg.guard_local_skills],
+        "local_handback": cfg.guard_local_handback,
+        "local_handback_instructions": (_fingerprint("string", cfg.guard_local_handback_instructions)
+                                        if cfg.guard_local_handback_instructions else ""),
     }
 
 
@@ -280,9 +283,12 @@ _SETTINGS = {
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
 _ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers", "local_skills",
-                "injection_threshold", "harm_sensitivity"}
+                "injection_threshold", "harm_sensitivity", "local_handback", "local_handback_instructions"}
 # Local is below block: a flagged request is answered (on this Mac) rather than refused.
 _GUARD_RANK = {"off": 0, "warn": 1, "local": 2, "block": 3}
+# After a local turn (handback.py): how little of a flagged result reaches the cloud. A rewrite keeps
+# most of it; stay keeps the conversation on this Mac.
+_HANDBACK_RANK = {"rewrite": 0, "answer": 1, "summary": 1, "withhold": 2, "stay": 3}
 
 
 def config_changes(old: dict, new: dict) -> list[dict]:
@@ -319,6 +325,14 @@ def config_changes(old: dict, new: dict) -> list[dict]:
         # and the request still never leaves this Mac, so no change weakens.
         out.append({"setting": "guard.local_skills", "added": [x for x in b or [] if x not in a],
                     "removed": [x for x in a if x not in (b or [])], "weakens": False})
+    if "local_handback" in old and old["local_handback"] != new.get("local_handback"):
+        out.append({"setting": "guard.local_handback", "from": old["local_handback"], "to": new.get("local_handback"),
+                    "weakens": _HANDBACK_RANK.get(new.get("local_handback"), 3) < _HANDBACK_RANK.get(old["local_handback"], 3)})
+    a, b = old.get("local_handback_instructions"), new.get("local_handback_instructions")
+    if "local_handback_instructions" in old and a != b:
+        # The user's own instruction for what the local model hands back: it may keep more of a
+        # flagged result than keepmum's, so a new one is marked for a look. Recorded as a fingerprint.
+        out.append({"setting": "guard.local_handback_instructions", "from": a or None, "to": b or None, "weakens": bool(b)})
     if "injection_threshold" in old and old["injection_threshold"] != new.get("injection_threshold"):
         # A higher threshold flags less: fewer false alarms, and fewer injections caught.
         out.append({"setting": "guard.injection_threshold", "from": old["injection_threshold"],

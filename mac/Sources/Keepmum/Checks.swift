@@ -525,3 +525,107 @@ struct LocalSkillsSection: View {
         }
     }
 }
+
+/// What follows a local turn of the injection check: stay on the local model, or hand the
+/// conversation back to the cloud with the flagged result replaced (handback.py).
+struct LocalHandbackSection: View {
+    var engine: Engine
+    @Environment(\.isSnapshot) private var isSnapshot
+    @State private var editing = false
+
+    static let choices: [(id: String, label: String, detail: String)] = [
+        ("stay", "Stay local", "The conversation stays on the local model until you rewind or clear it."),
+        ("answer", "Local answer, then cloud", "The local model answers the flagged turn. After that the result is withheld, and the cloud model carries on with the local answer."),
+        ("summary", "Local summary, then cloud", "The local model summarises the flagged result first; the summary goes to the cloud model in its place."),
+        ("rewrite", "Local rewrite, then cloud", "The local model takes out what the result says to the agent; the rest goes to the cloud model."),
+        ("withhold", "Withhold, then cloud", "No local model: a notice takes the result's place, and the turn goes to the cloud model."),
+    ]
+
+    private var current: String { engine.localHandback?.handback ?? engine.status?.guard?.local?.handback ?? "stay" }
+    private var own: String { engine.localHandback?.instructions ?? engine.status?.guard?.local?.handbackInstructions ?? "" }
+    private var choice: (id: String, label: String, detail: String) { Self.choices.first { $0.id == current } ?? Self.choices[0] }
+
+    var body: some View {
+        FormSection(title: "After a local turn",
+                    footer: "For the injection check. The cloud model never gets the flagged result itself. What takes its place is masked like the rest of the request and checked first: if the check flags what the local model wrote, that turn stays local. A harm hit always stays local: it is what you typed, and handing it back would send it to the provider the check kept it from.") {
+            FormRow(title: "Then", detail: choice.detail) { strategyMenu }
+            if current == "summary" || current == "rewrite" {
+                Hairline()
+                FormRow(title: "Instructions",
+                        detail: own.isEmpty ? "keepmum's: keep the facts, code and data; leave out what the result says to the agent"
+                                            : "Your own, \(own.count.formatted()) characters") {
+                    if isSnapshot {
+                        PillButton(title: "Edit…") {}
+                    } else {
+                        PillButton(title: "Edit…") { editing = true }
+                            .disabled(!engine.isBundled || engine.busy)
+                    }
+                }
+            }
+        }
+        .task(id: engine.status?.guard?.local) { await engine.loadLocalHandback() }
+        .sheet(isPresented: $editing) {
+            HandbackInstructionsSheet(engine: engine, strategy: current, own: own,
+                                      keepmums: engine.localHandback?.defaultInstructions[current] ?? "")
+        }
+    }
+
+    @ViewBuilder private var strategyMenu: some View {
+        if isSnapshot {
+            HStack(spacing: Space.xxs) {
+                Text(choice.label).font(.km(.callout)).foregroundStyle(Theme.text)
+                Image(systemName: "chevron.down").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+            }
+        } else {
+            Menu(choice.label) {
+                ForEach(Self.choices, id: \.id) { c in
+                    Button(c.label) { Task { await engine.setLocalHandback(c.id) } }
+                }
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+            .disabled(!engine.isBundled || engine.busy)
+            .help("What follows a turn the injection check kept on this Mac")
+        }
+    }
+}
+
+/// The user's own instruction for the local model's summary or rewrite, in place of keepmum's.
+struct HandbackInstructionsSheet: View {
+    var engine: Engine
+    var strategy: String
+    var own: String
+    var keepmums: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.m) {
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                Text("Instructions for the \(strategy)").font(.km(.headline)).foregroundStyle(Theme.text)
+                Text("The local model gets these, then the flagged result and your latest message, and writes what the cloud model reads in the result's place. Say what to keep and what to leave out. Skills for the injection check follow them.")
+                    .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+            }
+            TextEditor(text: $text)
+                .font(.km(.callout))
+                .frame(minHeight: 220)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.textSecondary.opacity(0.3)))
+            HStack {
+                PillButton(title: "Use keepmum's") { text = keepmums }
+                    .disabled(text == keepmums)
+                Spacer()
+                PillButton(title: "Cancel") { dismiss() }
+                PillButton(title: "Save", prominent: true) {
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // keepmum's own text saved as is means keepmum's: stored as no instruction of the user's.
+                    let value = trimmed == keepmums.trimmingCharacters(in: .whitespacesAndNewlines) ? "" : trimmed
+                    Task { await engine.setLocalHandbackInstructions(value) }
+                    dismiss()
+                }
+                .disabled(text.count > 4000)
+            }
+        }
+        .padding(Space.l)
+        .frame(width: 520)
+        .onAppear { text = own.isEmpty ? keepmums : own }
+    }
+}
