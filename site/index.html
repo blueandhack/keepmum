@@ -125,12 +125,12 @@
   <section id="checks" class="wrap section checks" aria-labelledby="checks-title">
     <div class="checks-head">
       <h2 id="checks-title">Three checks, if you want them.</h2>
-      <p class="intro">All off until you turn them on, and all on your Mac. Warn sends the request and logs a hit. Block refuses it. Local, for the first two, sends a flagged request to a model on your Mac instead of the provider, so your agent still gets an answer.</p>
+      <p class="intro">All off until you turn them on, and all on your Mac. Warn sends the request and logs a hit. Block refuses it. Local, for the first two, sends a flagged request to a model on your Mac instead of the provider, so your agent still gets an answer, with your own skills if you add them. It works with every agent here, the Antigravity CLI and Gemini CLI included. After a planted instruction, keepmum can also hand the conversation back: the local model summarises or rewrites what was flagged, or keepmum withholds it, and the cloud model carries on without ever seeing the original.</p>
     </div>
     <div class="cols">
       <div class="feature">
         <h3>Prompt injection</h3>
-        <p>Checks what tools bring back (web pages, files, shell output, MCP replies) for instructions planted for your agent. On the benchmark it caught every injected document and flagged 3% of ordinary ones.</p>
+        <p>Checks what tools bring back (web pages, files, shell output, MCP replies) for instructions planted for your agent. At the default level it catches 97% of injected documents on keepmum’s test set and 85% of AgentDojo’s attacks, and flags 1.7% of tool results in real Claude Code and Codex sessions.</p>
       </div>
       <div class="feature">
         <h3>Harmful requests</h3>
@@ -141,7 +141,7 @@
         <p>Checks the shell commands a reply asks your agent to run: a download piped into a shell, deleting your home folder, erasing a disk, credentials sent over the network. Seven rules, no download.</p>
       </div>
     </div>
-    <figure class="shot"><img src="img/checks.webp" width="2880" height="1250" alt="keepmum’s Checks settings: each check off, warn, block or local, and the local servers that answer flagged requests" loading="lazy"></figure>
+    <figure class="shot"><img src="img/checks.webp" width="2880" height="1560" alt="keepmum’s Checks settings: each check off, warn, block or local, the local servers that answer flagged requests, what follows a local turn, and skills for local turns" loading="lazy"></figure>
   </section>
 
   <section id="extensions" class="wrap section checks" aria-labelledby="extensions-title">

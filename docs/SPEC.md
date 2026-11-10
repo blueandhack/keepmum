@@ -1,6 +1,6 @@
 # keepmum — Local Secret & PII Redaction for Coding Agents (Build Spec)
 
-Oct 25, 2026 · @Yujia Lin · updated Oct 29, 2026 for Codex, pi and opencode, pf-serve, the Mac app, and the rules without the model; Nov 3, 2026 for Gemini CLI, other gateways, the guards on restore, and the first alpha
+Oct 25, 2026 · @Yujia Lin · updated Oct 29, 2026 for Codex, pi and opencode, pf-serve, the Mac app, and the rules without the model; Nov 3, 2026 for Gemini CLI, other gateways, the guards on restore, and the first alpha; Nov 10, 2026 for local mode's skills and hand-back, local mode for Gemini's API, and the Antigravity CLI
 
 ## Summary
 
@@ -282,6 +282,7 @@ keepmum/
     harm.py         # the harm check (and qwen3guard_prompt.py)
     commands.py     # the risky-commands check on replies
     local.py        # local mode: a flagged request answered on this Mac
+    handback.py     # local mode: handing the conversation back to the cloud after an injection hit
     llamacpp.py     # llama-server, the checks' runtime
     launch.py       # `keepmum claude`, the VS Code wrapper, background server
     detect/
@@ -319,6 +320,8 @@ keepmum/
 - [x] **Web addresses in replies (Nov 2, 2026).** A placeholder inside an http(s) address in reply text stays a placeholder, so a rendered image or link cannot carry a value out; see Restore. Verified with Claude Code: the text got the real value, the image address the placeholder.
 - [x] **Shell destinations (Nov 3, 2026).** A token whose issuer is known stays a placeholder in a shell command that names another host (`destinations.py`, Open questions). Verified with Claude Code running two curl commands: attacker.test received the placeholder, api.github.com the token. Cases: `docs/test-cases/shell-destinations.md`.
 - [x] **Optional checks (Nov 4–5, 2026).** Off by default, each warn or block: prompt injection in tool results (`guard.py`, Prompt Injection Guard Small as a GGUF keepmum converted and hosts; `bench/results/GUARD.md`), harmful requests in what the user typed (`harm.py`, Content Safety Guard Small, or Qwen3Guard-Gen 0.6B or 4B; `bench/results/HARM.md`), both in llama-server on Metal and downloaded only by `keepmum guard setup`; and risky shell commands in the model's replies (`commands.py`, seven rules, no model). Local mode (injection and harm) answers a flagged request with a model on this Mac (`local.py`; Ollama, LM Studio, llama.cpp, or Chat Completions for others), tried in order, never sent to the provider. Hits are logged, counted and audited with the check, score and length, never the text; the Mac app shows them in the flow diagram, Activity and Logs. The README has the details.
+- [x] **Local mode, further (Nov 9–10, 2026).** Skills for local turns (`[guard] local_skills`: SKILL.md files the local model gets after keepmum's note, read on every turn). Handing back to the cloud after an injection hit (`handback.py`, `[guard] local_handback`): stay, or replace the flagged result with the local model's answer, summary or rewrite (keepmum's instruction or the user's) or a notice; what the local model writes is checked on its own before it goes, and keepmum's own wording around it is not scored (it reads like an injection to the model, 0.99). Gemini's API (the Antigravity CLI, Gemini CLI) goes local as Chat Completions, its answer back as a GenerateContentResponse, plain or wrapped for Code Assist, streamed or whole. Verified with real agents (`e2e/cases/local-*`): Claude Code, Codex and agy, scripted and live, with the real injection model and Ollama; the runs found that keepmum's wording was flagged and that Codex's `additional_tools` input item made Ollama refuse the request.
+- [x] **The Antigravity CLI (Nov 10, 2026).** Gemini CLI stopped serving personal Google sign-ins on June 18, 2026, moving them to agy. The extension watch reads agy's MCP servers, hooks, plugins, rules and skills (`~/.gemini/config`), with a first look per agent, so an update does not report what agy already had as new. The Mac app has a row for `keepmum agy`.
 - [ ] **M6 Ship.** README, Homebrew tap, name check on GitHub, PyPI and Homebrew. *Oct 26, 2026: Keepmum.app is self-contained (bundled Python runtime, pf-serve, a LaunchAgent via SMAppService) and sets itself up: model download, background service, `keepmum protect`. Nov 3, 2026: signed with Developer ID, notarized, and released as a DMG on GitHub Releases, [0.1.0a1](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a1) (pre-release). Nov 5, 2026: [0.1.0a2](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a2), the first that updates itself (Sparkle, a signed feed, asked on first launch). Left: a Homebrew cask, PyPI, and Windows (pf-serve already builds there; the app would need its own UI).*
 
 ## Audit log
