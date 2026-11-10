@@ -347,3 +347,13 @@ def test_a_fresh_look_covers_every_agent(home):
     assert ext.ensure_baseline() is True
     state = json.loads(ext.state_file().read_text())
     assert state["agents"] == list(ext.AGENTS) and not [r for r in ext.check()["items"] if r["new"]]
+
+
+def test_an_unreadable_antigravity_file_is_reported_and_the_rest_still_read(home):
+    config = agy_arrives(home)
+    (config / "hooks.json").write_text("{ broken")
+    (config / "plugins" / "vendor" / "plugin.json").write_text("{ broken")
+    result = ext.check()
+    assert {p.split(": ")[0].rsplit("/", 1)[-1] for p in result["problems"]} == {"hooks.json", "plugin.json"}
+    rows = by_name(result)
+    assert ("Antigravity CLI", "MCP server", "vendor") in rows and ("Antigravity CLI", "plugin", "vendor") in rows

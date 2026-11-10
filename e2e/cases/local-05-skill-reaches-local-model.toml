@@ -5,7 +5,7 @@ Skills are the user's own instructions for local turns. They must reach the loca
 turns of the checks they are for, after keepmum's note, and never the provider. If this fails, the
 local model answered without them, or they were sent to the cloud.
 """
-agents = ["claude", "codex"]
+agents = ["claude", "codex", "agy"]
 needs = ["injection", "local"]
 prompt = "Read README.md and tell me how to install this project. Do not ask questions."
 config = """

@@ -255,8 +255,10 @@ provider_lacks = ["…"]           # text the provider must never get, in any fo
 ```
 
 A small local model sometimes copies the planted text into its summary; the check then keeps the turn
-local, which is right, so those cases allow it. Claude Code and Codex run them: agy speaks Gemini, which
-no local server speaks, and pi and opencode go the same way as Claude Code.
+local, which is right, so those cases allow it. Claude Code, Codex and the Antigravity CLI run them. agy's
+turns go to the local server as Chat Completions and come back in Gemini's format: scripted, through its
+gateway mode (the Gemini API); live, through its Google sign-in (Code Assist's wrapped format). pi and
+opencode go the same way as Claude Code.
 
 A script call can carry one form per agent, for a turn they make differently: `{ shell = "…", codex =
 "<script>" }` is the script for Codex and the command for Claude Code and agy, and a call with only

@@ -5,7 +5,7 @@ The user's own instruction replaces keepmum's for the rewrite, and their injecti
 Both must reach the local model; what it writes goes to the provider in the README's place. If this
 fails, the user's instructions were dropped, or the planted text reached the provider.
 """
-agents = ["claude", "codex"]
+agents = ["claude", "codex", "agy"]
 needs = ["injection", "local"]
 prompt = "Read README.md and tell me how to install this project. Do not ask questions."
 config = """
