@@ -19,7 +19,9 @@ What the local model gets:
   - no tools. A flagged request is the one most likely to carry instructions planted for the
     agent, and a small local model follows them more readily than a cloud one; without tools it
     can only answer in text, never run a command or edit a file.
-  - a note, first in its instructions, that says why this turn came to it.
+  - a note, first in its instructions, that says why this turn came to it, then the user's skills
+    for that check, if any (`[guard] local_skills`: Claude Code's SKILL.md format), then the
+    agent's own instructions.
 
 The API: Ollama, LM Studio and llama.cpp's llama-server speak the Anthropic Messages API (Claude
 Code) and the OpenAI Responses API (Codex), so those go as they are ("native"). A server that does
@@ -34,10 +36,14 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import secrets
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlsplit
+
+log = logging.getLogger("keepmum")
 
 DEFAULT_URL = "http://localhost:11434"
 CHECKS = ("injection", "harm")
@@ -50,6 +56,8 @@ DEFAULT_MAX_TOKENS = 4096
 PRESETS = {"ollama": ("Ollama", "http://localhost:11434"), "lmstudio": ("LM Studio", "http://localhost:1234"),
            "llamacpp": ("llama.cpp", "http://localhost:8080"), "mlx": ("MLX", "http://localhost:8080")}
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
+SKILL_FILE = "SKILL.md"  # a skill folder's file, as in Claude Code
+MAX_SKILL_CHARS = 20_000  # per skill: a local model's context is small, and the conversation comes after
 
 
 @dataclass(frozen=True)
@@ -76,6 +84,17 @@ class LocalRoute:
     check: str
     hits: list[dict]
     entries: list[dict] = field(default_factory=list, compare=False)
+
+
+@dataclass(frozen=True)
+class Skill:
+    """A skill the user added for local mode: a SKILL.md, or a folder holding one, and the checks
+    whose flagged requests get it. Read when a request goes local, so edits apply at once."""
+    path: str
+    checks: tuple[str, ...] = CHECKS
+
+    def as_toml(self) -> dict:
+        return {"path": self.path} | ({} if tuple(self.checks) == CHECKS else {"checks": list(self.checks)})
 
 
 def on_this_mac(url: str) -> bool:
@@ -112,6 +131,103 @@ def parse_servers(value, where: str) -> list[Server]:
     return out
 
 
+def parse_skills(value, where: str) -> list[Skill]:
+    """[guard] local_skills, checked; raises ValueError with what is wrong. A missing file is not an
+    error here (`keepmum guard local skill` says so): a request that goes local just leaves it out."""
+    if not isinstance(value, list):
+        raise ValueError(f"{where} must be a list of tables, like [{{ path = \"~/.claude/skills/review/SKILL.md\" }}]")
+    out = []
+    for i, entry in enumerate(value, 1):
+        at = f"{where}[{i}]"
+        if not isinstance(entry, dict):
+            raise ValueError(f"{at} must be a table: {{ path = \"…\" }}")
+        if extra := set(entry) - {"path", "checks"}:
+            raise ValueError(f"{at}: unknown key {', '.join(sorted(extra))} (path, checks)")
+        path, checks = entry.get("path"), entry.get("checks", list(CHECKS))
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"{at}.path must be the path of a SKILL.md, or of a folder holding one")
+        if not isinstance(checks, list) or not checks or not all(c in CHECKS for c in checks):
+            raise ValueError(f"{at}.checks must list one or both of \"injection\", \"harm\"")
+        out.append(Skill(path, tuple(c for c in CHECKS if c in checks)))
+    return out
+
+
+def skill_file(path: str) -> Path:
+    p = Path(path).expanduser()
+    return p / SKILL_FILE if p.is_dir() else p
+
+
+def _frontmatter(text: str) -> tuple[dict, str]:
+    """A SKILL.md's YAML frontmatter, as far as name and description need (key: value, and folded or
+    literal blocks), and the text after it."""
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is None:
+        return {}, text
+    meta: dict[str, str] = {}
+    i = 1
+    while i < end:
+        key, sep, value = lines[i].partition(":")
+        i += 1
+        if not sep or lines[i - 1][:1].isspace():
+            continue
+        value = value.strip()
+        if value in (">", "|", ">-", "|-", ">+", "|+"):
+            block = []
+            while i < end and (lines[i][:1].isspace() or not lines[i].strip()):
+                block.append(lines[i].strip())
+                i += 1
+            value = (" " if value[0] == ">" else "\n").join(block).strip()
+        elif len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        meta[key.strip()] = value
+    return meta, "\n".join(lines[end + 1:])
+
+
+def read_skill(path: str) -> dict:
+    """A skill's name, description and text; raises ValueError with why it cannot be used."""
+    f = skill_file(path)
+    try:
+        raw = f.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise ValueError(f"{f}: not found" + (f" (a folder needs a {SKILL_FILE})" if f.name == SKILL_FILE else "")) from None
+    except UnicodeDecodeError:
+        raise ValueError(f"{f}: not UTF-8 text") from None
+    except OSError as e:
+        raise ValueError(f"{f}: {e.strerror or type(e).__name__}") from None
+    meta, body = _frontmatter(raw.replace("\r\n", "\n"))
+    body = body.strip()
+    if not body:
+        raise ValueError(f"{f}: no instructions after its frontmatter")
+    if len(body) > MAX_SKILL_CHARS:
+        raise ValueError(f"{f}: {len(body):,} characters, more than {MAX_SKILL_CHARS:,} (a local model's context is small)")
+    name = meta.get("name") or (f.parent.name if f.name == SKILL_FILE else f.stem)
+    return {"name": name, "description": meta.get("description", ""), "text": body, "file": str(f)}
+
+
+def skills_for(skills: list[Skill], check: str) -> list[Skill]:
+    return [s for s in skills if check in s.checks]
+
+
+def skills_text(skills: list[Skill]) -> str:
+    """The skills for a turn, as text after keepmum's note: each read now. One that cannot be read
+    is left out, with a warning in the log."""
+    parts = []
+    for skill in skills:
+        try:
+            s = read_skill(skill.path)
+        except ValueError as e:
+            log.warning("local skill left out: %s", e)
+            continue
+        parts.append(f"## Skill: {s['name']}\n" + (f"{s['description']}\n\n" if s["description"] else "") + s["text"])
+    if not parts:
+        return ""
+    return ("The user gave you these skills for turns keepmum keeps on this Mac. Follow them where they apply; "
+            "you still have no tools.\n\n" + "\n\n".join(parts))
+
+
 def servers_for(servers: list[Server], check: str) -> list[Server]:
     """The servers a check's flagged requests go to, in order: those for it with a model set."""
     return [s for s in servers if check in s.checks and s.model]
@@ -134,11 +250,12 @@ def note(route: LocalRoute) -> str:
             f"{route.check} check kept this turn on their Mac.")
 
 
-def prepare(body: dict, api: str, model: str, route: LocalRoute) -> dict:
-    """The request for a server that speaks the agent's API: its model, no tools, and the note first."""
+def prepare(body: dict, api: str, model: str, route: LocalRoute, skills: str = "") -> dict:
+    """The request for a server that speaks the agent's API: its model, no tools, and the note first,
+    then the user's skills (`skills_text`)."""
     data = copy.deepcopy(body)
     data["model"] = model
-    text = note(route)
+    text = note(route) + ("\n\n" + skills if skills else "")
     if api == "messages":
         for key in ("tools", "tool_choice", "mcp_servers", "container"):
             data.pop(key, None)
@@ -191,8 +308,8 @@ def _text(content) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def _chat_messages(body: dict, api: str, route: LocalRoute) -> list[dict]:
-    system = [note(route)]
+def _chat_messages(body: dict, api: str, route: LocalRoute, skills: str = "") -> list[dict]:
+    system = [note(route), skills]
     out: list[dict] = []
 
     def add(role: str, text: str) -> None:
@@ -233,9 +350,9 @@ def _chat_messages(body: dict, api: str, route: LocalRoute) -> list[dict]:
     return [{"role": "system", "content": "\n\n".join(s for s in system if s)}, *out]
 
 
-def to_chat(body: dict, api: str, model: str, route: LocalRoute) -> dict:
-    """The same turn as a Chat Completions request: no tools, the note first."""
-    data = {"model": model, "messages": _chat_messages(body, api, route), "stream": bool(body.get("stream"))}
+def to_chat(body: dict, api: str, model: str, route: LocalRoute, skills: str = "") -> dict:
+    """The same turn as a Chat Completions request: no tools, the note first, then the skills."""
+    data = {"model": model, "messages": _chat_messages(body, api, route, skills), "stream": bool(body.get("stream"))}
     limit = body.get("max_tokens") if api == "messages" else body.get("max_output_tokens")
     # Codex sets no limit; a server's own default can be small (mlx_lm.server: 512), and a model
     # that thinks first can spend all of it thinking.

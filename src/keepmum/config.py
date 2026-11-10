@@ -44,6 +44,8 @@
     # the first of these that answers; checks: only for those (default both); api: "auto", "native" or "chat"
     local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
                      { url = "http://localhost:1234", model = "qwen/qwen3-8b", checks = ["harm"] }]
+    # skills for those local turns, after keepmum's note: a SKILL.md, or a folder holding one (checks as above)
+    local_skills = [{ path = "~/.claude/skills/careful-answers" }, { path = "~/notes/harm.md", checks = ["harm"] }]
 
     [log]
     level = "info"
@@ -71,7 +73,7 @@ _SCHEMA = {
     "log": {"level": str, "previews": bool, "context": bool},
     "audit": {"keep_days": int},
     "guard": {"injection": str, "injection_threshold": float, "harm": str, "harm_model": str, "harm_sensitivity": str, "commands": str, "local_url": str, "local_model": str,
-              "local_servers": list},
+              "local_servers": list, "local_skills": list},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
 _HOST = re.compile(r"(?i)(?:[a-z0-9_-]+\.)*[a-z0-9-]+\.[a-z]{2,63}|localhost|\d{1,3}(?:\.\d{1,3}){3}")
@@ -130,6 +132,8 @@ class Config:
     guard_commands: str = "off"
     # local.Server entries, in the order tried. The older local_url and local_model are read as one.
     guard_local_servers: list = field(default_factory=list)
+    # local.Skill entries: the user's skills for local mode's turns.
+    guard_local_skills: list = field(default_factory=list)
     path: Path | None = None
 
 
@@ -263,7 +267,7 @@ def load(path: Path | None = None) -> Config:
         raise ConfigError(f"{path}: guard.harm_sensitivity must be \"high\", \"medium\", \"low\" or \"lowest\"")
     if cfg.guard_commands not in ("off", "warn", "block"):
         raise ConfigError(f"{path}: guard.commands must be \"off\", \"warn\" or \"block\"")
-    from .local import DEFAULT_URL, parse_servers
+    from .local import DEFAULT_URL, parse_servers, parse_skills
 
     # local_servers wins; before it there was one server, local_url and local_model (doctor says so).
     servers = guard.get("local_servers")
@@ -275,6 +279,10 @@ def load(path: Path | None = None) -> Config:
         cfg.guard_local_servers = parse_servers(servers or [], where)
     except ValueError as e:
         raise ConfigError(f"{path}: {str(e).replace('guard.local_url[1].url', 'guard.local_url').replace('guard.local_url[1].', 'guard.local_')}")
+    try:
+        cfg.guard_local_skills = parse_skills(guard.get("local_skills", []), "guard.local_skills")
+    except ValueError as e:
+        raise ConfigError(f"{path}: {e}")
     # A harm check turned on before "small" existed, without a model set, keeps the default it had.
     cfg.guard_harm_model = guard.get("harm_model", "0.6b" if cfg.guard_harm != "off" else cfg.guard_harm_model)
     if cfg.guard_harm_model not in ("small", "0.6b", "4b"):

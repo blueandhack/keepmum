@@ -264,6 +264,8 @@ def config_state(cfg) -> dict:
         "local_servers": [f"{x.model or '(no model)'} at {x.url}"
                           + ("" if tuple(x.checks) == ("injection", "harm") else f" for {', '.join(x.checks)}")
                           + ("" if x.api == "auto" else f" ({x.api})") for x in cfg.guard_local_servers],
+        "local_skills": [x.path + ("" if tuple(x.checks) == ("injection", "harm") else f" for {', '.join(x.checks)}")
+                         for x in cfg.guard_local_skills],
     }
 
 
@@ -277,7 +279,7 @@ _SETTINGS = {
     "upstream": ("server.upstream", "any"), "gateways": ("gateways", "added"), "destinations": ("destinations", "added"), "previews": ("log.previews", None), "context": ("log.context", None),
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
-_ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers",
+_ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers", "local_skills",
                 "injection_threshold", "harm_sensitivity"}
 # Local is below block: a flagged request is answered (on this Mac) rather than refused.
 _GUARD_RANK = {"off": 0, "warn": 1, "local": 2, "block": 3}
@@ -311,6 +313,12 @@ def config_changes(old: dict, new: dict) -> list[dict]:
         added, removed = [x for x in b or [] if x not in a], [x for x in a if x not in (b or [])]
         out.append({"setting": "guard.local_servers", "added": added, "removed": removed, "weakens": False}
                    if added or removed else {"setting": "guard.local_servers", "from": a, "to": b, "weakens": False})
+    a, b = old.get("local_skills"), new.get("local_skills")
+    if "local_skills" in old and a != b:
+        # What the local model is told on local turns, beside keepmum's note: the user's own text,
+        # and the request still never leaves this Mac, so no change weakens.
+        out.append({"setting": "guard.local_skills", "added": [x for x in b or [] if x not in a],
+                    "removed": [x for x in a if x not in (b or [])], "weakens": False})
     if "injection_threshold" in old and old["injection_threshold"] != new.get("injection_threshold"):
         # A higher threshold flags less: fewer false alarms, and fewer injections caught.
         out.append({"setting": "guard.injection_threshold", "from": old["injection_threshold"],

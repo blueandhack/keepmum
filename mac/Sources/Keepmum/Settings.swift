@@ -102,7 +102,10 @@ struct SettingsPage: View {
                     engine.isBundled ? AnyView(ShellDestinationsSection(engine: engine)) : nil)
         case .checks:
             return (AnyView(ChecksSection(engine: engine)),
-                    engine.status?.guard?.local != nil ? AnyView(LocalServersSection(engine: engine)) : nil)
+                    engine.status?.guard?.local != nil ? AnyView(VStack(alignment: .leading, spacing: Space.xl) {
+                        LocalServersSection(engine: engine)
+                        LocalSkillsSection(engine: engine)
+                    }) : nil)
         case .extensions:
             return (AnyView(ExtensionsSection(engine: engine)), nil)
         case .general:

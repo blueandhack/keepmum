@@ -12,7 +12,7 @@ from keepmum import guard
 from keepmum.config import ConfigError, load
 from keepmum.detect.pipeline import Pipeline
 from keepmum.detect.rules import RulesDetector
-from keepmum.local import ChatStream, LocalRoute, Server, note, prepare, servers_for, to_chat
+from keepmum.local import ChatStream, LocalRoute, Server, Skill, note, prepare, read_skill, servers_for, skills_for, to_chat
 from keepmum.proxy import Proxy
 from keepmum.redact import Redactor
 from keepmum.stats import flows
@@ -47,7 +47,8 @@ def answer(body: dict, model: str) -> httpx.Response:
                                      "content": [{"type": "text", "text": "keepmum kept this turn on your Mac."}]})
 
 
-def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", servers=None, local=None, harm=False):
+def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", servers=None, local=None, harm=False,
+        skills=None):
     """Requests through a proxy whose local servers are mocked: `local` maps a port to a handler
     taking (request, body), else every server on localhost answers like Ollama."""
     seen = {"upstream": [], "local": []}
@@ -70,7 +71,8 @@ def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", se
         checks = [guard.Guard(mode, Flags(), name="harm" if harm else "injection")]
         proxy = Proxy(Redactor(Pipeline(RulesDetector(), None), Vault(secrets.token_bytes(32))), upstream="http://up",
                       client=client, stats_token="t", guards=checks,
-                      local=lambda check: servers_for(servers, check), gemini_upstream="http://up")
+                      local=lambda check: servers_for(servers, check), gemini_upstream="http://up",
+                      local_skills=lambda check: skills_for(skills or [], check))
         agent = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
         rs = [await agent.post(path, json=b, headers={"x-api-key": "sk-ant-secret-key", "anthropic-version": "2023-06-01"})
               for b in bodies]
@@ -432,3 +434,111 @@ def test_without_context_no_check_text_is_kept():
 
     anyio.run(go)
     assert seen["hits"] and seen["texts"] == {}
+
+
+# --- Skills ------------------------------------------------------------------------------------
+
+SKILL = """---
+name: careful-answers
+description: >
+  How to answer when keepmum keeps a turn local.
+metadata:
+  owner: me
+---
+
+Say which file the flagged text came from, and suggest the user reads it before going on.
+"""
+
+
+def test_a_skill_follows_the_note_on_the_checks_it_is_for(tmp_path):
+    folder = tmp_path / "careful-answers"
+    folder.mkdir()
+    (folder / "SKILL.md").write_text(SKILL)
+    (tmp_path / "harm.md").write_text("Point the user to a safer way to do what they asked.")
+    skills = [Skill(str(folder), ("injection",)), Skill(str(tmp_path / "harm.md"), ("harm",))]
+    rs, seen, _ = run("local", [conversation(ATTACK)], skills=skills)
+    system = seen["local"][0][3]["system"]
+    assert rs[0].json()["id"] == "local" and system[0]["text"].startswith("keepmum, a privacy proxy")
+    text = system[0]["text"]
+    assert text.index("Start by saying") < text.index("## Skill: careful-answers") < text.index("Say which file")
+    assert "How to answer when keepmum keeps a turn local." in text and "owner" not in text and "safer way" not in text
+    assert system[1]["text"] == "You are Claude Code."  # the agent's instructions come after
+
+
+def test_skills_reach_a_chat_completions_server_too(tmp_path):
+    (tmp_path / "SKILL.md").write_text(SKILL)
+    out = to_chat(conversation(ATTACK), "messages", "m", LocalRoute("injection", [{"source": "WebFetch"}]),
+                  "## Skill: x\nSay which file")
+    assert out["messages"][0]["role"] == "system" and "## Skill: x" in out["messages"][0]["content"]
+    assert out["messages"][0]["content"].index("Start by saying") < out["messages"][0]["content"].index("## Skill: x") \
+        < out["messages"][0]["content"].index("You are Claude Code.")
+
+
+def test_a_skill_that_cannot_be_read_is_left_out_and_the_turn_still_answered(tmp_path, caplog):
+    big = tmp_path / "big.md"
+    big.write_text("x" * 20_001)
+    skills = [Skill(str(tmp_path / "gone.md")), Skill(str(big)), Skill(str(tmp_path))]  # no SKILL.md in the folder
+    rs, seen, _ = run("local", [conversation(ATTACK)], skills=skills)
+    assert rs[0].json()["id"] == "local" and "## Skill" not in json.dumps(seen["local"][0][3])
+    assert caplog.text.count("local skill left out") == 3
+    with pytest.raises(ValueError, match="more than 20,000"):
+        read_skill(str(big))
+    with pytest.raises(ValueError, match="a folder needs a SKILL.md"):
+        read_skill(str(tmp_path))
+    (tmp_path / "empty.md").write_text("---\nname: x\n---\n\n")
+    with pytest.raises(ValueError, match="no instructions"):
+        read_skill(str(tmp_path / "empty.md"))
+
+
+def test_a_skill_without_frontmatter_is_named_after_its_file(tmp_path):
+    (tmp_path / "plain.md").write_text("Answer briefly.\r\n")
+    assert read_skill(str(tmp_path / "plain.md"))["name"] == "plain" and read_skill(str(tmp_path / "plain.md"))["text"] == "Answer briefly."
+    (tmp_path / "q.md").write_text('---\nname: "quoted name"\ndescription: |\n  line one\n  line two\n---\nBody')
+    s = read_skill(str(tmp_path / "q.md"))
+    assert s["name"] == "quoted name" and s["description"] == "line one\nline two" and s["text"] == "Body"
+
+
+def test_config_checks_the_skills(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[guard]\nlocal_skills = [{ path = "~/s/SKILL.md" }, { path = "/x.md", checks = ["harm"] }]\n')
+    assert load(path).guard_local_skills == [Skill("~/s/SKILL.md"), Skill("/x.md", ("harm",))]
+    for bad in ('"x"', '[{ path = "" }]', '[{ path = "/x", checks = ["commands"] }]', '[{ path = "/x", url = "y" }]'):
+        path.write_text(f"[guard]\nlocal_skills = {bad}\n")
+        with pytest.raises(ConfigError):
+            load(path)
+
+
+def test_the_cli_adds_changes_and_removes_skills(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from keepmum.audit import config_changes, config_state
+    from keepmum.cli import app
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = tmp_path / ".config" / "keepmum" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text("")
+    folder = tmp_path / ".claude" / "skills" / "careful-answers"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(SKILL)
+    (tmp_path / "harm.md").write_text("Point the user to a safer way.")
+    cli = CliRunner()
+    before = config_state(load(path))
+    assert cli.invoke(app, ["guard", "local", "skill", "add", "~/.claude/skills/careful-answers"]).exit_code == 0
+    assert cli.invoke(app, ["guard", "local", "skill", "add", str(tmp_path / "harm.md"), "--check", "harm"]).exit_code == 0
+    assert load(path).guard_local_skills == [Skill(str(folder.resolve())), Skill(str((tmp_path / "harm.md").resolve()), ("harm",))]
+    assert cli.invoke(app, ["guard", "local", "skill", "add", str(folder), "--check", "injection"]).exit_code == 0  # again: its checks
+    assert len(load(path).guard_local_skills) == 2 and load(path).guard_local_skills[0].checks == ("injection",)
+    assert cli.invoke(app, ["guard", "local", "skill", "set", "2", "--check", "injection", "--check", "harm"]).exit_code == 0
+    (tmp_path / "harm.md").unlink()
+    data = json.loads(cli.invoke(app, ["guard", "local", "skill", "--json"]).stdout)["skills"]
+    assert data[0]["name"] == "careful-answers" and data[0]["problem"] is None and data[0]["checks"] == ["injection"]
+    assert data[1]["problem"].endswith("not found") and data[1]["checks"] == ["injection", "harm"]
+    assert "left out" in cli.invoke(app, ["guard", "local", "skill"]).stdout
+    changes = config_changes(before, config_state(load(path)))
+    assert [c["setting"] for c in changes] == ["guard.local_skills"] and len(changes[0]["added"]) == 2
+    assert cli.invoke(app, ["guard", "local", "skill", "remove", "1"]).exit_code == 0
+    assert cli.invoke(app, ["guard", "local", "skill", "remove", "1"]).exit_code == 0
+    assert "local_skills" not in path.read_text()
+    for bad in (["add", str(tmp_path / "nope.md")], ["remove", "1"], ["add", str(folder), "--check", "commands"]):
+        assert cli.invoke(app, ["guard", "local", "skill", *bad]).exit_code == 2, bad

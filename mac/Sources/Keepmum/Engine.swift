@@ -127,6 +127,9 @@ final class Engine {
         struct Local: Decodable, Equatable {
             struct Server: Decodable, Equatable { var url: String; var model: String; var checks: [String]; var api: String }
             var servers: [Server]
+            /// The user's skills for local turns (nil from older engines).
+            struct Skill: Decodable, Equatable { var path: String; var checks: [String] }
+            var skills: [Skill]? = nil
         }
         var local: Local?
     }
@@ -149,6 +152,21 @@ final class Engine {
         var presets: [Preset]
     }
     private(set) var localServers: LocalServers?
+
+    /// `keepmum guard local skill --json`: each skill for local turns, with its name and
+    /// description from its SKILL.md, and why it would be left out (nil: it can be read).
+    struct LocalSkills: Decodable, Equatable {
+        struct Skill: Decodable, Equatable {
+            var path: String
+            var checks: [String]
+            var name: String?
+            var description: String
+            var chars: Int?
+            var problem: String?
+        }
+        var skills: [Skill]
+    }
+    private(set) var localSkills: LocalSkills?
 
     /// `keepmum rules builtin --json`: one built-in rule, its type, and whether it is on.
     struct BuiltinRule: Decodable, Equatable, Identifiable {
@@ -514,6 +532,30 @@ final class Engine {
         await loadLocalServers()
     }
 
+    /// The skills for local turns, for Settings › Checks: each SKILL.md is read every time.
+    func loadLocalSkills() async {
+        guard let out = try? await run(["guard", "local", "skill", "--json"]), out.code == 0,
+              let m = try? JSONDecoder().decode(LocalSkills.self, from: Data(out.stdout.utf8)) else { return }
+        localSkills = m
+    }
+
+    /// Adds a skill (a SKILL.md, or a folder holding one) for both checks' local turns.
+    func addLocalSkill(_ url: URL) async {
+        await act { try await self.check(["guard", "local", "skill", "add", url.path]) }
+        await loadLocalSkills()
+    }
+
+    /// Changes which checks' local turns get skill `number`.
+    func setLocalSkill(_ number: Int, checks: [String]) async {
+        await act { try await self.check(["guard", "local", "skill", "set", String(number)] + checks.flatMap { ["--check", $0] }) }
+        await loadLocalSkills()
+    }
+
+    func removeLocalSkill(_ number: Int) async {
+        await act { try await self.check(["guard", "local", "skill", "remove", String(number)]) }
+        await loadLocalSkills()
+    }
+
     /// Turn a check off and delete its model.
     func removeCheck(_ check: String) async {
         await act { try await self.check(["guard", "remove", check]) }
@@ -838,7 +880,9 @@ final class Engine {
                                        local: .init(servers: [
                                            .init(url: "http://localhost:11434", model: "qwen3:8b", checks: ["injection", "harm"], api: "auto"),
                                            .init(url: "http://localhost:1234", model: "qwen/qwen3-14b", checks: ["harm"], api: "auto"),
-                                           .init(url: "http://localhost:8080", model: "", checks: ["injection", "harm"], api: "auto")])))
+                                           .init(url: "http://localhost:8080", model: "", checks: ["injection", "harm"], api: "auto")],
+                                                    skills: [.init(path: NSHomeDirectory() + "/.claude/skills/careful-answers", checks: ["injection", "harm"]),
+                                                             .init(path: NSHomeDirectory() + "/notes/harm.md", checks: ["harm"])])))
         e.localServers = .init(servers: [
             .init(url: "http://localhost:11434", model: "qwen3:8b", checks: ["injection", "harm"], api: "auto", kind: "Ollama",
                   models: ["gemma3:12b", "qwen3:8b"], problem: nil),
@@ -850,6 +894,10 @@ final class Engine {
                       .init(id: "lmstudio", name: "LM Studio", url: "http://localhost:1234"),
                       .init(id: "llamacpp", name: "llama.cpp", url: "http://localhost:8080"),
                       .init(id: "mlx", name: "MLX", url: "http://localhost:8080")])
+        e.localSkills = .init(skills: [
+            .init(path: NSHomeDirectory() + "/.claude/skills/careful-answers", checks: ["injection", "harm"], name: "careful-answers",
+                  description: "How to answer when keepmum keeps a turn local.", chars: 412, problem: nil),
+            .init(path: NSHomeDirectory() + "/notes/harm.md", checks: ["harm"], name: "harm", description: "", chars: 180, problem: nil)])
         e.status?.extensions = .init(watching: true, new: sampleExtensions.filter { $0.new == true }, count: sampleExtensions.count)
         e.extensionList = .init(items: sampleExtensions, watching: true, gone: [], problems: [])
         e.serviceStatus = .enabled

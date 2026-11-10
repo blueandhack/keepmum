@@ -56,7 +56,7 @@ from .gateway import ROUTE, api_of_route
 from .gemini import GeminiStreamRestorer, restore_gemini
 from .local import CHAT_PATH as LOCAL_CHAT_PATH
 from .local import PATHS as LOCAL_PATHS
-from .local import ChatStream, from_chat, to_chat
+from .local import ChatStream, from_chat, skills_text, to_chat
 from .local import LocalRoute
 from .local import prepare as prepare_local
 from .redact import Redactor
@@ -194,7 +194,8 @@ class Proxy:
                  info: dict | None = None, observe=None, openai_upstream: str = OPENAI_UPSTREAM,
                  chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
                  gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM,
-                 tools=None, guards=None, commands=None, local=None, antigravity_upstream: str = ANTIGRAVITY_UPSTREAM):
+                 tools=None, guards=None, commands=None, local=None, antigravity_upstream: str = ANTIGRAVITY_UPSTREAM,
+                 local_skills=None):
         self.redactor = redactor
         # The checks on a request's texts (guard.Guard): "injection" on tool results, "harm" on what
         # the user typed. Warn-mode checks run after the request is sent, in `_background`.
@@ -204,6 +205,8 @@ class Proxy:
         # Where local mode sends a flagged request: a callable giving a check's local.Server list, in
         # the order tried, or None (local.py).
         self.local = local
+        # The user's skills for a check's local turns: a callable giving its local.Skill list, or None.
+        self.local_skills = local_skills
         # (server URL, API) pairs a server answered 404/405/501 for and then answered as Chat
         # Completions: asked that way from then on, until keepmum restarts.
         self._chat_only: set[tuple[str, str]] = set()
@@ -589,15 +592,17 @@ class Proxy:
                              "`keepmum guard local add --model <name>`.")
         stream = wants_stream(t, body, request.url.query)
         local_origin = (origin[0] if origin else None, "local")
+        skills = self.local_skills(route.check) if callable(self.local_skills) else []
+        skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
         failures: list[str] = []
         for server in servers:
             ways = (["chat"] if server.api == "chat" or (server.api == "auto" and (server.url, t.api) in self._chat_only)
                     else ["native", "chat"] if server.api == "auto" else ["native"])
             for way in ways:
                 if way == "native":
-                    data, target = prepare_local(body, t.api, server.model, route), server.url + LOCAL_PATHS[t.api]
+                    data, target = prepare_local(body, t.api, server.model, route, skills), server.url + LOCAL_PATHS[t.api]
                 else:
-                    data, target = to_chat(body, t.api, server.model, route), server.url + LOCAL_CHAT_PATH
+                    data, target = to_chat(body, t.api, server.model, route, skills), server.url + LOCAL_CHAT_PATH
                 headers = {"content-type": "application/json"}
                 if t.api == "messages" and way == "native":
                     headers["anthropic-version"] = request.headers.get("anthropic-version", "2023-06-01")

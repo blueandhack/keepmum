@@ -548,7 +548,8 @@ def _guard_status() -> dict:
                       "levels": {k: v._asdict() for k, v in guard.LEVELS.items()}},
         "commands": {"mode": cfg.guard_commands, "rules": [label for _, label, _ in RULES + SENDS]},
         "local": {"servers": [{"url": x.url, "model": x.model, "checks": list(x.checks), "api": x.api}
-                              for x in cfg.guard_local_servers]},
+                              for x in cfg.guard_local_servers],
+                  "skills": [{"path": x.path, "checks": list(x.checks)} for x in cfg.guard_local_skills]},
         "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
                  "installed": {size: harm.installed(size) for size in harm.SIZES},
                  "server": server, "licence": harm.LICENCE,
@@ -875,6 +876,116 @@ def guard_local_remove(number: int = typer.Argument(..., help="The server's numb
         if getattr(cfg, f"guard_{check}") == "local" and _local_missing(cfg, check):
             typer.echo(f"note: the {check} check is in local mode with no server that can answer: what it flags is refused",
                        err=True)
+
+
+skill_app = typer.Typer(help="Skills for local mode: your own instructions for the local model, in Claude Code's SKILL.md "
+                        "format, given after keepmum's note on each turn a check sends it.", invoke_without_command=True)
+local_app.add_typer(skill_app, name="skill")
+
+
+def _save_skills(cfg, skills: list, command: str) -> None:
+    from .config import ConfigError
+
+    try:
+        _update_config(cfg.path, "guard", "local_skills", [x.as_toml() for x in skills] or None, command)
+    except (ConfigError, OSError) as e:
+        typer.echo(f"keepmum guard local skill: {e}", err=True)
+        raise typer.Exit(1)
+    typer.echo("Running proxies use it on their next local turn.", err=True)
+
+
+def _skill_at(cfg, number: int):
+    if not 1 <= number <= len(cfg.guard_local_skills):
+        n = len(cfg.guard_local_skills)
+        typer.echo(f"keepmum guard local skill: no skill {number}" + (f" (1 to {n})" if n else ": none is set"), err=True)
+        raise typer.Exit(2)
+    return cfg.guard_local_skills[number - 1]
+
+
+def _skill_checks(checks: tuple[str, ...]) -> str:
+    return "both checks" if len(checks) == 2 else f"the {checks[0]} check only"
+
+
+@skill_app.callback()
+def guard_local_skill(ctx: typer.Context, as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """Show the skills, with the checks each is for and whether it can be read."""
+    import json
+
+    from .local import read_skill
+
+    if ctx.invoked_subcommand:
+        return
+    rows = []
+    for skill in _config().guard_local_skills:
+        row = {"path": skill.path, "checks": list(skill.checks), "name": None, "description": "", "chars": None, "problem": None}
+        try:
+            s = read_skill(skill.path)
+            row |= {"name": s["name"], "description": s["description"], "chars": len(s["text"])}
+        except ValueError as e:
+            row["problem"] = str(e)
+        rows.append(row)
+    if as_json:
+        typer.echo(json.dumps({"skills": rows}))
+        return
+    if not rows:
+        typer.echo("no skills: `keepmum guard local skill add ~/.claude/skills/<name>` (a SKILL.md, or a folder holding one)")
+        return
+    for i, row in enumerate(rows, 1):
+        typer.echo(f"{i}. {row['name'] or row['path']}, for {_skill_checks(tuple(row['checks']))}")
+        typer.echo(f"   {row['path']}" + (f" ({row['chars']:,} characters)" if row["chars"] is not None else ""))
+        if row["problem"]:
+            typer.echo(f"   left out: {row['problem']}")
+
+
+@skill_app.command("add")
+def guard_local_skill_add(path: str = typer.Argument(..., help="A SKILL.md, or a folder holding one (~/.claude/skills/<name>)."),
+                          check: list[str] = typer.Option(None, "--check", help="Only for this check: injection or harm (repeat for both; default both).")) -> None:
+    """Add a skill for local turns, or change the checks of one already added."""
+    import dataclasses
+    from pathlib import Path
+
+    from .local import CHECKS, Skill, read_skill
+
+    full = str(Path(path).expanduser().resolve())
+    try:
+        s = read_skill(full)
+    except ValueError as e:
+        typer.echo(f"keepmum guard local skill add: {e}", err=True)
+        raise typer.Exit(2)
+    cfg = _config()
+    skills = list(cfg.guard_local_skills)
+    checks = _checks_option(check) or CHECKS
+    at = next((i for i, x in enumerate(skills) if str(Path(x.path).expanduser().resolve()) == full), None)
+    if at is None:
+        skills.append(Skill(full, checks))
+        at = len(skills) - 1
+    else:
+        skills[at] = dataclasses.replace(skills[at], checks=checks)
+    _save_skills(cfg, skills, f"keepmum guard local skill add {full}")
+    typer.echo(f"skill {at + 1}: {s['name']} ({len(s['text']):,} characters), for {_skill_checks(checks)}", err=True)
+
+
+@skill_app.command("set")
+def guard_local_skill_set(number: int = typer.Argument(..., help="The skill's number in `keepmum guard local skill`."),
+                          check: list[str] = typer.Option(..., "--check", help="For this check: injection or harm (repeat for both).")) -> None:
+    """Change which checks' local turns get a skill."""
+    import dataclasses
+
+    cfg = _config()
+    skill = _skill_at(cfg, number)
+    skills = list(cfg.guard_local_skills)
+    skills[number - 1] = dataclasses.replace(skill, checks=_checks_option(check))
+    _save_skills(cfg, skills, f"keepmum guard local skill set {number}")
+
+
+@skill_app.command("remove")
+def guard_local_skill_remove(number: int = typer.Argument(..., help="The skill's number.")) -> None:
+    """Remove a skill (its file stays where it is)."""
+    cfg = _config()
+    _skill_at(cfg, number)
+    skills = list(cfg.guard_local_skills)
+    skills.pop(number - 1)
+    _save_skills(cfg, skills, f"keepmum guard local skill remove {number}")
 
 
 @guard_app.command("sensitivity")

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Settings › Checks: the optional checks (`keepmum guard`). Injection looks at what tools return for
@@ -408,6 +409,119 @@ struct LocalServersSection: View {
         HStack(spacing: Space.xxs) {
             Text(text).font(.km(.callout)).foregroundStyle(Theme.text)
             Image(systemName: "chevron.down").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+        }
+    }
+}
+
+/// Settings › Checks, under the local servers: the user's skills for local turns (`keepmum guard
+/// local skill`). Each is a SKILL.md, or a folder holding one, read on every local turn and given to
+/// the local model after keepmum's note, for both checks or one.
+struct LocalSkillsSection: View {
+    var engine: Engine
+    @Environment(\.isSnapshot) private var isSnapshot
+
+    private var rows: [Engine.LocalSkills.Skill] {
+        engine.localSkills?.skills ?? (engine.status?.guard?.local?.skills ?? []).map {
+            .init(path: $0.path, checks: $0.checks, name: nil, description: "", chars: nil, problem: nil)
+        }
+    }
+
+    var body: some View {
+        FormSection(title: "Skills for local turns",
+                    footer: "Your own instructions for the local model, in Claude Code's SKILL.md format: a SKILL.md, or a skill's folder, such as one in ~/.claude/skills. Each local turn of the checks a skill is for gets its text after keepmum's note, which says why the turn stayed on this Mac and that the model has no tools. Edits apply on the next turn; one that cannot be read, or is over 20,000 characters, is left out.") {
+            if rows.isEmpty {
+                FormRow(title: "No skills", detail: "Local models get keepmum's note and the agent's own instructions") { addButton }
+            } else {
+                ForEach(Array(rows.enumerated()), id: \.offset) { i, skill in
+                    row(i + 1, skill)
+                    Hairline()
+                }
+                HStack { Spacer(); addButton }.padding(.vertical, Space.s)
+            }
+        }
+        .task(id: engine.status?.guard?.local) { await engine.loadLocalSkills() }
+    }
+
+    @ViewBuilder private func row(_ n: Int, _ skill: Engine.LocalSkills.Skill) -> some View {
+        HStack(alignment: .center, spacing: Space.m) {
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                Text(skill.name ?? (skill.path as NSString).lastPathComponent).font(.km(.body)).foregroundStyle(Theme.text)
+                    .lineLimit(1).truncationMode(.middle)
+                Text(detail(skill)).font(.km(.caption))
+                    .foregroundStyle(skill.problem == nil ? Theme.textSecondary : Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .help(skill.path)
+            Spacer(minLength: Space.m)
+            checksMenu(n, skill)
+            moreMenu(n, skill)
+        }
+        .padding(.vertical, Space.s)
+    }
+
+    private func detail(_ skill: Engine.LocalSkills.Skill) -> String {
+        if let problem = skill.problem { return "Left out: " + problem }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = skill.path.hasPrefix(home) ? "~" + skill.path.dropFirst(home.count) : skill.path
+        return skill.description.isEmpty ? path : "\(skill.description) · \(path)"
+    }
+
+    @ViewBuilder private func checksMenu(_ n: Int, _ skill: Engine.LocalSkills.Skill) -> some View {
+        let label = skill.checks.count == 2 ? "Both" : skill.checks.first == "harm" ? "Harm" : "Injection"
+        if isSnapshot {
+            HStack(spacing: Space.xxs) {
+                Text(label).font(.km(.callout)).foregroundStyle(Theme.text)
+                Image(systemName: "chevron.down").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+            }
+        } else {
+            Menu(label) {
+                Button("Both checks") { Task { await engine.setLocalSkill(n, checks: ["injection", "harm"]) } }
+                Button("Injection only") { Task { await engine.setLocalSkill(n, checks: ["injection"]) } }
+                Button("Harm only") { Task { await engine.setLocalSkill(n, checks: ["harm"]) } }
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+            .disabled(!engine.isBundled || engine.busy)
+            .help("Which checks' local turns get this skill")
+        }
+    }
+
+    @ViewBuilder private func moreMenu(_ n: Int, _ skill: Engine.LocalSkills.Skill) -> some View {
+        if isSnapshot {
+            Image(systemName: "ellipsis.circle").foregroundStyle(Theme.textSecondary)
+        } else {
+            Menu {
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: skill.path)]) }
+                Divider()
+                Button("Remove", role: .destructive) { Task { await engine.removeLocalSkill(n) } }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .disabled(!engine.isBundled || engine.busy)
+            .accessibilityLabel("More for skill \(n)")
+        }
+    }
+
+    @ViewBuilder private var addButton: some View {
+        if isSnapshot {
+            PillButton(title: "Add skill…", icon: "plus") {}
+        } else {
+            PillButton(title: "Add skill…", icon: "plus") { pick() }
+                .disabled(!engine.isBundled || engine.busy)
+        }
+    }
+
+    private func pick() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Add"
+        panel.message = "A SKILL.md, or a skill's folder. Its text goes to the local model after keepmum's note, on both checks' local turns."
+        let skills = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/skills")
+        if FileManager.default.fileExists(atPath: skills.path) { panel.directoryURL = skills }
+        if panel.runModal() == .OK, let url = panel.url {
+            Task { await engine.addLocalSkill(url) }
         }
     }
 }
