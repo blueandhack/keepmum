@@ -7,6 +7,49 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a7</title>
+      <pubDate>Tue, 10 Nov 2026 10:35:48 GMT</pubDate>
+      <sparkle:version>10007</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a7</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a7</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The seventh alpha of keepmum makes local mode work for every agent, the Antigravity CLI included, and lets a conversation go back to the cloud after a planted instruction. The injection check now raises far fewer false alarms.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a7.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2 through 0.1.0a6:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a7.dmg.sha256`
+
+## New
+
+- **Back to the cloud after an injection.** When the injection check keeps a turn on your Mac, the rest of the conversation used to stay on the local model. Settings › Checks › After a local turn now hands it back instead. The cloud model gets the flagged result replaced: by the local model's answer, summary or rewrite (with your own instructions, if you write them), or by a notice. It never gets the result itself, and the check scans what the local model wrote before it goes. `keepmum guard local handback`.
+- **Skills for local turns.** Give the local model your own instructions, in Claude Code's SKILL.md format, for both checks or one. Settings › Checks › Skills for local turns, or `keepmum guard local skill add`.
+- **Local mode for the Antigravity CLI and Gemini CLI.** Their flagged turns used to be refused. They now go to your local server as Chat Completions, and the answer comes back in Gemini's format.
+- **The Antigravity CLI in Setup and Extensions.** Google moved personal Google sign-ins from Gemini CLI to the Antigravity CLI on June 18, 2026. Setup has a row for `keepmum agy`, and keepmum now watches agy's MCP servers, hooks, plugins, rules and skills for what other apps add, as it does for the other agents. What agy already had counts as yours.
+
+## Changes
+
+- **Fewer false alarms from the injection check.** It now defaults to Medium, and a tool result under 200 characters needs a much higher score to be flagged. On real Claude Code and Codex sessions it flags 1.7% of tool results, down from 7.8%. It still catches 97% of injections on keepmum's test set, and 85% of AgentDojo's attacks, down from 89%. A sensitivity you set yourself stays as it was; High gives the old catch rate back.
+- **Update checks say a little more.** To count each Mac once a day per macOS version, the day's first update check also says your Mac's macOS major version and chip (macOS 15, Apple silicon). Nothing else: no identifier, no usage data. With **Count this Mac** off (Settings › General › Updates), checks send none of it. [keepmum.app/privacy](https://keepmum.app/privacy) has the details.
+
+## Fixes
+
+- **Codex in local mode.** Codex now sends its tool list inside its request, and Ollama refused the whole request because of it. keepmum leaves the list out, as local mode promises no tools, and falls back to Chat Completions for a server that refuses the request's shape.
+- **The checks' models kept running after keepmum quit.** With the injection or harm check on, each `keepmum claude` session (or any keepmum that exited before its model went idle) could leave the model running in the background, holding 0.4 to 1 GB of memory. They now stop within two seconds of keepmum, however it ends.
+- **Hand-back with a summary or rewrite.** keepmum's own wording around the summary read like an injection to the check, so it never went back to the cloud. Only what the local model wrote is checked now.
+
+This release was checked against real models: Codex, Claude Code, pi and opencode on their smallest models, and the Antigravity CLI on a Google sign-in. Every case passed but one, whose failures were the test's own: Claude Code had not been allowed to search, and a search for a placeholder found keepmum's own pages. Both were fixed, and that case and the local-mode cases were run again live after the model fix above, and passed.</description>
+      <enclosure url="https://keepmum.app/update/v0.1.0a7/Keepmum-0.1.0a7.dmg" length="37826388" type="application/octet-stream" sparkle:edSignature="OuX5g5ksHEnCNM7/PdE2BgesJa+w/5RxqTNO8kTjEHX94BJo7k9AnSMf7viHPQIY8SUeZwAwClxUNYa0rXNbAw=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a6</title>
       <pubDate>Mon, 09 Nov 2026 09:14:26 GMT</pubDate>
       <sparkle:version>10006</sparkle:version>
@@ -223,6 +266,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 3JICZgTyWrcZD6pJbk+4lKqEUQqtfyQJqZfHHilVqwM4h89KQGozKSumJzTgWztYwnNzgUJq5uJyd7QdMIyVCA==
-length: 20234
+edSignature: 8gdHwtnI0U6XaFd964tR2W72xINILmrTxtqC57IMfdrExUbbg50V6ysEjy5SrmbSnFG+JZlLkXnZVIUqXt16Dg==
+length: 25334
 -->
