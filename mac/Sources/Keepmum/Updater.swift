@@ -9,8 +9,12 @@ import Sparkle
 /// check automatically (once a day); Settings › General › Updates changes it, and "Check now" always works.
 /// Sparkle's own permission prompt is off, and it sends no system profile. A check is one request
 /// for the feed: Cloudflare, which serves keepmum.app, sees the IP address and keepmum's version,
-/// and keepmum.app counts checks per day and version (worker/), keeping no addresses. An update's DMG
+/// and keepmum.app counts checks per hour and version (worker/), keeping no addresses. An update's DMG
 /// comes through keepmum.app/update/ too, counted the same way, from GitHub Releases.
+///
+/// So that keepmum.app can count each Mac once a day, week and month without an identifier, a check
+/// says which of those it is this Mac's first in (`first=day,week,month` on the feed URL, UTC
+/// periods, weeks from Monday), and `new` on the first check this Mac ever makes. Nothing else.
 ///
 /// keepmum runs in the menu bar, so a scheduled check that finds an update does not interrupt: the
 /// menu shows it (`available`, Sparkle's gentle reminders), and Install opens Sparkle's window.
@@ -33,7 +37,13 @@ final class Updates: NSObject {
 
     static let promptedKey = "updatesPrompted"
     static let countedKey = "updatesCounted"
-    /// This Mac's update checks and update downloads are in keepmum.app's daily totals (Settings ›
+    /// The UTC day, week and month of the last check keepmum.app counted, and whether this Mac's
+    /// first check is still to be counted (`new`).
+    static let lastCountedKeys = (day: "countedDay", week: "countedWeek", month: "countedMonth")
+    static let newKey = "countNew"
+    /// What the check under way said it was first in, saved once its feed has loaded.
+    @ObservationIgnored private var pendingFirsts: (periods: Periods, new: Bool)?
+    /// This Mac's update checks and update downloads are in keepmum.app's totals (Settings ›
     /// General › Updates › Count this Mac). Off: every request says Keepmum-Count: off, and
     /// keepmum.app counts none of them (worker/). Updates work the same either way.
     private(set) var counted = UserDefaults.standard.object(forKey: countedKey) as? Bool ?? true
@@ -69,6 +79,11 @@ final class Updates: NSObject {
             },
         ]
         applyCounting()
+        let defaults = UserDefaults.standard
+        if updater.lastUpdateCheckDate == nil, defaults.object(forKey: Self.lastCountedKeys.day) == nil,
+           defaults.object(forKey: Self.newKey) == nil {
+            defaults.set(true, forKey: Self.newKey) // never checked: the first check counts as a new Mac
+        }
         if !UserDefaults.standard.bool(forKey: Self.promptedKey) {
             updater.automaticallyChecksForUpdates = askToCheckAutomatically()
             UserDefaults.standard.set(true, forKey: Self.promptedKey)
@@ -109,8 +124,10 @@ final class Updates: NSObject {
         alert.informativeText = """
             keepmum can look for a new version once a day and tell you when one is ready to install. \
             Each check downloads keepmum's update list from keepmum.app, which sees your IP address and \
-            keepmum's version and counts checks and updates per day, keeping no addresses (Count this Mac, \
-            in Settings, turns that off). Nothing else is sent: no usage data, no system details.
+            keepmum's version and counts checks and updates per hour, keeping no addresses (Count this Mac, \
+            in Settings, turns that off). To count each Mac once, a check also says whether it is this \
+            Mac's first of the day, week or month. Nothing else is sent: no identifier, no usage data, no \
+            system details.
 
             You can change this, or check now, in Settings › General › Updates.
             """
@@ -120,9 +137,57 @@ final class Updates: NSObject {
     }
 }
 
+extension Updates {
+    struct Periods: Equatable {
+        var day: String, week: String, month: String
+    }
+
+    /// The UTC day (2026-11-10), ISO week (2026-W46, from Monday) and month (2026-11) of a moment.
+    static func periods(_ date: Date) -> Periods {
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let c = calendar.dateComponents([.year, .month, .day, .yearForWeekOfYear, .weekOfYear], from: date)
+        return Periods(
+            day: String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!),
+            week: String(format: "%04d-W%02d", c.yearForWeekOfYear!, c.weekOfYear!),
+            month: String(format: "%04d-%02d", c.year!, c.month!))
+    }
+
+    /// Which of this UTC day, week and month a check now would be this Mac's first counted check in,
+    /// and `new` for its first ever.
+    static func firsts(_ periods: Periods, defaults: UserDefaults = .standard) -> [String] {
+        var out: [String] = []
+        if defaults.string(forKey: lastCountedKeys.day) != periods.day { out.append("day") }
+        if defaults.string(forKey: lastCountedKeys.week) != periods.week { out.append("week") }
+        if defaults.string(forKey: lastCountedKeys.month) != periods.month { out.append("month") }
+        if defaults.bool(forKey: newKey) { out.append("new") }
+        return out
+    }
+}
+
 extension Updates: SPUUpdaterDelegate {
     /// keepmum asks on the first launch (above), with its own words about what a check sends.
     func updaterShouldPromptForPermissionToCheck(forUpdates updater: SPUUpdater) -> Bool { false }
+
+    /// `first=day,week,month,new` on the feed URL, for a counted Mac (see the type's comment).
+    func feedParameters(for updater: SPUUpdater, sendingSystemProfile: Bool) -> [[String: String]] {
+        guard counted else { pendingFirsts = nil; return [] }
+        let periods = Self.periods(Date())
+        let firsts = Self.firsts(periods)
+        pendingFirsts = (periods, firsts.contains("new"))
+        return firsts.isEmpty ? [] : [["key": "first", "value": firsts.joined(separator: ",")]]
+    }
+
+    /// The feed came back, so keepmum.app counted the check: remember its periods.
+    func updater(_ updater: SPUUpdater, didFinishLoading appcast: SUAppcast) {
+        guard let pending = pendingFirsts else { return }
+        pendingFirsts = nil
+        let defaults = UserDefaults.standard
+        defaults.set(pending.periods.day, forKey: Self.lastCountedKeys.day)
+        defaults.set(pending.periods.week, forKey: Self.lastCountedKeys.week)
+        defaults.set(pending.periods.month, forKey: Self.lastCountedKeys.month)
+        if pending.new { defaults.removeObject(forKey: Self.newKey) }
+    }
 }
 
 extension Updates: @preconcurrency SPUStandardUserDriverDelegate {

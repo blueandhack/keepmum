@@ -49,10 +49,10 @@
     <ul>
       <li><strong>Website visits.</strong> Cloudflare Web Analytics counts page views on keepmum.app. It sets no cookies and does not fingerprint your browser.</li>
       <li><strong>Downloads.</strong> Each click on a Download button is counted.</li>
-      <li><strong>Update checks.</strong> With automatic checks on, the Mac app asks keepmum.app once a day whether there is a new version. Each check is counted, with the app’s version.</li>
+      <li><strong>Update checks.</strong> With automatic checks on, the Mac app asks keepmum.app once a day whether there is a new version. Each check is counted, with the app’s version and whether it is your Mac’s first check of the day, week or month, or its first ever. Your Mac keeps track of that itself and sends only those words, never an identifier, so keepmum can count each Mac once without telling one from another.</li>
       <li><strong>Updates.</strong> Each update the app downloads is counted, with the version it updates to.</li>
     </ul>
-    <p>For each of these keepmum stores an hour, a kind, a version and a number, such as “November 7, 2 PM UTC, update check, 0.1.0a5, 3”. Nothing else about a request is kept: not your IP address, your browser or your Mac. The counts are kept as long as the project runs. keepmum also reads GitHub’s public download count of each release.</p>
+    <p>For each of these keepmum stores an hour, a kind, a version and a number, such as “November 7, 2 PM UTC, update check, 0.1.0a5, 3”. Nothing else about a request is kept: not your IP address, your browser or your Mac. Requests from bots and link previews are not counted; the browser’s user agent is read to tell, and not kept. The counts are kept as long as the project runs. keepmum also reads GitHub’s public download count of each release.</p>
 
     <h2>Opting out</h2>
     <ul>
