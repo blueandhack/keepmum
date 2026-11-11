@@ -269,21 +269,39 @@ def prepare(body: dict, api: str, model: str, route: LocalRoute, skills: str = "
     if api == "messages":
         for key in ("tools", "tool_choice", "mcp_servers", "container"):
             data.pop(key, None)
+        # System messages inside the conversation (Claude Code sends one) go to the top-level system:
+        # the server would pass them on as later system messages, which most chat templates refuse.
+        moved = _pull_system(data, "messages")
         system = data.get("system")
         if isinstance(system, list):
-            data["system"] = [{"type": "text", "text": text}, *system]
-        elif isinstance(system, str) and system:
-            data["system"] = text + "\n\n" + system
+            data["system"] = [{"type": "text", "text": text}, *system, *({"type": "text", "text": t} for t in moved)]
         else:
-            data["system"] = text
+            data["system"] = "\n\n".join(s for s in (text, system if isinstance(system, str) else "", *moved) if s)
     elif api == "responses":
         for key in ("tools", "tool_choice", "parallel_tool_calls", "previous_response_id"):
             data.pop(key, None)
         if isinstance(data.get("input"), list):
             data["input"] = [i for i in data["input"] if not (isinstance(i, dict) and i.get("type") in TOOL_ITEMS)]
+        moved = _pull_system(data, "input")  # Codex's developer messages, likewise
         instructions = data.get("instructions")
-        data["instructions"] = text + ("\n\n" + instructions if isinstance(instructions, str) and instructions else "")
+        data["instructions"] = "\n\n".join(
+            s for s in (text, instructions if isinstance(instructions, str) else "", *moved) if s)
     return data
+
+
+def _pull_system(data: dict, key: str) -> list[str]:
+    """Take the system and developer messages out of data[key]; their texts, in order."""
+    items = data.get(key)
+    if not isinstance(items, list):
+        return []
+    keep, moved = [], []
+    for i in items:
+        if isinstance(i, dict) and i.get("type", "message") == "message" and i.get("role") in ("system", "developer"):
+            moved.append(_text(i.get("content")))
+        else:
+            keep.append(i)
+    data[key] = keep
+    return [t for t in moved if t]
 
 
 # --- Chat Completions, for a server that speaks neither the Messages nor the Responses API ---------

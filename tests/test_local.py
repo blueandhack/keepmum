@@ -152,6 +152,30 @@ def test_prepare_for_codex_drops_tools_and_keeps_its_instructions_after_the_note
     assert body["tools"]  # the agent's body is not changed
 
 
+def test_prepare_moves_system_messages_from_the_conversation_to_the_start():
+    # Claude Code puts a system message after the first user turn, and Codex sends developer messages;
+    # a server passes them on as later system messages, which Qwen 3.5's chat template refuses (HTTP 500).
+    route = LocalRoute("injection", [{"source": "Read"}])
+    claude = {"system": [{"type": "text", "text": "You are Claude Code."}],
+              "messages": [{"role": "user", "content": "hi"}, {"role": "system", "content": "Sandbox notice."},
+                           {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "x"}]}]}
+    out = prepare(claude, "messages", "m", route)
+    assert [m["role"] for m in out["messages"]] == ["user", "user"]
+    assert [b["text"] for b in out["system"]] == [note(route), "You are Claude Code.", "Sandbox notice."]
+    assert len(claude["messages"]) == 3  # the agent's body is not changed
+    out = prepare({"messages": [{"role": "system", "content": "Only this."}, {"role": "user", "content": "hi"}]},
+                  "messages", "m", route)
+    assert out["system"] == note(route) + "\n\nOnly this." and len(out["messages"]) == 1
+
+    codex = {"instructions": "You are Codex.",
+             "input": [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Skills."}]},
+                       {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+                       {"type": "custom_tool_call", "name": "exec", "input": "cat README.md"}]}
+    out = prepare(codex, "responses", "m", route)
+    assert [i.get("role") or i["type"] for i in out["input"]] == ["user", "custom_tool_call"]
+    assert out["instructions"] == note(route) + "\n\nYou are Codex.\n\nSkills."
+
+
 def test_config_keeps_the_local_server_on_this_mac(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text('[guard]\ninjection = "local"\nharm = "local"\nlocal_model = "qwen3:8b"\n')
