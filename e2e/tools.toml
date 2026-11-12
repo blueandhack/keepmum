@@ -70,6 +70,7 @@
 "invoke_subagent" = "starts a sub-agent on this Mac, whose own requests go through keepmum: restored"
 "define_subagent" = "defines a sub-agent type (name, prompt) on this Mac: restored"
 "manage_subagents" = "lists or stops sub-agents: no values"
+"swarm" = "manages agy's worker agents on this Mac (add, with a brief posted to the swarm's board; status, models, model, kill, title), each in this repository or its own copy of it; a worker's own requests go through keepmum, as invoke_subagent's do: restored (offered from Nov 12, 2026, without a new agy release)"
 "ask_question" = "asks the user multiple-choice questions: restored"
 "call_mcp_tool" = "calls an MCP server's tool (ServerName, ToolName, Arguments): decided as mcp__<server>__<tool> (tools.call_name), its result credited to that server"
 "list_resources" = "lists an MCP server's resources (ServerName): decided as that server's tool"
