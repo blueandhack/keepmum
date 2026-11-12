@@ -80,11 +80,22 @@ extension Card where Accessory == EmptyView {
     }
 }
 
-/// A settings group, as in System Settings: a title above, rows on a surface, a note below.
+/// A settings group, as in System Settings: a title above, rows on a surface, a note below. The
+/// note is a sentence or two; `details`, the full explanation, opens under it on request, so a
+/// page stays short enough to scan.
 struct FormSection<Content: View>: View {
     var title: String
-    var footer: String? = nil
-    @ViewBuilder var content: Content
+    var footer: String?
+    var details: String?
+    var content: Content
+    @State private var showingDetails = false
+
+    init(title: String, footer: String? = nil, details: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.footer = footer
+        self.details = details
+        self.content = content()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
@@ -92,9 +103,26 @@ struct FormSection<Content: View>: View {
             VStack(spacing: 0) { content }
                 .padding(.horizontal, Space.m)
                 .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.surface))
-            if let footer {
-                Text(footer).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, Space.xs)
+            if footer != nil || details != nil {
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    if let footer {
+                        Text(footer).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let details {
+                        if showingDetails {
+                            Text(details).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                        }
+                        Button(showingDetails ? "Show less" : "More about this") {
+                            withAnimation(Motion.quick) { showingDetails.toggle() }
+                        }
+                        .buttonStyle(.plain).font(.km(.caption)).foregroundStyle(Theme.accent)
+                        .accessibilityHint("Shows or hides the full explanation of \(title)")
+                    }
+                }
+                .padding(.horizontal, Space.xs)
             }
         }
     }
@@ -105,6 +133,8 @@ struct FormRow<Control: View>: View {
     var title: String
     var detail: String? = nil
     var detailTone: Color = Theme.textSecondary
+    /// The full story behind a short detail, on hover.
+    var help: String? = nil
     @ViewBuilder var control: Control
 
     var body: some View {
@@ -115,6 +145,7 @@ struct FormRow<Control: View>: View {
                     Text(detail).font(.km(.caption)).foregroundStyle(detailTone).fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .help(help ?? "")
             Spacer(minLength: Space.m)
             control
         }

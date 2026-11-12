@@ -18,7 +18,8 @@ struct ChecksSection: View {
 
     var body: some View {
         FormSection(title: "Checks",
-                    footer: "Optional, and off until you turn one on. Warn sends a request at once and checks it afterwards, so it adds no delay; Block checks first and refuses what it flags, and every retry of it. Local checks first, like Block, and sends what it flags to a model on this Mac instead of the cloud (Local servers). Risky commands reads the model's replies instead: Block hands the agent a refusal in place of the command. Logs shows each hit with what it flagged and what you had asked, masked values as their types, in memory only (with text around values on); the audit log keeps the check, the score and the length, never the text. None of them replaces masking.") {
+                    footer: "Each check is off until you turn it on. Warn logs a hit, Block refuses it, and Local answers it on this Mac. None of them replaces masking.",
+                    details: "Optional, and off until you turn one on. Warn sends a request at once and checks it afterwards, so it adds no delay; Block checks first and refuses what it flags, and every retry of it. Local checks first, like Block, and sends what it flags to a model on this Mac instead of the cloud (Local servers). Risky commands reads the model's replies instead: Block hands the agent a refusal in place of the command. Logs shows each hit with what it flagged and what you had asked, masked values as their types, in memory only (with text around values on); the audit log keeps the check, the score and the length, never the text. None of them replaces masking.") {
             if let checks {
                 injection(checks.injection)
                 Hairline()
@@ -76,12 +77,25 @@ struct ChecksSection: View {
                                           threshold: Double) -> some View {
         let current = levels.first { abs($0.value.threshold - threshold) < 0.0005 }?.key
         let options = Self.levelOrder + (current == nil ? [("custom", "Custom")] : [])
-        FormRow(title: "Sensitivity", detail: sensitivityDetail(c, levels: levels, current: current, threshold: threshold,
-                                                                isDefault: abs(threshold - (c.defaultThreshold ?? 0.65)) < 0.0005)) {
+        let isDefault = abs(threshold - (c.defaultThreshold ?? 0.65)) < 0.0005
+        FormRow(title: "Sensitivity", detail: sensitivitySummary(c, levels: levels, current: current, threshold: threshold, isDefault: isDefault),
+                help: sensitivityDetail(c, levels: levels, current: current, threshold: threshold, isDefault: isDefault)) {
             modePicker(current ?? "custom", options: options) { level in
                 if level != "custom" { await engine.setInjectionThreshold(level) }
             }
         }
+    }
+
+    /// The level and its two numbers that matter; the rest is in the row's tooltip.
+    private func sensitivitySummary(_ c: Engine.Checks.Injection, levels: [String: Engine.Checks.Injection.Level],
+                                    current: String?, threshold: Double, isDefault: Bool) -> String {
+        let pct = { (x: Double) in x == 0 ? "none" : x < 0.01 ? "<1%" : "\(Int((x * 100).rounded()))%" }
+        guard let current, let l = levels[current] else {
+            return "Custom: flags a tool result scoring \(String(format: "%.2f", threshold)) or more. Lower is stricter."
+        }
+        let which = current.capitalized + (isDefault ? " (the default)" : "")
+        let flags = l.sessions.map { "flags \(pct($0)) of real tool results" } ?? "flags \(pct(l.ordinary)) of ordinary pages"
+        return "\(which): catches \(pct(l.caught)) of injections in keepmum\u{2019}s tests, \(flags)"
     }
 
     private func sensitivityDetail(_ c: Engine.Checks.Injection, levels: [String: Engine.Checks.Injection.Level],
@@ -148,7 +162,8 @@ struct ChecksSection: View {
         }
         if have, let levels = c.levels, let level = c.sensitivity, levels[level] != nil {
             Hairline()
-            FormRow(title: "Sensitivity", detail: harmSensitivityDetail(levels, level, model: c.model)) {
+            FormRow(title: "Sensitivity", detail: harmSensitivitySummary(levels, level, model: c.model),
+                    help: harmSensitivityDetail(levels, level, model: c.model)) {
                 modePicker(level, options: Self.levelOrder) { await engine.setHarmSensitivity($0) }
             }
         }
@@ -176,6 +191,13 @@ struct ChecksSection: View {
         case "block": "A risky shell command in a reply is replaced by one that tells the agent why and fails"
         default: "Checks the shell commands a model asks your agent to run: curl | sh, rm -rf ~, keys sent out"
         }
+    }
+
+    private func harmSensitivitySummary(_ levels: [String: Engine.Checks.Harm.Level], _ level: String, model: String) -> String {
+        guard let l = levels[level] else { return "" }
+        let pct = { (x: Double) in x == 0 ? "none" : x < 0.01 ? "<1%" : "\(Int((x * 100).rounded()))%" }
+        let which = level == "medium" ? "Medium (the default)" : level.capitalized
+        return "\(which): catches \(pct(l.caught)) of harmful prompts, flags \(pct(l.safe)) of safe ones"
     }
 
     private func harmSensitivityDetail(_ levels: [String: Engine.Checks.Harm.Level], _ level: String, model: String) -> String {
@@ -277,7 +299,8 @@ struct LocalServersSection: View {
 
     var body: some View {
         FormSection(title: "Local servers",
-                    footer: "For Local mode. A flagged request goes to the first server here that answers for its check; one that is not running, lacks its model or fails is passed over, and if none answers the request is refused. Each gets the request on this Mac only, without tools or your API key. Ollama, LM Studio and llama.cpp take Claude Code's and Codex's requests as they are; other servers, such as MLX, get them as Chat Completions, and so does every server for the Antigravity CLI and Gemini CLI, whose answers come back in Gemini's format. An Ollama server's model menu offers keepmum's tested picks, downloaded for you, and any other model from Ollama or Hugging Face. keepmum gives an Ollama model a 64k context, which takes several GB less than Ollama's own setting (the model's longest); its Context menu offers 16k to 128k, or Ollama's own. It does this with its own copy of the model in Ollama (keepmum/…), which shares the downloaded files: no more disk. Use a capable model (8B or larger): a small one may repeat a planted instruction, or help with what the harm check flagged.") {
+                    footer: "Where Local mode sends a flagged request: the first server here that answers for its check, on this Mac, without tools or your API key.",
+                    details: "For Local mode. A flagged request goes to the first server here that answers for its check; one that is not running, lacks its model or fails is passed over, and if none answers the request is refused. Each gets the request on this Mac only, without tools or your API key. Ollama, LM Studio and llama.cpp take Claude Code's and Codex's requests as they are; other servers, such as MLX, get them as Chat Completions, and so does every server for the Antigravity CLI and Gemini CLI, whose answers come back in Gemini's format. An Ollama server's model menu offers keepmum's tested picks, downloaded for you, and any other model from Ollama or Hugging Face. keepmum gives an Ollama model a 64k context, which takes several GB less than Ollama's own setting (the model's longest); its Context menu offers 16k to 128k, or Ollama's own. It does this with its own copy of the model in Ollama (keepmum/…), which shares the downloaded files: no more disk. Use a capable model (8B or larger): a small one may repeat a planted instruction, or help with what the harm check flagged.") {
             if rows.isEmpty {
                 FormRow(title: "No local servers",
                         detail: used ? "A check is in Local mode with nowhere to send what it flags, so it refuses it. Add a server."
@@ -335,7 +358,8 @@ struct LocalServersSection: View {
                 Text(title(server)).font(.km(.body)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
                 Text(detail(server)).font(.km(.caption))
                     .foregroundStyle(server.problem == nil ? Theme.textSecondary : Theme.warning)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2).truncationMode(.tail)
+                    .help(server.problem ?? "")
             }
             Spacer(minLength: Space.m)
             modelMenu(n, server)
@@ -352,7 +376,7 @@ struct LocalServersSection: View {
     }
 
     private func detail(_ server: Engine.LocalServers.Server) -> String {
-        if let problem = server.problem { return problem.prefix(1).uppercased() + problem.dropFirst() }
+        if let problem = server.problem { return Self.plainProblem(problem, server) }
         let checks = server.checks.count == 2 ? "both checks" : "the \(server.checks[0]) check only"
         var out = "Answers for \(checks)" + (server.api == "chat" ? ", as Chat Completions" : "")
         if server.kind == "Ollama", let most = server.contextMax {
@@ -414,8 +438,19 @@ struct LocalServersSection: View {
         return "\(pick.name)\(star): \(size)\(fit)"
     }
 
-    private func pickName(_ model: String) -> String? {
-        picks.first { $0.model == model }?.name
+    /// A pick's name for a label: the model and its quant, without who made it.
+    private func pickShort(_ model: String) -> String? {
+        guard let name = picks.first(where: { $0.model == model })?.name else { return nil }
+        return Self.pickShortName(name)
+    }
+
+    /// "Qwen3.6 35B-A3B Uncensored (HauhauCS), IQ3_M" -> "Qwen3.6 35B-A3B, IQ3_M".
+    static func pickShortName(_ name: String) -> String {
+        let quant = name.components(separatedBy: ", ").count > 1 ? name.components(separatedBy: ", ").last! : ""
+        var model = name.components(separatedBy: ", ").first ?? name
+        if let paren = model.range(of: " (") { model = String(model[..<paren.lowerBound]) }
+        model = model.replacingOccurrences(of: " Uncensored", with: "")
+        return quant.isEmpty ? model : "\(model), \(quant)"
     }
 
     static func gb(_ x: Double) -> String { String(format: "%.1f GB", x) }
@@ -430,7 +465,30 @@ struct LocalServersSection: View {
     }
 
     /// A model's name, short: a path's last part, or a Hugging Face cache folder's repo.
+    /// What a server's problem means, in a few words: the engine's own text names whole model names
+    /// and commands, which the row has no room for (it stays in the tooltip).
+    static func plainProblem(_ problem: String, _ server: Engine.LocalServers.Server) -> String {
+        if problem.hasPrefix("no model chosen") { return "No model chosen yet" }
+        if problem.hasPrefix("nothing answers") {
+            return server.kind == "Ollama" || server.url.hasSuffix(":11434") ? "Not running: open the Ollama app" : "Not running"
+        }
+        if problem.contains("has no model") {
+            return server.kind == "Ollama" ? "Not downloaded yet: pick it in the model menu"
+                                           : "Not on this server: pick a model it has"
+        }
+        return problem.prefix(1).uppercased() + problem.dropFirst()
+    }
+
+    /// A model's name, short enough for a row: keepmum's pick by its own short name, a Hugging
+    /// Face repo without its owner and "-GGUF", a file path by its last part.
     static func shortName(_ model: String) -> String {
+        if model.hasPrefix("hf.co/") || model.hasPrefix("huggingface.co/") {
+            let parts = model.split(separator: "/", maxSplits: 2).map(String.init)
+            var repo = parts.count == 3 ? parts[2] : model
+            for suffix in ["-GGUF", "-gguf", "_GGUF"] { repo = repo.replacingOccurrences(of: suffix + ":", with: ":") }
+            if repo.hasSuffix("-GGUF") { repo.removeLast(5) }
+            return repo
+        }
         guard model.hasPrefix("/") else { return model }
         if let r = model.range(of: #"models--([^/]+)--([^/]+)"#, options: .regularExpression) {
             let parts = model[r].dropFirst("models--".count).components(separatedBy: "--")
@@ -440,12 +498,12 @@ struct LocalServersSection: View {
     }
 
     @ViewBuilder private func modelMenu(_ n: Int, _ server: Engine.LocalServers.Server) -> some View {
-        let label = server.model.isEmpty ? "Choose model…" : pickName(server.base ?? server.model) ?? Self.shortName(server.base ?? server.model)
+        let label = server.model.isEmpty ? "Choose model…" : pickShort(server.base ?? server.model) ?? Self.shortName(server.base ?? server.model)
         let ollama = server.kind == "Ollama"
         if let p = engine.localPull, p.server == n {
             pullProgress(p.progress)
         } else if isSnapshot {
-            menuLabel(label)
+            menuLabel(label).frame(maxWidth: 230, alignment: .trailing)
         } else {
             Menu(label) {
                 if ollama, !picks.isEmpty {
@@ -477,7 +535,7 @@ struct LocalServersSection: View {
                     Button("From Hugging Face or Ollama…") { pullRef = ""; pullQuant = ""; pullingTo = n }
                 }
             }
-            .menuStyle(.borderlessButton).fixedSize()
+            .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 230, alignment: .trailing)
             .disabled(!engine.isBundled || engine.busy)
             .help(server.model)
         }
@@ -539,7 +597,7 @@ struct LocalServersSection: View {
 
     private func menuLabel(_ text: String) -> some View {
         HStack(spacing: Space.xxs) {
-            Text(text).font(.km(.callout)).foregroundStyle(Theme.text)
+            Text(text).font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
             Image(systemName: "chevron.down").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
         }
     }
@@ -561,7 +619,8 @@ struct LocalSkillsSection: View {
 
     var body: some View {
         FormSection(title: "Skills for local turns",
-                    footer: "Your own instructions for the local model, in Claude Code's SKILL.md format, kept in keepmum's folder (~/.config/keepmum/skills): write, import, edit and delete them in the Skills window. An imported skill is copied there, so editing it leaves the original alone. Each skill goes where you choose: answering a flagged tool result, summaries and rewrites for the cloud, or answering a flagged request (none: parked). Each local turn there gets its text after keepmum's note, which says why the turn stayed on this Mac and that the model has no tools. Edits apply on the next turn; one that cannot be read, or is over 20,000 characters, is left out.") {
+                    footer: "Your instructions for the local model on the turns keepmum keeps on this Mac. Write and edit them in the Skills window.",
+                    details: "Your own instructions for the local model, in Claude Code's SKILL.md format, kept in keepmum's folder (~/.config/keepmum/skills): write, import, edit and delete them in the Skills window. An imported skill is copied there, so editing it leaves the original alone. Each skill goes where you choose: answering a flagged tool result, summaries and rewrites for the cloud, or answering a flagged request (none: parked). Each local turn there gets its text after keepmum's note, which says why the turn stayed on this Mac and that the model has no tools. Edits apply on the next turn; one that cannot be read, or is over 20,000 characters, is left out.") {
             if rows.isEmpty {
                 FormRow(title: "No skills", detail: "Local models get keepmum's note and the agent's own instructions. keepmum's example says how to answer on these turns: a starting point to edit.") {
                     HStack(spacing: Space.s) {
@@ -687,7 +746,8 @@ struct LocalHandbackSection: View {
 
     var body: some View {
         FormSection(title: "After a local turn",
-                    footer: "For the injection check. The cloud model never gets the flagged result itself. What takes its place is masked like the rest of the request and checked first: if the check flags what the local model wrote, that turn stays local. A harm hit always stays local: it is what you typed, and handing it back would send it to the provider the check kept it from.") {
+                    footer: "For the injection check. The cloud model never gets the flagged result, only what takes its place.",
+                    details: "For the injection check. The cloud model never gets the flagged result itself. What takes its place is masked like the rest of the request and checked first: if the check flags what the local model wrote, that turn stays local. A harm hit always stays local: it is what you typed, and handing it back would send it to the provider the check kept it from.") {
             FormRow(title: "Then", detail: choice.detail) { strategyMenu }
             if current == "summary" || current == "rewrite" {
                 Hairline()

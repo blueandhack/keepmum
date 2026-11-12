@@ -59,7 +59,8 @@ struct SetupSection: View {
     @ViewBuilder private var agents: some View {
             if engine.isBundled {
                 FormSection(title: "Coding agents",
-                            footer: "Each switch points that agent at keepmum. An agent already set up for another gateway, such as Magpie or LiteLLM, keeps it: keepmum goes in front and forwards there, and turning the switch off puts it back. Claude Code's open sessions switch right away; the others on their next session. The Antigravity CLI and Gemini CLI are protected one run at a time, through keepmum agy and keepmum gemini. Gemini CLI takes a Google sign-in only with a Code Assist Standard or Enterprise licence since June 18, 2026; for a personal Google account, use the Antigravity CLI.") {
+                            footer: "Each switch points that agent at keepmum. An agent set up for another gateway keeps it: keepmum goes in front.",
+                    details: "Each switch points that agent at keepmum. An agent already set up for another gateway, such as Magpie or LiteLLM, keeps it: keepmum goes in front and forwards there, and turning the switch off puts it back. Claude Code's open sessions switch right away; the others on their next session. The Antigravity CLI and Gemini CLI are protected one run at a time, through keepmum agy and keepmum gemini. Gemini CLI takes a Google sign-in only with a Code Assist Standard or Enterprise licence since June 18, 2026; for a personal Google account, use the Antigravity CLI.") {
                     ClientRow(engine: engine, id: "claude", name: "Claude Code", icon: "CC", detail: "~/.claude/settings.json")
                     Hairline()
                     ClientRow(engine: engine, id: "codex", name: "Codex", icon: "Cx", detail: "~/.codex/config.toml")

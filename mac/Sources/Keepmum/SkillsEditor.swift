@@ -292,7 +292,8 @@ struct SkillsEditor: View {
         guard let servers = engine.localServers?.servers else { return isSnapshot ? "Qwen3.6 35B-A3B" : nil }
         guard let s = servers.first(where: { !$0.model.isEmpty && ($0.models ?? []).contains($0.model) }) else { return nil }
         let model = s.base ?? s.model
-        return engine.localServers?.picks?.first { $0.model == model }?.name ?? LocalServersSection.shortName(model)
+        return engine.localServers?.picks?.first { $0.model == model }.map { LocalServersSection.pickShortName($0.name) }
+            ?? LocalServersSection.shortName(model)
     }
 
     private var assistant: some View {

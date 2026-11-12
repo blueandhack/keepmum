@@ -1110,10 +1110,16 @@ final class Engine {
                                                              .init(path: NSHomeDirectory() + "/notes/harm.md", checks: ["harm"])],
                                                     handback: "summary", handbackInstructions: "")))
         e.localServers = .init(servers: [
-            .init(url: "http://localhost:11434", model: "qwen3:8b", checks: ["injection", "harm"], api: "auto", kind: "Ollama",
-                  models: ["gemma3:12b", "qwen3:8b"], problem: nil),
+            .init(url: "http://localhost:11434", model: "keepmum/qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive-iq3_m:ctx64k",
+                  checks: ["injection", "harm"], api: "auto", kind: "Ollama",
+                  models: ["hf.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M",
+                           "keepmum/qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive-iq3_m:ctx64k", "qwen3:8b"], problem: nil,
+                  context: 65536, contextMax: 262144, base: "hf.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M"),
             .init(url: "http://localhost:1234", model: "qwen/qwen3-14b", checks: ["harm"], api: "auto", kind: "LM Studio",
                   models: ["qwen/qwen3-14b"], problem: nil),
+            .init(url: "http://localhost:11435", model: "hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q8_0",
+                  checks: ["injection", "harm"], api: "auto", kind: "Ollama", models: ["qwen3:8b"],
+                  problem: "Ollama at http://localhost:11435 has no model hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q8_0: `ollama pull hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q8_0`"),
             .init(url: "http://localhost:8080", model: "", checks: ["injection", "harm"], api: "auto", kind: nil,
                   models: nil, problem: "no model chosen yet")],
             presets: [.init(id: "ollama", name: "Ollama", url: "http://localhost:11434"),

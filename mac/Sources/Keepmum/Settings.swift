@@ -146,7 +146,8 @@ struct SettingsPage: View {
     private var connection: some View {
         let s = store.snapshot
         return FormSection(title: "Connection",
-                           footer: "This app reads keepmum's stats feed: counts, types and timestamps, and for the Logs page the first and last character of long masked values (Logs page, above, turns that off). It never receives a whole value or a placeholder and talks only to 127.0.0.1, apart from update checks (Updates). It sends no telemetry.") {
+                           footer: "This app reads counts and types from keepmum on 127.0.0.1, never a whole value, and sends no telemetry.",
+                    details: "This app reads keepmum's stats feed: counts, types and timestamps, and for the Logs page the first and last character of long masked values (Logs page, above, turns that off). It never receives a whole value or a placeholder and talks only to 127.0.0.1, apart from update checks (Updates). It sends no telemetry.") {
             row("Status") { StatusDot(connection: store.connection, observing: s.observe == true) }
             row("Endpoint", "127.0.0.1:\(store.port)")
             row("Mode", s.modeLabel)
