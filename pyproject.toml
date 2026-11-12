@@ -22,6 +22,7 @@ keepmum-claude-wrapper = "keepmum.launch:wrap_main"
 dev = [
     "pytest>=8",
     "faker>=30",
+    "coverage>=7.10",
 ]
 # The DMG's window: background, icon places, volume icon, without scripting Finder (mac/make-dmg.sh).
 release = [
@@ -57,3 +58,13 @@ afm = [
 [build-system]
 requires = ["uv_build>=0.9,<0.14"]
 build-backend = "uv_build"
+
+# CI fails below fail_under (.github/workflows/ci.yml): statements and branches over the engine.
+[tool.coverage.run]
+branch = true
+source = ["src/keepmum"]
+
+[tool.coverage.report]
+fail_under = 95
+skip_covered = true
+show_missing = true

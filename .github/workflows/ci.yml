@@ -22,7 +22,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       - run: uv sync --frozen
-      - run: uv run --frozen pytest -q
+      # The tests, measured: statement and branch coverage over src/keepmum, which fails the job below
+      # fail_under in pyproject.toml. sys.monitoring keeps it fast (branches need Python 3.14 or later).
+      - run: uv run --frozen coverage run -m pytest -q
+        env:
+          COVERAGE_CORE: sysmon
+      - name: Coverage
+        run: |
+          uv run --frozen coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY" || true
+          uv run --frozen coverage report
 
   agents:
     # The e2e suite (e2e/README.md): the real Codex, Claude Code, Antigravity CLI, pi and opencode through keepmum,

@@ -452,6 +452,7 @@ No language model judges spans at request time. The Apple on-device model and Qw
 ```sh
 uv sync
 uv run pytest                                # detection, proxy (Messages and Responses APIs), streams, settings, clients
+uv run coverage run -m pytest && uv run coverage report   # statement and branch coverage; CI fails below 95%
 mac/lint.sh                                  # SwiftLint on the Mac app (pinned, checked; mac/README.md)
 uv run python bench/gen.py                   # generate the benchmark datasets
 uv run python bench/run.py                   # accuracy and speed; see bench/README.md
