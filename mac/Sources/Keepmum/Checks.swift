@@ -366,15 +366,36 @@ struct LocalServersSection: View {
                 Text(detail(server)).font(.km(.caption))
                     .foregroundStyle(server.problem == nil ? Theme.textSecondary : Theme.warning)
                     .lineLimit(2).truncationMode(.tail)
-                    .help(server.start.map { "Start it in Terminal: \($0)" } ?? server.problem ?? "")
+                    .help(server.managed == true ? (server.progress ?? "") : server.start.map { "Or start it in Terminal: \($0)" } ?? server.problem ?? "")
             }
             Spacer(minLength: Space.m)
+            if server.start != nil || server.kind == "Splash" { splashControl(server) }
             modelMenu(n, server)
             if server.kind == "Ollama", server.contextMax != nil { contextMenu(n, server) }
             checksMenu(n, server)
             moreMenu(n, server)
         }
         .padding(.vertical, Space.s)
+    }
+
+    /// Start or Stop for a Splash server: keepmum runs it in the background, and again at login.
+    @ViewBuilder private func splashControl(_ server: Engine.LocalServers.Server) -> some View {
+        let running = server.kind == "Splash"
+        if server.managed == true {
+            HStack(spacing: Space.s) {
+                if !running { ProgressView().controlSize(.small) }
+                PillButton(title: "Stop") { Task { await engine.stopSplash() } }
+                    .disabled(!engine.isBundled || engine.busy)
+                    .help("Stops Splash, and it no longer starts at login")
+            }
+            .task(id: server.url) { if !running && !isSnapshot { await engine.followSplash(url: server.url) } }
+        } else if !running {
+            PillButton(title: "Start", icon: "play.fill", prominent: true) {
+                Task { await engine.startSplash(url: server.url, model: server.model) }
+            }
+            .disabled(!engine.isBundled || engine.busy || server.model.isEmpty)
+            .help("keepmum runs Splash in the background, starts it again at login, and it frees its memory after 5 minutes idle. The first start downloads the model.")
+        }
     }
 
     private func title(_ server: Engine.LocalServers.Server) -> String {
@@ -491,7 +512,8 @@ struct LocalServersSection: View {
     static func plainProblem(_ problem: String, _ server: Engine.LocalServers.Server) -> String {
         if problem.hasPrefix("no model chosen") { return "No model chosen yet" }
         if server.start != nil, problem.hasPrefix("nothing answers") {
-            return "Not running: start Splash in Terminal"
+            if server.managed == true { return "Starting: " + (server.progress ?? "loading the model") }
+            return "Not running: click Start"
         }
         if server.kind == "Splash", problem.contains("has no model") { return "Splash serves another model: restart it with this one" }
         if problem.hasPrefix("nothing answers") {
@@ -524,6 +546,7 @@ struct LocalServersSection: View {
 
     @ViewBuilder private func modelMenu(_ n: Int, _ server: Engine.LocalServers.Server) -> some View {
         let label = server.model.isEmpty ? "Choose model…" : pickShort(server.base ?? server.model) ?? Self.shortName(server.base ?? server.model)
+        let restartSplash = server.managed == true
         let ollama = server.kind == "Ollama"
         let splash = server.kind == "Splash" || server.start != nil
         if let p = engine.localPull, p.server == n {
@@ -538,8 +561,11 @@ struct LocalServersSection: View {
                             Button(Self.pickShortName(pick.name) + (pick.id == engine.localServers?.defaultPick ? " (recommended)" : "")) {
                                 let spec = pick.splash ?? ""
                                 Task {
-                                    await engine.setLocalServer(n, model: spec)
-                                    copySplash(Self.splashCommand(spec, url: server.url))
+                                    if restartSplash {
+                                        await engine.startSplash(url: server.url, model: spec)  // runs it with this one
+                                    } else {
+                                        await engine.setLocalServer(n, model: spec)
+                                    }
                                 }
                             }
                             .help(pick.note)

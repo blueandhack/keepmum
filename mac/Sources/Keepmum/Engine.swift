@@ -157,8 +157,12 @@ final class Engine {
             var base: String?
             /// For Splash: the command that starts it with this server's model (it runs in a terminal).
             var start: String?
+            /// For Splash: keepmum runs it in the background (`keepmum guard local splash --start`), and
+            /// what it is doing while it starts (downloading, warming up).
+            var managed: Bool?
+            var progress: String?
             enum CodingKeys: String, CodingKey {
-                case url, model, checks, api, kind, models, problem, context, base, start, contextMax = "context_max"
+                case url, model, checks, api, kind, models, problem, context, base, start, managed, progress, contextMax = "context_max"
             }
         }
         struct Preset: Decodable, Equatable, Identifiable { var id: String; var name: String; var url: String }
@@ -632,6 +636,29 @@ final class Engine {
             if out.code != 0 { throw EngineError(out.lastLine) }
         }
         await loadLocalServers()
+    }
+
+    /// Runs Splash in the background with the model local server `url` has (`keepmum guard local
+    /// splash --start`): now, after a crash, and at login. Then follows it until it answers.
+    func startSplash(url: String, model: String) async {
+        await act { try await self.check(["guard", "local", "splash", model, "--url", url, "--start"]) }
+        await followSplash(url: url)
+    }
+
+    /// Stops the Splash keepmum runs, and no longer starts it at login.
+    func stopSplash() async {
+        await act { try await self.check(["guard", "local", "splash", "--stop"]) }
+        await loadLocalServers()
+    }
+
+    /// Reloads the local servers every two seconds while the Splash keepmum runs at `url` is still
+    /// starting (the first start downloads its model), for at most twenty minutes.
+    func followSplash(url: String) async {
+        for _ in 0..<600 {
+            await loadLocalServers()
+            guard let s = localServers?.servers.first(where: { $0.url == url }), s.managed == true, s.kind != "Splash" else { return }
+            try? await Task.sleep(for: .seconds(2))
+        }
     }
 
     /// The context size of local server `number`'s Ollama model (`keepmum guard local context`): a

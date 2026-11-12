@@ -800,7 +800,7 @@ def guard_local(ctx: typer.Context,
         rows.append({"url": server.url, "model": server.model, "checks": list(server.checks), "api": server.api,
                      "kind": name, "models": have, "problem": missing(server, have, name),
                      "context": info and info["context"], "context_max": info and info["max"], "base": info and info["parent"],
-                     "start": _splash_start(server, name)})
+                     "start": _splash_start(server, name), **_splash_managed(server, name)})
     if as_json:
         typer.echo(json.dumps({"servers": rows, "presets": [{"id": k, "name": n, "url": u} for k, (n, u) in PRESETS.items()],
                                "picks": picks_json(), "default_pick": DEFAULT_PICK,
@@ -956,6 +956,16 @@ def _splash_start(server, name: str | None) -> str | None:
     return splash_command(server.model) + ("" if server.url == SPLASH_URL else f" --port {port}")
 
 
+def _splash_managed(server, name: str | None) -> dict:
+    """For the Splash keepmum runs on this server's port: that it does, and what it is doing now."""
+    from . import splashsvc
+
+    m = splashsvc.managed()
+    if not m or not m["port"] or not server.url.endswith(f":{m['port']}"):
+        return {"managed": False, "progress": None}
+    return {"managed": True, "progress": None if name == "Splash" else splashsvc.progress()}
+
+
 def _context_text(n: int | None, longest: int | None) -> str:
     from .localmodels import context_label
 
@@ -985,10 +995,25 @@ def _drop_copy(url: str, old: str | None, servers: list) -> None:
 @local_app.command("splash")
 def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splash runs (`keepmum guard local picks`; default: "
                                                    "keepmum's pick), or any model Splash serves, as owner/repo[:VARIANT]."),
-                       url: str = typer.Option(None, "--url", help="Where Splash listens (default http://localhost:8000).")) -> None:
+                       url: str = typer.Option(None, "--url", help="Where Splash listens (default http://localhost:8000)."),
+                       start: bool = typer.Option(False, "--start", help="Run it in the background: now, after a crash, and at login."),
+                       stop: bool = typer.Option(False, "--stop", help="Stop the Splash keepmum runs, and no longer start it at login."),
+                       idle: str = typer.Option("5m", "--idle", help="With --start: how long without a request before it frees its memory.")) -> None:
     """Use Splash (github.com/incoai/splash) for local mode: tried first, the other servers kept behind it.
     Splash is an engine for Apple silicon built around a few models; with keepmum's pick it wrote about
-    1.6 times as fast as Ollama in keepmum's tests. It runs in a terminal: this prints the command."""
+    1.6 times as fast as Ollama in keepmum's tests. --start runs it in the background; without it, this
+    prints the command to run it in a terminal yourself."""
+    import re
+
+    from . import splashsvc
+
+    if stop:
+        typer.echo("stopped Splash, and it no longer starts at login" if splashsvc.stop() else "keepmum was not running Splash",
+                   err=True)
+        return
+    if start and not re.fullmatch(r"\d+[smh]?", idle):
+        typer.echo("keepmum guard local splash: --idle: seconds, or with s, m or h, such as 5m", err=True)
+        raise typer.Exit(2)
     import dataclasses
     import shutil
 
@@ -1021,13 +1046,24 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
         servers.insert(0, servers.pop(at))
     _save_servers(cfg, servers, f"{where} {spec}")
     typer.echo(f"local server 1: Splash at {url}, model {served}; the others stay behind it", err=True)
+    if start:
+        try:
+            splashsvc.start(spec, int(url.rsplit(":", 1)[-1]), idle)
+        except (splashsvc.SplashError, ValueError, OSError) as e:
+            typer.echo(f"{where}: {e}", err=True)
+            raise typer.Exit(1)
+        typer.echo(f"Splash is starting in the background, and starts again at login (`{where} --stop` stops it). "
+                   f"The first start downloads the model and its draft; it frees its memory after {idle} without a "
+                   f"request and loads it again in a few seconds. Its log: {splashsvc.log_path()}", err=True)
+        return
     have = models(url)
     if have is not None and kind(url) == "Splash" and served in have:
         typer.echo("Splash is running with it: local mode uses it from the next flagged request.", err=True)
         return
     if shutil.which("splash") is None:
         typer.echo("Splash is not installed: `brew install incoai/tap/splash` (an M3 or newer Mac, macOS 26.4 or later).", err=True)
-    typer.echo("Start it in a terminal, and leave it running (the first start downloads the model and its draft):", err=True)
+    typer.echo(f"Start it in the background with `{where} --start`, or in a terminal, and leave it running "
+               "(the first start downloads the model and its draft):", err=True)
     typer.echo(f"  {splash_command(spec)}" + ("" if url == SPLASH_URL else f" --port {url.rsplit(':', 1)[-1]}"))
     typer.echo("Until it answers, flagged requests go to the next server. It frees its memory after 10 minutes idle.", err=True)
 
