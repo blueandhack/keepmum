@@ -28,10 +28,10 @@ struct KeepmumApp: App {
 
         Window("Skills for local turns", id: SkillsWindow.id) {
             SkillsEditor(engine: engine)
-                .frame(minWidth: 760, minHeight: 520)
+                .frame(minWidth: 760, minHeight: 640)
                 .onAppear { engine.start() }
         }
-        .defaultSize(width: 960, height: 640)
+        .defaultSize(width: 980, height: 760)
     }
 }
 
@@ -425,7 +425,7 @@ enum Snapshotter {
         }
         // The Skills window, on the first preview skill.
         for dark in [false, true] {
-            render(SkillsEditor(engine: .preview(), initial: 1).frame(width: 960, height: 640),
+            render(SkillsEditor(engine: .preview(), initial: 1).frame(width: 980, height: 760),
                    to: "\(dir)/skills-\(dark ? "dark" : "light").png", dark: dark)
         }
         // Every built-in rule, as the Detection page's sheet shows them.

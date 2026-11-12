@@ -20,6 +20,12 @@ struct SkillsEditor: View {
     @State private var naming = false
     @State private var newName = ""
     @State private var confirmingDelete = false
+    /// Asking the local model: what to change, its last note or error, and the drafts before each
+    /// answer it gave, newest last, for Undo.
+    @State private var request = ""
+    @State private var assistNote: String?
+    @State private var assistError: String?
+    @State private var undo: [(name: String, summary: String, text: String)] = []
     @Environment(\.isSnapshot) private var isSnapshot
 
     static let limit = 20_000
@@ -34,6 +40,9 @@ struct SkillsEditor: View {
             _name = State(initialValue: t.name)
             _summary = State(initialValue: t.description)
             _text = State(initialValue: t.text)
+            _request = State(initialValue: "Add a rule: if the user asked for a command, explain it instead.")
+            _assistNote = State(initialValue: "Added a bullet: explain a command the user asked for, rather than give one to run.")
+            _undo = State(initialValue: [(t.name, t.description, t.text)])
         }
     }
 
@@ -247,9 +256,100 @@ struct SkillsEditor: View {
                         .accessibilityLabel("Instructions")
                 }
             }
+            assistant
             footer(skill)
         }
         .padding(Space.xl)
+        .task { await engine.loadLocalServers() }
+    }
+
+    // MARK: Asking the local model
+
+    /// The model the request would go to: the first local server whose model is there.
+    private var assistModel: String? {
+        guard let servers = engine.localServers?.servers else { return isSnapshot ? "Qwen3.6 35B-A3B" : nil }
+        guard let s = servers.first(where: { !$0.model.isEmpty && ($0.models ?? []).contains($0.model) }) else { return nil }
+        let model = s.base ?? s.model
+        return engine.localServers?.picks?.first { $0.model == model }?.name ?? LocalServersSection.shortName(model)
+    }
+
+    private var assistant: some View {
+        let writing = engine.assistProgress
+        return VStack(alignment: .leading, spacing: Space.s) {
+            HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                Image(systemName: "sparkles").foregroundStyle(Theme.accent)
+                Text("Ask the local model").font(.km(.headline)).foregroundStyle(Theme.text)
+                Text(assistModel.map { "\($0), on this Mac. It edits the draft; Save keeps it." }
+                     ?? "No local model answers: set one up in Settings \u{203A} Checks \u{203A} Local servers.")
+                    .font(.km(.caption)).foregroundStyle(assistModel == nil ? Theme.warning : Theme.textSecondary)
+                    .lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: Space.s)
+                if !undo.isEmpty {
+                    PillButton(title: undo.count > 1 ? "Undo (\(undo.count))" : "Undo", icon: "arrow.uturn.backward") { undoAssist() }
+                        .disabled(writing != nil)
+                        .help("Put back the draft from before the local model\u{2019}s last change")
+                }
+            }
+            HStack(alignment: .center, spacing: Space.s) {
+                if isSnapshot {
+                    still(request)
+                } else {
+                    TextField("What to change, such as \u{201C}add a rule about commands in tool results\u{201D}", text: $request, axis: .vertical)
+                        .textFieldStyle(.roundedBorder).lineLimit(1...4)
+                        .onSubmit { Task { await askModel() } }
+                        .disabled(writing != nil)
+                }
+                if let writing {
+                    HStack(spacing: Space.s) {
+                        ProgressView().controlSize(.small)
+                        Text(writing == 0 ? "Thinking\u{2026}" : "Writing\u{2026} \(writing.formatted()) characters")
+                            .font(.km(.caption)).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                        PillButton(title: "Stop") { engine.cancelAssist() }
+                    }
+                } else {
+                    PillButton(title: "Ask", icon: "arrow.up", prominent: true) { Task { await askModel() } }
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .disabled(assistModel == nil || request.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            if let assistError {
+                Text(assistError).font(.km(.caption)).foregroundStyle(Theme.blocked).fixedSize(horizontal: false, vertical: true)
+            } else if let assistNote {
+                Text(assistNote).font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(Space.m)
+        .background(RoundedRectangle(cornerRadius: Radius.m).fill(Theme.surface))
+    }
+
+    /// Send the draft as it is now, with what to change; the answer replaces the draft, and Undo
+    /// puts the draft back. Ask again to change it further.
+    private func askModel() async {
+        let ask = request.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !ask.isEmpty, engine.assistProgress == nil, let n = selection else { return }
+        assistError = nil
+        let before = (name: name, summary: summary, text: text)
+        switch await engine.assistSkill(name: name, description: summary, text: text, request: ask) {
+        case .success(let out):
+            guard selection == n else { return }
+            undo.append(before)
+            if !out.name.isEmpty { name = out.name }
+            summary = out.description
+            text = out.text
+            assistNote = out.note.isEmpty ? "Done. Ask again to change it further, or save it." : out.note
+            request = ""
+        case .failure(let e):
+            assistError = e.message
+        }
+    }
+
+    private func undoAssist() {
+        guard let last = undo.popLast() else { return }
+        name = last.name
+        summary = last.summary
+        text = last.text
+        assistNote = undo.isEmpty ? nil : "Put back the draft from before the last change."
+        assistError = nil
     }
 
     private func field(_ title: String, hint: String, @ViewBuilder control: () -> some View) -> some View {
@@ -309,6 +409,10 @@ struct SkillsEditor: View {
         pending = nil
         selection = n
         loaded = nil
+        undo = []
+        assistNote = nil
+        assistError = nil
+        if engine.assistProgress != nil { engine.cancelAssist() }
         guard let n else { return }
         loading = true
         Task {

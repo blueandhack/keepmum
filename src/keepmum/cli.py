@@ -1271,6 +1271,79 @@ def guard_local_skill_edit(number: int = typer.Argument(..., help="The skill's n
     typer.echo(f"skill {number}: {f} written. Local turns use it from the next one.", err=True)
 
 
+@skill_app.command("assist")
+def guard_local_skill_assist(request: str = typer.Option(..., "--request", help="What to change, or what to write, in your words."),
+                             number: int = typer.Argument(None, help="The skill to start from (default: --draft-file, or a blank one)."),
+                             draft_file: str = typer.Option(None, "--draft-file", help="A JSON file with the draft: name, description, text."),
+                             server: int = typer.Option(None, "--server", help="The local server's number (default: the first that answers)."),
+                             save: bool = typer.Option(False, "--save", help="Write the result to skill NUMBER (otherwise only print it)."),
+                             as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """Ask the local model to write or change a skill. Prints the revised skill; nothing is saved without --save."""
+    import json
+    from pathlib import Path
+
+    from .local import kind, models, read_skill, write_skill
+    from .skillassist import AssistError, ask
+
+    where = "keepmum guard local skill assist"
+    if save and number is None:
+        typer.echo(f"{where}: --save needs the skill's number", err=True)
+        raise typer.Exit(2)
+    cfg = _config()
+    draft = {"name": "", "description": "", "text": ""}
+    if draft_file:
+        try:
+            d = json.loads(Path(draft_file).expanduser().read_text(encoding="utf-8"))
+            draft = {k: str(d.get(k) or "") for k in draft}
+        except (OSError, ValueError, AttributeError) as e:
+            typer.echo(f"{where}: {draft_file}: {e}", err=True)
+            raise typer.Exit(2)
+    elif number is not None:
+        try:
+            s = read_skill(_skill_at(cfg, number).path)
+            draft = {"name": s["name"], "description": s["description"], "text": s["text"]}
+        except ValueError as e:
+            typer.echo(f"{where}: {e}", err=True)
+            raise typer.Exit(1)
+    candidates = [_server_at(cfg, server)] if server is not None else list(cfg.guard_local_servers)
+    target = name = None
+    for x in candidates:
+        have = models(x.url)
+        if x.model and have is not None and x.model in have:
+            target, name = x, kind(x.url)
+            break
+    if target is None:
+        typer.echo(f"{where}: no local server with its model answers: add one (`keepmum guard local pull`) and start it", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"asking {target.model} at {target.url}", err=True)
+    last = [0]
+
+    def progress(n: int) -> None:
+        if n - last[0] >= 40 or n < last[0]:
+            last[0] = n
+            typer.echo(f"\r  writing: {n:,} characters", nl=False, err=True)
+
+    try:
+        out = ask(target, name or "", draft, request, progress)
+    except AssistError as e:
+        typer.echo(f"\n{where}: {e}", err=True)
+        raise typer.Exit(1)
+    typer.echo("", err=True)
+    if save:
+        try:
+            write_skill(_skill_at(cfg, number).path, out["name"] or draft["name"], out["description"], out["text"])
+        except (ValueError, OSError) as e:
+            typer.echo(f"{where}: {e}", err=True)
+            raise typer.Exit(1)
+        typer.echo(f"skill {number}: saved", err=True)
+    if as_json:
+        typer.echo(json.dumps(out | {"model": target.model, "url": target.url}))
+        return
+    typer.echo(f"{out['name']}" + (f": {out['description']}" if out["description"] else "") + f"\n\n{out['text']}")
+    if out["note"]:
+        typer.echo(f"\n({out['note']})", err=True)
+
+
 @skill_app.command("show")
 def guard_local_skill_show(number: int = typer.Argument(..., help="The skill's number."),
                            as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:

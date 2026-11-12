@@ -217,6 +217,18 @@ final class Engine {
     }
     /// The Skills window shows this skill when it opens or is brought back (1 is the first).
     var skillToEdit: Int?
+    /// `keepmum guard local skill assist --json`: the skill as the local model revised it.
+    struct SkillAssist: Decodable, Equatable {
+        var name: String
+        var description: String
+        var text: String
+        var note: String
+        var model: String
+        var url: String
+    }
+    /// The local model writing a skill: characters so far (nil: not asking).
+    private(set) var assistProgress: Int?
+    @ObservationIgnored private let assistProcess = ProcessBox()
     /// For snapshots: the text of each preview skill, by number.
     @ObservationIgnored var previewSkillTexts: [Int: SkillText] = [:]
     private(set) var localSkills: LocalSkills?
@@ -679,6 +691,36 @@ final class Engine {
         return saved
     }
 
+    /// Asks the local model to revise a draft as `request` says; the revised skill, or why not.
+    /// Nothing is saved: the draft is the window's, and the user saves it.
+    func assistSkill(name: String, description: String, text: String, request: String) async -> Result<SkillAssist, EngineError> {
+        guard assistProgress == nil else { return .failure(EngineError("The local model is already writing.")) }
+        assistProgress = 0
+        defer { assistProgress = nil }
+        do {
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("keepmum-draft-\(UUID().uuidString).json")
+            try JSONSerialization.data(withJSONObject: ["name": name, "description": description, "text": text]).write(to: tmp)
+            defer { try? FileManager.default.removeItem(at: tmp) }
+            let out = try await run(["guard", "local", "skill", "assist", "--draft-file", tmp.path, "--request", request, "--json"],
+                                    process: assistProcess) { line in
+                let digits = line.filter(\.isNumber)
+                if line.contains("writing:"), let n = Int(digits) {
+                    Task { @MainActor in if self.assistProgress != nil { self.assistProgress = n } }
+                }
+            }
+            if out.code != 0 {
+                return .failure(EngineError(out.code == SIGTERM ? "Stopped." : out.lastLine))
+            }
+            return Result { try JSONDecoder().decode(SkillAssist.self, from: Data(out.stdout.utf8)) }
+                .mapError { _ in EngineError("The local model's answer could not be read.") }
+        } catch {
+            return .failure(EngineError(error.localizedDescription))
+        }
+    }
+
+    /// Stops the local model writing a skill.
+    func cancelAssist() { assistProcess.process?.terminate() }
+
     /// Removes skill `number`; one in keepmum's folder also goes to the Trash, where it can be put back.
     func deleteLocalSkill(_ number: Int) async {
         let all = localSkills?.skills ?? []
@@ -982,7 +1024,7 @@ final class Engine {
     }
 
     /// Run the bundled `keepmum` off the main thread. `onLine` sees stderr lines as they arrive.
-    private func run(_ args: [String], onLine: (@Sendable (String) -> Void)? = nil) async throws -> Output {
+    private func run(_ args: [String], process box: ProcessBox? = nil, onLine: (@Sendable (String) -> Void)? = nil) async throws -> Output {
         guard let cli else { throw EngineError("This copy of Keepmum has no bundled engine.") }
         return try await Task.detached {
             let p = Process()
@@ -1002,6 +1044,8 @@ final class Engine {
                 }
             }
             try p.run()
+            box?.process = p
+            defer { box?.process = nil }
             let stdout = out.fileHandleForReading.readDataToEndOfFile()
             p.waitUntilExit()
             err.fileHandleForReading.readabilityHandler = nil
@@ -1134,6 +1178,16 @@ struct EngineError: Error {
 
 extension String {
     var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
+}
+
+/// The process a run started, so it can be stopped from elsewhere.
+final class ProcessBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var running: Process?
+    var process: Process? {
+        get { lock.lock(); defer { lock.unlock() }; return running }
+        set { lock.lock(); running = newValue; lock.unlock() }
+    }
 }
 
 private final class LockedData: @unchecked Sendable {
