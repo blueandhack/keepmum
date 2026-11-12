@@ -253,7 +253,17 @@ struct LocalServersSection: View {
     var engine: Engine
     @State private var addingOther = false
     @State private var otherURL = "http://localhost:"
+    /// Downloading another model to Ollama server `number`: a Hugging Face link or an Ollama name.
+    @State private var pullingTo: Int?
+    @State private var pullRef = ""
+    @State private var pullQuant = ""
     @Environment(\.isSnapshot) private var isSnapshot
+
+    private var picks: [Engine.LocalServers.Pick] { engine.localServers?.picks ?? [] }
+    private var defaultPick: Engine.LocalServers.Pick? {
+        picks.first { $0.id == engine.localServers?.defaultPick } ?? picks.first
+    }
+    private var memoryGB: Double { Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824 }
 
     private var rows: [Engine.LocalServers.Server] {
         engine.localServers?.servers ?? (engine.status?.guard?.local?.servers ?? []).map {
@@ -267,12 +277,25 @@ struct LocalServersSection: View {
 
     var body: some View {
         FormSection(title: "Local servers",
-                    footer: "For Local mode. A flagged request goes to the first server here that answers for its check; one that is not running, lacks its model or fails is passed over, and if none answers the request is refused. Each gets the request on this Mac only, without tools or your API key. Ollama, LM Studio and llama.cpp take Claude Code's and Codex's requests as they are; other servers, such as MLX, get them as Chat Completions, and so does every server for the Antigravity CLI and Gemini CLI, whose answers come back in Gemini's format. Use a capable model (8B or larger): a small one may repeat a planted instruction, or help with what the harm check flagged.") {
+                    footer: "For Local mode. A flagged request goes to the first server here that answers for its check; one that is not running, lacks its model or fails is passed over, and if none answers the request is refused. Each gets the request on this Mac only, without tools or your API key. Ollama, LM Studio and llama.cpp take Claude Code's and Codex's requests as they are; other servers, such as MLX, get them as Chat Completions, and so does every server for the Antigravity CLI and Gemini CLI, whose answers come back in Gemini's format. An Ollama server's model menu offers keepmum's tested picks, downloaded for you, and any other model from Ollama or Hugging Face. Ollama gives a model its longest context unless told otherwise, which takes several GB more: set 64k in Ollama's settings. Use a capable model (8B or larger): a small one may repeat a planted instruction, or help with what the harm check flagged.") {
             if rows.isEmpty {
                 FormRow(title: "No local servers",
                         detail: used ? "A check is in Local mode with nowhere to send what it flags, so it refuses it. Add a server."
-                            : "Add Ollama, LM Studio, llama.cpp, MLX or another server on this Mac",
-                        detailTone: used ? Theme.warning : Theme.textSecondary) { addMenu }
+                            : emptyDetail,
+                        detailTone: used ? Theme.warning : Theme.textSecondary) {
+                    HStack(spacing: Space.s) {
+                        if let p = engine.localPull, p.server == nil {
+                            pullProgress(p.progress)
+                        } else if let pick = defaultPick {
+                            PillButton(title: "Use keepmum's pick (\(Self.gb(pick.downloadGB)))", icon: "arrow.down.circle", prominent: true) {
+                                Task { await engine.pullLocalModel(pick.id) }
+                            }
+                            .disabled(!engine.isBundled || engine.busy)
+                            .help("Downloads \(pick.name) to Ollama and uses it. Ollama must be running.")
+                        }
+                        addMenu
+                    }
+                }
             } else {
                 ForEach(Array(rows.enumerated()), id: \.offset) { i, server in
                     row(i + 1, server)
@@ -282,6 +305,17 @@ struct LocalServersSection: View {
             }
         }
         .task(id: engine.status?.guard?.local) { await engine.loadLocalServers() }
+        .alert("Download a model to Ollama", isPresented: Binding(get: { pullingTo != nil }, set: { if !$0 { pullingTo = nil } })) {
+            TextField("https://huggingface.co/owner/repo, or qwen3:8b", text: $pullRef)
+            TextField("Quant, for Hugging Face: Q4_K_M, IQ3_M…", text: $pullQuant)
+            Button("Cancel", role: .cancel) {}
+            Button("Download") {
+                let (ref, quant, n) = (pullRef.trimmingCharacters(in: .whitespaces), pullQuant.trimmingCharacters(in: .whitespaces), pullingTo)
+                if !ref.isEmpty { Task { await engine.pullLocalModel(ref, quant: quant, server: n) } }
+            }
+        } message: {
+            Text("A GGUF repo on Hugging Face, by its link (a link to one .gguf file names its quant), or a name from Ollama's library. Ollama downloads it, and it becomes this server's model.")
+        }
         .alert("Add a local server", isPresented: $addingOther) {
             TextField("http://localhost:8000", text: $otherURL)
             Button("Cancel", role: .cancel) {}
@@ -322,6 +356,36 @@ struct LocalServersSection: View {
         return "Answers for \(checks)" + (server.api == "chat" ? ", as Chat Completions" : "")
     }
 
+    private var emptyDetail: String {
+        guard let pick = defaultPick else { return "Add Ollama, LM Studio, llama.cpp, MLX or another server on this Mac" }
+        let fit = memoryGB + 0.5 < Double(pick.macGB)
+            ? " It suits a Mac with \(pick.macGB) GB or more; this one has \(Int(memoryGB.rounded())) GB, so choose a lighter pick after." : ""
+        return "keepmum's pick, \(pick.name), downloads to Ollama and takes about \(Self.gb(pick.memoryGB)) while it answers.\(fit) Or add LM Studio, llama.cpp, MLX or another server."
+    }
+
+    /// A pick's menu item: its name, what it takes, and whether it downloads first or suits this Mac.
+    private func pickLabel(_ pick: Engine.LocalServers.Pick, have: [String]) -> String {
+        let star = pick.id == engine.localServers?.defaultPick ? " (recommended)" : ""
+        let size = have.contains(pick.model) ? "about \(Self.gb(pick.memoryGB)) in use" : "download \(Self.gb(pick.downloadGB))"
+        let fit = memoryGB + 0.5 < Double(pick.macGB) ? ", needs a \(pick.macGB) GB Mac" : ""
+        return "\(pick.name)\(star): \(size)\(fit)"
+    }
+
+    private func pickName(_ model: String) -> String? {
+        picks.first { $0.model == model }?.name
+    }
+
+    static func gb(_ x: Double) -> String { String(format: "%.1f GB", x) }
+
+    private func pullProgress(_ p: Double) -> some View {
+        HStack(spacing: Space.s) {
+            ProgressView(value: p).progressViewStyle(.linear).frame(width: 120)
+            Text("\(Int((p * 100).rounded()))%").font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                .frame(width: 40, alignment: .trailing)
+        }
+        .help("Downloading to Ollama")
+    }
+
     /// A model's name, short: a path's last part, or a Hugging Face cache folder's repo.
     static func shortName(_ model: String) -> String {
         guard model.hasPrefix("/") else { return model }
@@ -333,17 +397,36 @@ struct LocalServersSection: View {
     }
 
     @ViewBuilder private func modelMenu(_ n: Int, _ server: Engine.LocalServers.Server) -> some View {
-        let label = server.model.isEmpty ? "Choose model…" : Self.shortName(server.model)
-        if isSnapshot {
+        let label = server.model.isEmpty ? "Choose model…" : pickName(server.model) ?? Self.shortName(server.model)
+        let ollama = server.kind == "Ollama"
+        if let p = engine.localPull, p.server == n {
+            pullProgress(p.progress)
+        } else if isSnapshot {
             menuLabel(label)
         } else {
             Menu(label) {
-                if let have = server.models, !have.isEmpty {
-                    ForEach(have, id: \.self) { name in
-                        Button(Self.shortName(name)) { Task { await engine.setLocalServer(n, model: name) } }
+                if ollama, !picks.isEmpty {
+                    Section("keepmum's picks") {
+                        ForEach(picks) { pick in
+                            Button(pickLabel(pick, have: server.models ?? [])) {
+                                Task { await engine.pullLocalModel(pick.id, server: n) }
+                            }
+                            .help(pick.note)
+                        }
                     }
-                } else {
-                    Text(server.models == nil ? "Not answering" : "No models there yet")
+                }
+                Section(ollama ? "On this server" : "") {
+                    if let have = server.models, !have.isEmpty {
+                        ForEach(have, id: \.self) { name in
+                            Button(Self.shortName(name)) { Task { await engine.setLocalServer(n, model: name) } }
+                        }
+                    } else {
+                        Text(server.models == nil ? "Not answering" : "No models there yet")
+                    }
+                }
+                if ollama {
+                    Divider()
+                    Button("From Hugging Face or Ollama…") { pullRef = ""; pullQuant = ""; pullingTo = n }
                 }
             }
             .menuStyle(.borderlessButton).fixedSize()

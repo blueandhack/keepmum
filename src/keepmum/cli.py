@@ -778,10 +778,14 @@ def guard_local(ctx: typer.Context,
         rows.append({"url": server.url, "model": server.model, "checks": list(server.checks), "api": server.api,
                      "kind": name, "models": have, "problem": missing(server, have, name)})
     if as_json:
-        typer.echo(json.dumps({"servers": rows, "presets": [{"id": k, "name": n, "url": u} for k, (n, u) in PRESETS.items()]}))
+        from .localmodels import DEFAULT_PICK, picks_json
+
+        typer.echo(json.dumps({"servers": rows, "presets": [{"id": k, "name": n, "url": u} for k, (n, u) in PRESETS.items()],
+                               "picks": picks_json(), "default_pick": DEFAULT_PICK}))
         return
     if not rows:
-        typer.echo("no local servers: `keepmum guard local add --model qwen3:8b` (Ollama), or --preset lmstudio, llamacpp, mlx")
+        typer.echo("no local servers: `keepmum guard local pull` downloads keepmum's pick to Ollama and uses it "
+                   "(`keepmum guard local picks` lists the others), or `keepmum guard local add --preset lmstudio`, llamacpp, mlx")
         return
     for i, row in enumerate(rows, 1):
         checks = "" if len(row["checks"]) == 2 else f", {row['checks'][0]} only"
@@ -823,6 +827,89 @@ def guard_local_add(model: str = typer.Option("", "--model", help="The model the
     servers = [server, *cfg.guard_local_servers] if first else [*cfg.guard_local_servers, server]
     _save_servers(cfg, servers, f"keepmum guard local add --url {url}" + (f" --model {model}" if model else ""))
     typer.echo(f"local server {servers.index(server) + 1}: {model or '(no model yet)'} at {url}", err=True)
+
+
+@local_app.command("picks")
+def guard_local_picks(as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """keepmum's tested models for local mode, the default first, with what each costs."""
+    import json
+
+    from .localmodels import DEFAULT_PICK, PICKS, picks_json
+
+    if as_json:
+        typer.echo(json.dumps({"picks": picks_json(), "default_pick": DEFAULT_PICK}))
+        return
+    for p in PICKS:
+        typer.echo(f"{p.id}{' (default)' if p.id == DEFAULT_PICK else ''}: {p.name}")
+        typer.echo(f"   {p.model}")
+        typer.echo(f"   {p.download_gb:.1f} GB download, about {p.memory_gb:.1f} GB in use with a 32k context; "
+                   f"for a Mac with {p.mac_gb} GB or more. {p.note}")
+    typer.echo("`keepmum guard local pull <pick>` downloads one to Ollama and uses it. Any other model works too: "
+               "an Ollama name, or a Hugging Face GGUF repo (`keepmum guard local pull https://huggingface.co/owner/repo --quant Q4_K_M`).")
+
+
+@local_app.command("pull")
+def guard_local_pull(model: str = typer.Argument(None, help="A pick (`keepmum guard local picks`; default: keepmum's pick), "
+                                                  "a Hugging Face repo or link, or an Ollama name."),
+                     quant: str = typer.Option(None, "--quant", help="For a Hugging Face repo: which GGUF, such as Q4_K_M or IQ3_M."),
+                     server: int = typer.Option(None, "--server", help="The Ollama server's number (default: the first Ollama one)."),
+                     use: bool = typer.Option(True, "--use/--no-use", help="Make it that server's model once it is downloaded.")) -> None:
+    """Download a model to Ollama on this Mac, then use it for local mode."""
+    import dataclasses
+
+    from .local import DEFAULT_URL, Server, kind, models
+    from .localmodels import DEFAULT_PICK, PullError, pull, resolve
+
+    try:
+        name = resolve(model or DEFAULT_PICK, quant)
+    except PullError as e:
+        typer.echo(f"keepmum guard local pull: {e}", err=True)
+        raise typer.Exit(2)
+    cfg = _config()
+    servers = list(cfg.guard_local_servers)
+    if server is not None:
+        target = _server_at(cfg, server)
+        number = server
+    else:
+        number = next((i for i, x in enumerate(servers, 1) if kind(x.url) == "Ollama"), None)
+        target = servers[number - 1] if number else Server(DEFAULT_URL)
+    have = models(target.url)
+    if have is None:
+        typer.echo(f"keepmum guard local pull: nothing answers at {target.url}: open the Ollama app, or `ollama serve`", err=True)
+        raise typer.Exit(1)
+    if (what := kind(target.url)) != "Ollama":
+        typer.echo(f"keepmum guard local pull: {target.url} is {what}, and only Ollama downloads for keepmum: "
+                   f"download {name} there, then `keepmum guard local set {number} --model <its name>`", err=True)
+        raise typer.Exit(1)
+    if name in have or f"{name}:latest" in have:
+        typer.echo(f"{name}: already on Ollama", err=True)
+    else:
+        typer.echo(f"downloading {name} to Ollama at {target.url}", err=True)
+        last = [-1]
+
+        def progress(done: int, total: int) -> None:
+            pct = min(100, done * 100 // total)
+            if pct > last[0]:  # a layer announced later can lower the share; never show it going back
+                last[0] = pct
+                typer.echo(f"\r  {pct}% of {total / 1e9:.1f} GB", nl=False, err=True)
+
+        try:
+            pull(target.url, name, progress)
+        except PullError as e:
+            typer.echo(f"\nkeepmum guard local pull: {e}", err=True)
+            raise typer.Exit(1)
+        typer.echo(f"\n{name}: downloaded", err=True)
+    if not use:
+        return
+    if number:
+        servers[number - 1] = dataclasses.replace(target, model=name)
+    else:
+        servers.append(dataclasses.replace(target, model=name))
+        number = len(servers)
+    _save_servers(cfg, servers, f"keepmum guard local pull {name}")
+    typer.echo(f"local server {number}: {name} at {target.url}", err=True)
+    typer.echo("Tip: Ollama gives a model its longest context unless told otherwise, which takes several GB more. "
+               "65536 tokens is plenty: set it in Ollama's settings, or OLLAMA_CONTEXT_LENGTH=65536.", err=True)
 
 
 @local_app.command("set")

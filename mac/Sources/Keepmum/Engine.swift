@@ -152,8 +152,25 @@ final class Engine {
             var problem: String?
         }
         struct Preset: Decodable, Equatable, Identifiable { var id: String; var name: String; var url: String }
+        /// One of keepmum's tested models (`keepmum guard local picks`), as Ollama names it.
+        struct Pick: Decodable, Equatable, Identifiable {
+            var id: String
+            var name: String
+            var model: String
+            var downloadGB: Double
+            var memoryGB: Double
+            var macGB: Int
+            var note: String
+            enum CodingKeys: String, CodingKey {
+                case id, name, model, note, downloadGB = "download_gb", memoryGB = "memory_gb", macGB = "mac_gb"
+            }
+        }
         var servers: [Server]
         var presets: [Preset]
+        /// nil from older engines.
+        var picks: [Pick]?
+        var defaultPick: String?
+        enum CodingKeys: String, CodingKey { case servers, presets, picks, defaultPick = "default_pick" }
     }
     private(set) var localServers: LocalServers?
 
@@ -304,6 +321,8 @@ final class Engine {
     private(set) var download: Double?
     /// A check's model downloading: which (injection, harm small, harm 0.6b, harm 4b), and 0...1.
     private(set) var checkDownload: (what: String, progress: Double)?
+    /// A local model downloading to Ollama: the server's number (nil: a new one), the model, and 0...1.
+    private(set) var localPull: (server: Int?, model: String, progress: Double)?
     private(set) var busy = false
     /// The background service on its way up or down: from the click until it answers, or stops.
     enum ServiceChange { case starting, stopping }
@@ -539,6 +558,27 @@ final class Engine {
         if let model { args += ["--model", model] }
         for c in checks ?? [] { args += ["--check", c] }
         await act { try await self.check(args) }
+        await loadLocalServers()
+    }
+
+    /// Downloads a model to Ollama and makes it local server `number`'s model (`keepmum guard local
+    /// pull`): a pick's id, a Hugging Face repo or link (with `quant`), or an Ollama name. With no
+    /// number, the first Ollama server, or a new one at Ollama's usual URL. Progress from its
+    /// "NN% of N GB" lines.
+    func pullLocalModel(_ ref: String, quant: String? = nil, server number: Int? = nil) async {
+        await act {
+            self.localPull = (number, ref, 0)
+            defer { self.localPull = nil }
+            var args = ["guard", "local", "pull", ref]
+            if let quant, !quant.isEmpty { args += ["--quant", quant] }
+            if let number { args += ["--server", String(number)] }
+            let out = try await self.run(args) { line in
+                if let pct = line.split(separator: "%").first.flatMap({ Double($0.trimmingCharacters(in: .whitespaces)) }) {
+                    Task { @MainActor in if let p = self.localPull { self.localPull = (p.server, p.model, pct / 100) } }
+                }
+            }
+            if out.code != 0 { throw EngineError(out.lastLine) }
+        }
         await loadLocalServers()
     }
 
@@ -936,7 +976,14 @@ final class Engine {
             presets: [.init(id: "ollama", name: "Ollama", url: "http://localhost:11434"),
                       .init(id: "lmstudio", name: "LM Studio", url: "http://localhost:1234"),
                       .init(id: "llamacpp", name: "llama.cpp", url: "http://localhost:8080"),
-                      .init(id: "mlx", name: "MLX", url: "http://localhost:8080")])
+                      .init(id: "mlx", name: "MLX", url: "http://localhost:8080")],
+            picks: [.init(id: "recommended", name: "Qwen3.6 35B-A3B Uncensored (HauhauCS), IQ3_M",
+                          model: "hf.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M",
+                          downloadGB: 16.3, memoryGB: 16.1, macGB: 32, note: "The best balance in keepmum's tests."),
+                    .init(id: "light", name: "Qwen3.5 9B Defiant Fable (DavidAU), Q8_0",
+                          model: "hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q8_0",
+                          downloadGB: 11.4, memoryGB: 9.1, macGB: 24, note: "Slower on long answers.")],
+            defaultPick: "recommended")
         e.localSkills = .init(skills: [
             .init(path: NSHomeDirectory() + "/.claude/skills/careful-answers", checks: ["injection", "harm"], name: "careful-answers",
                   description: "How to answer when keepmum keeps a turn local.", chars: 412, problem: nil),

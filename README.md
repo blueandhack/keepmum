@@ -172,7 +172,10 @@ keepmum guard harm warn --model 4b   # switch the harm check to Qwen3Guard 4B, t
 keepmum guard commands block         # check the shell commands in the model's replies; no download
 keepmum guard sensitivity injection low          # fewer false alarms: high, medium (0.8, the default), low, lowest, or a number
 keepmum guard sensitivity harm low               # the harm check: high, medium (the default), low or lowest
-keepmum guard local add --model qwen3:8b             # Ollama: the model that answers flagged requests in local mode
+keepmum guard local pull                             # downloads keepmum's pick to Ollama and uses it for local mode
+keepmum guard local picks                            # the tested models, with their download and memory
+keepmum guard local pull https://huggingface.co/owner/repo --quant Q4_K_M   # any GGUF on Hugging Face, or an Ollama name
+keepmum guard local add --model qwen3:8b             # a model Ollama already has
 keepmum guard local add --preset lmstudio --model qwen/qwen3-14b --check harm   # another server, for one check
 keepmum guard local                                  # the servers, in the order tried, and the models each has
 keepmum guard local move 2 1 / set 1 --model … / remove 2
@@ -192,6 +195,17 @@ All three checks are off by default, and keepmum downloads the injection and har
 - **Commands** checks the other direction: the shell commands a model's reply asks your agent to run (Claude Code's Bash, Codex's shell tools and the commands in its code-mode scripts, Gemini CLI's `run_shell_command`, the Antigravity CLI's `run_command`). Seven rules, no model: a download run as a script (`curl … | sh`), decoded text run as a script, deleting your home folder or the system, erasing a disk, a fork bomb, and credential files or environment variables sent over the network. In warn mode the agent gets the command as written and the hit is logged; in block mode it gets, in its place, a command that prints why keepmum refused it and fails, so the model can explain or ask you. It reads only what keepmum restores, so not in observe mode.
 
 **Local** (injection and harm) checks first, like block, and sends a flagged request to a model on your Mac instead of the provider. The agent gets its answer, and later requests that still carry the flagged text go there too, until you rewind or `/clear`. The local model gets the request with its real values (it stays on your Mac) but never your API key, and no tools: a flagged request is the one most likely to carry instructions planted for the agent, and without tools the local model can only answer in text. A note in its instructions says why the turn came to it. Use a capable model (8B or larger): a small one may repeat a planted instruction as advice, or help with what the harm check flagged.
+
+**Which model.** `keepmum guard local pull` downloads keepmum's pick to Ollama and makes it the model for local mode; the Mac app's Settings › Checks › Local servers offers the same picks in each Ollama server's model menu. The picks are the models that did best in keepmum's tests of local mode, measured one at a time on an Apple silicon Mac:
+
+| Pick | Model | Download | In use, 32k context | For a Mac with |
+|---|---|---|---|---|
+| `recommended` (default) | Qwen3.6 35B-A3B Uncensored (HauhauCS), IQ3_M | 16.3 GB | 16.1 GB | 32 GB or more |
+| `larger` | the same, Q4_K_M | 22.1 GB | 21.7 GB | 64 GB or more |
+| `light` | Qwen3.5 9B Defiant Fable (DavidAU), Q8_0 | 11.4 GB | 9.1 GB | 24 GB or more |
+| `small` | the same, Q4_K_M | 7.7 GB | 5.9 GB | 16 GB or more |
+
+The recommended one passed every test run, writes about 85 tokens a second on an M5 Pro, and uses about 2 CPU cores while it answers and none while idle. Any other model works too: a name from Ollama's library (`qwen3:8b`), or a GGUF repo on Hugging Face, by its link or as `hf.co/owner/repo:QUANT` (`--quant` picks the file; a link to one .gguf file names its own). Only Ollama downloads for keepmum: in LM Studio, download the model there, then choose it. Ollama gives a model its longest context unless told otherwise, which can take several GB more: 65536 tokens is plenty, set in Ollama's settings or with `OLLAMA_CONTEXT_LENGTH=65536`. Ollama unloads a model after 5 minutes idle, so it takes memory only while flagged turns come in.
 
 Where it goes is a list of local servers (`keepmum guard local add`), each a URL on this Mac and a model there, for both checks or one (`--check harm`: a bigger model for harm, say). A flagged request goes to the first that answers for its check: one that is not running, lacks its model or answers with an error is passed over. If none answers, or none is set, the request is refused, never sent. Ollama (`--preset ollama`, the default), LM Studio (`lmstudio`) and llama.cpp's llama-server (`llamacpp`) speak the APIs Claude Code and Codex use, so the request goes as it is; a server that does not, such as `mlx_lm.server` (`mlx`), gets it as Chat Completions, earlier tool calls and results as text, and its answer goes back in the agent's API (`--api chat` asks that way from the start). Every agent can go local. No local server speaks Gemini's API, so the Antigravity CLI's and Gemini CLI's flagged turns always go as Chat Completions. The answer comes back in Gemini's format: wrapped as Code Assist wraps it when you're signed in with Google, and streamed when the agent asked for a stream. Only a token count (`countTokens`) with a flagged result is still refused, since a local model can't count for it.
 
