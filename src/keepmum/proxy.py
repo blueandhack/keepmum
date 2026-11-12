@@ -636,7 +636,7 @@ class Proxy:
                 self.handbacks.add(text, handback_notice(strategy, source), strategy)
             log.info("%s: the flagged result withheld; the request goes on to the cloud", path)
             return {"strategy": strategy}
-        skills = self.local_skills("injection") if callable(self.local_skills) else []
+        skills = self.local_skills("handback") if callable(self.local_skills) else []
         skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
         prompt = (texts.get("harm") or [(None, None, None)])[-1][1]
         done, server = [], None

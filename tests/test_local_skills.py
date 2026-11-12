@@ -195,7 +195,15 @@ def test_config_refuses_a_bad_skill_and_says_where(tmp_path, value, message):
 def test_config_keeps_checks_in_one_order_and_a_missing_file_is_not_an_error(tmp_path):
     assert parse_skills([{"path": "/gone.md", "checks": ["harm", "injection"]}], "x") == [Skill("/gone.md")]
     assert parse_skills([], "x") == [] and Skill("/a").as_toml() == {"path": "/a"}
-    assert Skill("/a", ("harm",)).as_toml() == {"path": "/a", "checks": ["harm"]}
+    assert Skill("/a", ("harm",)).as_toml() == {"path": "/a", "places": ["harm"]}
+    # The older checks: injection was both of its places.
+    assert parse_skills([{"path": "/a", "checks": ["injection"]}], "x") == [Skill("/a", ("injection", "handback"))]
+    assert parse_skills([{"path": "/a", "places": ["harm", "handback"]}], "x") == [Skill("/a", ("handback", "harm"))]
+    assert parse_skills([{"path": "/a", "places": []}], "x") == [Skill("/a", ())]  # parked
+    assert Skill("/a", ()).as_toml() == {"path": "/a", "places": []} and Skill("/a", ("handback",)).checks == ("injection",)
+    for bad in ([{"path": "/a", "places": ["cloud"]}], [{"path": "/a", "places": ["harm"], "checks": ["harm"]}]):
+        with pytest.raises(ValueError):
+            parse_skills(bad, "x")
 
 
 def test_the_audit_log_names_a_skill_for_one_check():
@@ -247,12 +255,12 @@ def test_the_cli_refuses_a_bad_check_or_number(cli, tmp_path):
 def test_the_cli_says_what_it_added_and_lists_it(cli, tmp_path):
     skill(tmp_path, "careful/SKILL.md", "---\nname: careful\ndescription: Be careful.\n---\nAnswer briefly.")
     r = cli.invoke(app, ["guard", "local", "skill", "add", str(tmp_path / "careful"), "--check", "harm"])
-    assert r.exit_code == 0 and "skill 1: careful (15 characters), for the harm check only" in r.output
+    assert r.exit_code == 0 and "skill 1: careful (15 characters), for answering a flagged request" in r.output
     copy = tmp_path / ".config" / "keepmum" / "skills" / "careful"
     listed = cli.invoke(app, ["guard", "local", "skill"]).stdout
-    assert "1. careful, for the harm check only" in listed and str(copy) in listed
+    assert "1. careful, for answering a flagged request" in listed and str(copy) in listed
     [row] = json.loads(cli.invoke(app, ["guard", "local", "skill", "--json"]).stdout)["skills"]
-    assert row == {"path": str(copy), "checks": ["harm"], "name": "careful", "description": "Be careful.", "chars": 15,
+    assert row == {"path": str(copy), "checks": ["harm"], "places": ["harm"], "name": "careful", "description": "Be careful.", "chars": 15,
                    "problem": None, "file": str(copy / "SKILL.md"), "owned": True}
 
 
@@ -274,7 +282,8 @@ def test_guard_status_lists_the_skills_for_the_app(cli, tmp_path):
     skill(tmp_path, "s.md", "Do it.")
     cli.invoke(app, ["guard", "local", "skill", "add", str(tmp_path / "s.md"), "--check", "injection"])
     status = json.loads(cli.invoke(app, ["guard", "--json"]).stdout)
-    assert status["local"]["skills"] == [{"path": str(tmp_path / ".config" / "keepmum" / "skills" / "s"), "checks": ["injection"]}]
+    assert status["local"]["skills"] == [{"path": str(tmp_path / ".config" / "keepmum" / "skills" / "s"), "checks": ["injection"],
+                                          "places": ["injection", "handback"]}]
 
 
 def test_a_chat_completions_server_gets_the_skills_through_the_proxy(tmp_path):
@@ -349,29 +358,45 @@ def test_editing_keeps_other_frontmatter_and_the_copy_leaves_the_original(cli, t
     assert (tmp_path / "src" / "review" / "SKILL.md").read_text() == original
 
 
-def test_the_example_skill_comes_once_with_the_first_local_mode(cli, tmp_path, monkeypatch):
+def test_the_example_skills_come_once_with_the_first_local_mode(cli, tmp_path, monkeypatch):
     from keepmum import cli as climod
-    from keepmum.local import EXAMPLE_NAME, EXAMPLE_TEXT, example_offered, skills_dir
+    from keepmum.local import EXAMPLES, example_offered, skills_dir
 
     monkeypatch.setattr(climod, "_missing", lambda check, size=None: None)
     monkeypatch.setattr(climod, "_local_missing", lambda cfg, check: None)
-    assert len(EXAMPLE_TEXT) < MAX_SKILL_CHARS
+    answer, summaries = (skills_dir() / ex.name for ex in EXAMPLES)
+    assert all(len(ex.text) < MAX_SKILL_CHARS for ex in EXAMPLES)
     r = cli.invoke(app, ["guard", "injection", "local"])
     assert r.exit_code == 0, r.output
-    folder = skills_dir() / EXAMPLE_NAME
-    assert "Added keepmum's example skill" in r.stderr and example_offered()
-    assert load(cli.config).guard_local_skills == [Skill(str(folder))]
-    assert read_skill(str(folder))["text"] == EXAMPLE_TEXT
-    # Deleted, it does not come back when a check goes local again.
-    assert cli.invoke(app, ["guard", "local", "skill", "remove", "1", "--delete"]).exit_code == 0
+    assert "Added keepmum's example skills" in r.stderr and example_offered()
+    # One for answering, one for summaries and rewrites: what suits an answer can spoil a summary.
+    assert load(cli.config).guard_local_skills == [Skill(str(answer), ("injection", "harm")), Skill(str(summaries), ("handback",))]
+    assert read_skill(str(answer))["text"] == EXAMPLES[0].text and read_skill(str(summaries))["text"] == EXAMPLES[1].text
+    # Deleted, they do not come back when a check goes local again.
+    for _ in EXAMPLES:
+        assert cli.invoke(app, ["guard", "local", "skill", "remove", "1", "--delete"]).exit_code == 0
     assert cli.invoke(app, ["guard", "harm", "local"]).exit_code == 0
-    assert load(cli.config).guard_local_skills == [] and not folder.exists()
-    # Asked for, it does; an edited copy is kept, and asking twice adds it once.
-    assert cli.invoke(app, ["guard", "local", "skill", "example", "--check", "harm"]).exit_code == 0
+    assert load(cli.config).guard_local_skills == [] and not answer.exists()
+    # Asked for, they do; an edited copy is kept, and asking twice adds them once.
+    assert cli.invoke(app, ["guard", "local", "skill", "example"]).exit_code == 0
     assert cli.invoke(app, ["guard", "local", "skill", "edit", "1", "--text", "Mine."]).exit_code == 0
     r = cli.invoke(app, ["guard", "local", "skill", "example"])
     assert r.exit_code == 0 and "already added" in r.stderr
-    assert load(cli.config).guard_local_skills == [Skill(str(folder), ("harm",))] and read_skill(str(folder))["text"] == "Mine."
+    assert len(load(cli.config).guard_local_skills) == 2 and read_skill(str(answer))["text"] == "Mine."
+
+
+def test_a_skill_can_be_moved_between_places_and_parked(cli, tmp_path):
+    assert cli.invoke(app, ["guard", "local", "skill", "new", "s", "--text", "Do it.", "--place", "handback"]).exit_code == 0
+    assert load(cli.config).guard_local_skills[0].places == ("handback",)
+    r = cli.invoke(app, ["guard", "local", "skill", "set", "1", "--off"])
+    assert r.exit_code == 0 and "parked" in r.stderr and load(cli.config).guard_local_skills[0].places == ()
+    assert "1. s, for nothing: parked" in cli.invoke(app, ["guard", "local", "skill"]).stdout
+    assert cli.invoke(app, ["guard", "local", "skill", "set", "1", "--place", "injection", "--place", "harm"]).exit_code == 0
+    assert load(cli.config).guard_local_skills[0].places == ("injection", "harm")
+    assert cli.invoke(app, ["guard", "local", "skill", "set", "1", "--check", "injection"]).exit_code == 0  # the older way
+    assert load(cli.config).guard_local_skills[0].places == ("injection", "handback")
+    for bad in (["--place", "cloud"], ["--place", "harm", "--off"], []):
+        assert cli.invoke(app, ["guard", "local", "skill", "set", "1", *bad]).exit_code == 2, bad
 
 
 def test_no_example_when_the_user_has_skills(cli, tmp_path, monkeypatch):

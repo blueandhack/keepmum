@@ -112,6 +112,7 @@ struct SkillsEditor: View {
             } else {
                 ScrollView { list }
             }
+            if !skills.isEmpty { sizes }
             Divider()
             HStack(spacing: Space.s) {
                 if isSnapshot {
@@ -148,6 +149,28 @@ struct SkillsEditor: View {
         .background(Theme.sidebar)
     }
 
+    /// What each place sends on every turn: the skills there, read now.
+    private var sizes: some View {
+        VStack(alignment: .leading, spacing: Space.xxs) {
+            Text("SENT ON EACH TURN").font(.km(.label)).tracking(0.6).foregroundStyle(Theme.textTertiary)
+            ForEach(Places.all, id: \.self) { place in
+                let there = skills.filter { $0.problem == nil && $0.goesTo.contains(place) }
+                let chars = there.reduce(0) { $0 + ($1.chars ?? 0) }
+                HStack(spacing: Space.xs) {
+                    Text(Places.short[place] ?? place).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                    Spacer(minLength: Space.xs)
+                    Text(there.isEmpty ? "none" : "\(there.count) \u{00B7} \(chars.formatted()) chars")
+                        .font(.km(.caption)).monospacedDigit()
+                        .foregroundStyle(chars > Places.longChars ? Theme.warning : Theme.textSecondary)
+                }
+                .help(chars > Places.longChars
+                      ? "Long: a small local model follows fewer rules well, and the skills take room from the conversation."
+                      : Places.details[place] ?? "")
+            }
+        }
+        .padding(.horizontal, Space.l).padding(.vertical, Space.s)
+    }
+
     private var list: some View {
         VStack(spacing: Space.xxs) {
             ForEach(Array(skills.enumerated()), id: \.offset) { i, skill in
@@ -177,8 +200,9 @@ struct SkillsEditor: View {
                 VStack(alignment: .leading, spacing: Space.xxs) {
                     Text(skill.name ?? (skill.path as NSString).lastPathComponent).font(.km(.body))
                         .foregroundStyle(Theme.text).lineLimit(1).truncationMode(.tail)
-                    Text(skill.problem == nil ? Self.checksText(skill.checks) : "Left out: can\u{2019}t be read")
-                        .font(.km(.caption)).foregroundStyle(skill.problem == nil ? Theme.textSecondary : Theme.warning)
+                    Text(skill.problem == nil ? Places.summary(skill.goesTo) : "Left out: can\u{2019}t be read")
+                        .font(.km(.caption))
+                        .foregroundStyle(skill.problem != nil ? Theme.warning : skill.goesTo.isEmpty ? Theme.textTertiary : Theme.textSecondary)
                 }
                 Spacer(minLength: 0)
                 if skill.owned == false {
@@ -192,10 +216,6 @@ struct SkillsEditor: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    static func checksText(_ checks: [String]) -> String {
-        checks.count == 2 ? "Both checks" : checks.first == "harm" ? "Harm check only" : "Injection check only"
     }
 
     // MARK: The skill
@@ -237,16 +257,11 @@ struct SkillsEditor: View {
                     TextField("Description", text: $summary).textFieldStyle(.roundedBorder).labelsHidden()
                 }
             }
-            field("Used on", hint: "The checks whose local turns get it. Saved at once.") {
-                Segmented(options: [("both", "Both checks"), ("injection", "Injection only"), ("harm", "Harm only")],
-                          selection: Binding(get: { skill.checks.count == 2 ? "both" : skill.checks[0] },
-                                             set: { new in
-                                                 guard let n = selection else { return }
-                                                 let checks = new == "both" ? ["injection", "harm"] : [new]
-                                                 Task { await engine.setLocalSkill(n, checks: checks) }
-                                             }))
-                .fixedSize()
-                .disabled(!engine.isBundled || engine.busy)
+            field("Used for", hint: skill.goesTo.isEmpty ? "Parked: sent nowhere until you tick a place. Saved at once."
+                                                         : "The local turns that get it. Saved at once.") {
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    ForEach(Places.all, id: \.self) { place in placeBox(place, skill) }
+                }
             }
             VStack(alignment: .leading, spacing: Space.xs) {
                 Text("Instructions").font(.km(.headline)).foregroundStyle(Theme.text)
@@ -359,6 +374,27 @@ struct SkillsEditor: View {
         assistError = nil
     }
 
+    private func placeBox(_ place: String, _ skill: Engine.LocalSkills.Skill) -> some View {
+        let on = skill.goesTo.contains(place)
+        return Button {
+            guard let n = selection else { return }
+            let next = Places.all.filter { $0 == place ? !on : skill.goesTo.contains($0) }
+            Task { await engine.setLocalSkill(n, places: next) }
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                Image(systemName: on ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(on ? Theme.accent : Theme.textSecondary)
+                Text(Places.names[place] ?? place).font(.km(.body)).foregroundStyle(Theme.text)
+                Text(Places.details[place] ?? "").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!engine.isBundled || engine.busy)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
     private func field(_ title: String, hint: String, @ViewBuilder control: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             HStack(alignment: .firstTextBaseline, spacing: Space.s) {
@@ -459,6 +495,32 @@ struct SkillsEditor: View {
             }
         }
     }
+}
+
+/// Where a skill goes, on the turns keepmum keeps on this Mac (local.PLACES). The two injection
+/// places need different instructions: what suits an answer can spoil a summary.
+enum Places {
+    static let all = ["injection", "handback", "harm"]
+    static let names = ["injection": "Answering a flagged tool result", "handback": "Summaries and rewrites for the cloud",
+                        "harm": "Answering a flagged request"]
+    static let details = ["injection": "The injection check kept the turn on this Mac, and the local model answers it.",
+                          "handback": "The local model writes what the cloud model reads in a flagged result\u{2019}s place.",
+                          "harm": "The harm check kept what you typed on this Mac, and the local model answers it."]
+    static let short = ["injection": "Tool results", "handback": "Summaries", "harm": "Requests"]
+
+    /// What an older engine's checks meant: injection was both of its places.
+    static func of(checks: [String]) -> [String] {
+        all.filter { checks.contains($0 == "harm" ? "harm" : "injection") }
+    }
+
+    static func summary(_ places: [String]) -> String {
+        if places.isEmpty { return "Parked" }
+        if Set(places) == Set(all) { return "Every local turn" }
+        return all.filter(places.contains).compactMap { short[$0] }.joined(separator: " + ")
+    }
+
+    /// More than this, in one place, is a lot of rules for a small local model to follow.
+    static let longChars = 8_000
 }
 
 /// Opening the Skills window from Settings, on one skill or none.

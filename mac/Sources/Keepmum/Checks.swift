@@ -547,7 +547,7 @@ struct LocalServersSection: View {
 
 /// Settings › Checks, under the local servers: the user's skills for local turns (`keepmum guard
 /// local skill`). Each is a SKILL.md, or a folder holding one, read on every local turn and given to
-/// the local model after keepmum's note, for both checks or one.
+/// the local model after keepmum's note, in the places the user chose (Places).
 struct LocalSkillsSection: View {
     var engine: Engine
     @Environment(\.isSnapshot) private var isSnapshot
@@ -561,7 +561,7 @@ struct LocalSkillsSection: View {
 
     var body: some View {
         FormSection(title: "Skills for local turns",
-                    footer: "Your own instructions for the local model, in Claude Code's SKILL.md format, kept in keepmum's folder (~/.config/keepmum/skills): write, import, edit and delete them in the Skills window. An imported skill is copied there, so editing it leaves the original alone. Each local turn of the checks a skill is for gets its text after keepmum's note, which says why the turn stayed on this Mac and that the model has no tools. Edits apply on the next turn; one that cannot be read, or is over 20,000 characters, is left out.") {
+                    footer: "Your own instructions for the local model, in Claude Code's SKILL.md format, kept in keepmum's folder (~/.config/keepmum/skills): write, import, edit and delete them in the Skills window. An imported skill is copied there, so editing it leaves the original alone. Each skill goes where you choose: answering a flagged tool result, summaries and rewrites for the cloud, or answering a flagged request (none: parked). Each local turn there gets its text after keepmum's note, which says why the turn stayed on this Mac and that the model has no tools. Edits apply on the next turn; one that cannot be read, or is over 20,000 characters, is left out.") {
             if rows.isEmpty {
                 FormRow(title: "No skills", detail: "Local models get keepmum's note and the agent's own instructions. keepmum's example says how to answer on these turns: a starting point to edit.") {
                     HStack(spacing: Space.s) {
@@ -596,7 +596,7 @@ struct LocalSkillsSection: View {
             .contentShape(Rectangle())
             .onTapGesture { if !isSnapshot { SkillsWindow.show(openWindow, engine: engine, skill: n) } }
             Spacer(minLength: Space.m)
-            checksMenu(n, skill)
+            placesMenu(n, skill)
             moreMenu(n, skill)
         }
         .padding(.vertical, Space.s)
@@ -604,27 +604,35 @@ struct LocalSkillsSection: View {
 
     private func detail(_ skill: Engine.LocalSkills.Skill) -> String {
         if let problem = skill.problem { return "Left out: " + problem }
+        if skill.goesTo.isEmpty { return "Parked: kept, but sent nowhere" }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let path = skill.path.hasPrefix(home) ? "~" + skill.path.dropFirst(home.count) : skill.path
         return skill.description.isEmpty ? path : "\(skill.description) · \(path)"
     }
 
-    @ViewBuilder private func checksMenu(_ n: Int, _ skill: Engine.LocalSkills.Skill) -> some View {
-        let label = skill.checks.count == 2 ? "Both" : skill.checks.first == "harm" ? "Harm" : "Injection"
+    @ViewBuilder private func placesMenu(_ n: Int, _ skill: Engine.LocalSkills.Skill) -> some View {
+        let label = Places.summary(skill.goesTo)
         if isSnapshot {
             HStack(spacing: Space.xxs) {
-                Text(label).font(.km(.callout)).foregroundStyle(Theme.text)
+                Text(label).font(.km(.callout)).foregroundStyle(skill.goesTo.isEmpty ? Theme.textSecondary : Theme.text)
                 Image(systemName: "chevron.down").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
             }
         } else {
             Menu(label) {
-                Button("Both checks") { Task { await engine.setLocalSkill(n, checks: ["injection", "harm"]) } }
-                Button("Injection only") { Task { await engine.setLocalSkill(n, checks: ["injection"]) } }
-                Button("Harm only") { Task { await engine.setLocalSkill(n, checks: ["harm"]) } }
+                ForEach(Places.all, id: \.self) { place in
+                    Toggle(Places.names[place] ?? place, isOn: Binding(
+                        get: { skill.goesTo.contains(place) },
+                        set: { on in
+                            let next = Places.all.filter { $0 == place ? on : skill.goesTo.contains($0) }
+                            Task { await engine.setLocalSkill(n, places: next) }
+                        }))
+                }
+                Divider()
+                Button("Park It") { Task { await engine.setLocalSkill(n, places: []) } }.disabled(skill.goesTo.isEmpty)
             }
             .menuStyle(.borderlessButton).fixedSize()
             .disabled(!engine.isBundled || engine.busy)
-            .help("Which checks' local turns get this skill")
+            .help("The local turns that get this skill. None: parked, kept but sent nowhere.")
         }
     }
 

@@ -549,7 +549,7 @@ def _guard_status() -> dict:
         "commands": {"mode": cfg.guard_commands, "rules": [label for _, label, _ in RULES + SENDS]},
         "local": {"servers": [{"url": x.url, "model": x.model, "checks": list(x.checks), "api": x.api}
                               for x in cfg.guard_local_servers],
-                  "skills": [{"path": x.path, "checks": list(x.checks)} for x in cfg.guard_local_skills],
+                  "skills": [{"path": x.path, "checks": list(x.checks), "places": list(x.places)} for x in cfg.guard_local_skills],
                   "handback": cfg.guard_local_handback, "handback_instructions": cfg.guard_local_handback_instructions},
         "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
                  "installed": {size: harm.installed(size) for size in harm.SIZES},
@@ -707,18 +707,19 @@ def _set_mode(check: str, mode: str, model: str | None = None) -> None:
 
 def _first_example(cfg) -> None:
     """The first time a check goes local with no skills, keepmum's example skill comes with it."""
-    from .local import CHECKS, Skill, add_example, example_offered
+    from .local import Skill, add_example, example_offered
 
     if cfg.guard_local_skills or example_offered():
         return
     try:
-        folder = add_example()
+        added = add_example()
     except OSError as e:
-        typer.echo(f"note: keepmum's example skill could not be written: {e}", err=True)
+        typer.echo(f"note: keepmum's example skills could not be written: {e}", err=True)
         return
-    _save_skills(cfg, [Skill(str(folder), CHECKS)], "keepmum guard local skill example")
-    typer.echo(f"Added keepmum's example skill for local turns, {folder}: edit it, or delete it "
-               "(`keepmum guard local skill`, or the Skills window in the Mac app). It is not added again.", err=True)
+    _save_skills(cfg, [Skill(str(folder), places) for folder, places in added], "keepmum guard local skill example")
+    typer.echo(f"Added keepmum's example skills for local turns, in {added[0][0].parent}: one for answering, one for summaries "
+               "and rewrites. Edit them, or delete them (`keepmum guard local skill`, or the Skills window in the Mac app). "
+               "They are not added again.", err=True)
 
 
 @guard_app.command("injection")
@@ -1100,8 +1101,31 @@ def _skill_at(cfg, number: int):
     return cfg.guard_local_skills[number - 1]
 
 
-def _skill_checks(checks: tuple[str, ...]) -> str:
-    return "both checks" if len(checks) == 2 else f"the {checks[0]} check only"
+def _places_text(places) -> str:
+    from .local import PLACE_NAMES, PLACES
+
+    if not places:
+        return "nothing: parked"
+    if tuple(places) == PLACES:
+        return "every local turn"
+    return ", ".join(PLACE_NAMES[p] for p in places)
+
+
+def _skill_places(check: list[str] | None, place: list[str] | None, off: bool = False) -> tuple[str, ...] | None:
+    """The places asked for: --place, the older --check, or --off (none); None if not asked."""
+    from .local import PLACES, places_of_checks
+
+    if sum(bool(x) for x in (check, place, off)) > 1:
+        typer.echo("keepmum guard local skill: give --place, --check or --off, one of them", err=True)
+        raise typer.Exit(2)
+    if off:
+        return ()
+    if place:
+        if bad := [p for p in place if p not in PLACES]:
+            typer.echo(f"keepmum guard local skill: --place {bad[0]}: use injection, handback or harm", err=True)
+            raise typer.Exit(2)
+        return tuple(p for p in PLACES if p in place)
+    return places_of_checks(_checks_option(check)) if check else None
 
 
 @skill_app.callback()
@@ -1115,7 +1139,7 @@ def guard_local_skill(ctx: typer.Context, as_json: bool = typer.Option(False, "-
         return
     rows = []
     for skill in _config().guard_local_skills:
-        row = {"path": skill.path, "checks": list(skill.checks), "name": None, "description": "", "chars": None, "problem": None,
+        row = {"path": skill.path, "checks": list(skill.checks), "places": list(skill.places), "name": None, "description": "", "chars": None, "problem": None,
                "file": str(skill_file(skill.path)), "owned": owned(skill.path)}
         try:
             s = read_skill(skill.path)
@@ -1131,7 +1155,7 @@ def guard_local_skill(ctx: typer.Context, as_json: bool = typer.Option(False, "-
                    f"({skills_dir()}), or `keepmum guard local skill add <path>` copies a SKILL.md, or a folder holding one, there")
         return
     for i, row in enumerate(rows, 1):
-        typer.echo(f"{i}. {row['name'] or row['path']}, for {_skill_checks(tuple(row['checks']))}")
+        typer.echo(f"{i}. {row['name'] or row['path']}, for {_places_text(row['places'])}")
         typer.echo(f"   {row['path']}" + (f" ({row['chars']:,} characters)" if row["chars"] is not None else ""))
         if row["problem"]:
             typer.echo(f"   left out: {row['problem']}")
@@ -1139,7 +1163,8 @@ def guard_local_skill(ctx: typer.Context, as_json: bool = typer.Option(False, "-
 
 @skill_app.command("add")
 def guard_local_skill_add(path: str = typer.Argument(..., help="A SKILL.md, or a folder holding one."),
-                          check: list[str] = typer.Option(None, "--check", help="Only for this check: injection or harm (repeat for both; default both)."),
+                          place: list[str] = typer.Option(None, "--place", help="Where it goes: injection (answering a flagged tool result), handback (a summary or rewrite for the cloud), harm (answering a flagged request); repeat for more. Default all three."),
+                          check: list[str] = typer.Option(None, "--check", help="The older way: injection (both its places) or harm."),
                           in_place: bool = typer.Option(False, "--in-place", help="Use it where it is, instead of a copy in keepmum's folder.")) -> None:
     """Add a skill for local turns: copied into keepmum's folder, so editing it there leaves the original alone
     (or change the checks of one already added)."""
@@ -1147,7 +1172,7 @@ def guard_local_skill_add(path: str = typer.Argument(..., help="A SKILL.md, or a
     import shutil
     from pathlib import Path
 
-    from .local import CHECKS, SKILL_FILE, Skill, owned, read_skill, skill_folder
+    from .local import PLACES, SKILL_FILE, Skill, owned, read_skill, skill_folder
 
     full = str(Path(path).expanduser().resolve())
     try:
@@ -1157,7 +1182,8 @@ def guard_local_skill_add(path: str = typer.Argument(..., help="A SKILL.md, or a
         raise typer.Exit(2)
     cfg = _config()
     skills = list(cfg.guard_local_skills)
-    checks = _checks_option(check) or CHECKS
+    places = _skill_places(check, place)
+    places = PLACES if places is None else places
     at = next((i for i, x in enumerate(skills) if str(Path(x.path).expanduser().resolve()) == full), None)
     if at is None and not in_place and not owned(full):
         source, folder = Path(full), skill_folder(s["name"])
@@ -1173,25 +1199,32 @@ def guard_local_skill_add(path: str = typer.Argument(..., help="A SKILL.md, or a
         typer.echo(f"copied to {folder}: edits there leave {full} as it is", err=True)
         full = str(folder)
     if at is None:
-        skills.append(Skill(full, checks))
+        skills.append(Skill(full, places))
         at = len(skills) - 1
     else:
-        skills[at] = dataclasses.replace(skills[at], checks=checks)
+        skills[at] = dataclasses.replace(skills[at], places=places)
     _save_skills(cfg, skills, f"keepmum guard local skill add {full}")
-    typer.echo(f"skill {at + 1}: {s['name']} ({len(s['text']):,} characters), for {_skill_checks(checks)}", err=True)
+    typer.echo(f"skill {at + 1}: {s['name']} ({len(s['text']):,} characters), for {_places_text(places)}", err=True)
 
 
 @skill_app.command("set")
 def guard_local_skill_set(number: int = typer.Argument(..., help="The skill's number in `keepmum guard local skill`."),
-                          check: list[str] = typer.Option(..., "--check", help="For this check: injection or harm (repeat for both).")) -> None:
-    """Change which checks' local turns get a skill."""
+                          place: list[str] = typer.Option(None, "--place", help="Where it goes: injection (answering a flagged tool result), handback (a summary or rewrite for the cloud), harm (answering a flagged request); repeat for more. Default all three."),
+                          check: list[str] = typer.Option(None, "--check", help="The older way: injection (both its places) or harm."),
+                          off: bool = typer.Option(False, "--off", help="Park it: kept, but sent nowhere.")) -> None:
+    """Change where a skill goes: its places, or none (parked)."""
     import dataclasses
 
+    places = _skill_places(check, place, off)
+    if places is None:
+        typer.echo("keepmum guard local skill set: give --place (repeat for more), or --off", err=True)
+        raise typer.Exit(2)
     cfg = _config()
     skill = _skill_at(cfg, number)
     skills = list(cfg.guard_local_skills)
-    skills[number - 1] = dataclasses.replace(skill, checks=_checks_option(check))
+    skills[number - 1] = dataclasses.replace(skill, places=places)
     _save_skills(cfg, skills, f"keepmum guard local skill set {number}")
+    typer.echo(f"skill {number}: for {_places_text(places)}", err=True)
 
 
 @skill_app.command("remove")
@@ -1247,12 +1280,14 @@ def guard_local_skill_new(name: str = typer.Argument(..., help="Its name: what t
                           description: str = typer.Option("", "--description", help="One line on what it is for."),
                           text: str = typer.Option(None, "--text", help="Its instructions (default: a starting point to edit)."),
                           text_file: str = typer.Option(None, "--text-file", help="The same, read from a file."),
-                          check: list[str] = typer.Option(None, "--check", help="Only for this check: injection or harm (repeat for both; default both).")) -> None:
+                          place: list[str] = typer.Option(None, "--place", help="Where it goes: injection (answering a flagged tool result), handback (a summary or rewrite for the cloud), harm (answering a flagged request); repeat for more. Default all three."),
+                          check: list[str] = typer.Option(None, "--check", help="The older way: injection (both its places) or harm.")) -> None:
     """Write a new skill in keepmum's folder and add it."""
-    from .local import CHECKS, Skill, skill_folder, write_skill
+    from .local import PLACES, Skill, skill_folder, write_skill
 
     body = _skill_text(text, text_file, "keepmum guard local skill new")
-    checks = _checks_option(check) or CHECKS
+    places = _skill_places(check, place)
+    places = PLACES if places is None else places
     folder = skill_folder(name)
     try:
         write_skill(str(folder), name, description, _STARTER if body is None else body)
@@ -1260,9 +1295,9 @@ def guard_local_skill_new(name: str = typer.Argument(..., help="Its name: what t
         typer.echo(f"keepmum guard local skill new: {e}", err=True)
         raise typer.Exit(2 if isinstance(e, ValueError) else 1)
     cfg = _config()
-    skills = [*cfg.guard_local_skills, Skill(str(folder), checks)]
+    skills = [*cfg.guard_local_skills, Skill(str(folder), places)]
     _save_skills(cfg, skills, f"keepmum guard local skill new {folder}")
-    typer.echo(f"skill {len(skills)}: {name}, for {_skill_checks(checks)}, in {folder}", err=True)
+    typer.echo(f"skill {len(skills)}: {name}, for {_places_text(places)}, in {folder}", err=True)
 
 
 @skill_app.command("edit")
@@ -1363,26 +1398,29 @@ def guard_local_skill_assist(request: str = typer.Option(..., "--request", help=
 
 
 @skill_app.command("example")
-def guard_local_skill_example(check: list[str] = typer.Option(None, "--check", help="Only for this check: injection or harm (repeat for both; default both).")) -> None:
-    """Add keepmum's example skill: how to answer on a turn keepmum kept on this Mac. A starting point to edit."""
+def guard_local_skill_example() -> None:
+    """Add keepmum's example skills: one for answering on a turn kept on this Mac, one for summaries and
+    rewrites for the cloud. Starting points to edit; ones already there are kept as they are."""
     from pathlib import Path
 
-    from .local import CHECKS, EXAMPLE_NAME, Skill, add_example
+    from .local import Skill, add_example
 
     try:
-        folder = add_example()
+        added = add_example()
     except OSError as e:
         typer.echo(f"keepmum guard local skill example: {e}", err=True)
         raise typer.Exit(1)
     cfg = _config()
     skills = list(cfg.guard_local_skills)
-    if any(Path(x.path).expanduser().resolve() == folder.resolve() for x in skills):
-        typer.echo(f"keepmum's example skill is already added: {folder}", err=True)
+    have = {Path(x.path).expanduser().resolve() for x in skills}
+    new = [Skill(str(folder), places) for folder, places in added if folder.resolve() not in have]
+    if not new:
+        typer.echo(f"keepmum's example skills are already added, in {added[0][0].parent}", err=True)
         return
-    checks = _checks_option(check) or CHECKS
-    skills.append(Skill(str(folder), checks))
+    skills += new
     _save_skills(cfg, skills, "keepmum guard local skill example")
-    typer.echo(f"skill {len(skills)}: {EXAMPLE_NAME}, for {_skill_checks(checks)}, in {folder}", err=True)
+    for x in new:
+        typer.echo(f"skill {skills.index(x) + 1}: {Path(x.path).name}, for {_places_text(x.places)}", err=True)
 
 
 @skill_app.command("show")
@@ -1400,7 +1438,7 @@ def guard_local_skill_show(number: int = typer.Argument(..., help="The skill's n
         typer.echo(f"keepmum guard local skill show: {e}", err=True)
         raise typer.Exit(1)
     if as_json:
-        typer.echo(json.dumps(s | {"checks": list(skill.checks), "owned": owned(skill.path)}))
+        typer.echo(json.dumps(s | {"checks": list(skill.checks), "places": list(skill.places), "owned": owned(skill.path)}))
         return
     typer.echo(f"{s['name']}" + (f": {s['description']}" if s["description"] else "") + f"\n{s['file']}\n\n{s['text']}")
 

@@ -264,7 +264,8 @@ def config_state(cfg) -> dict:
         "local_servers": [f"{x.model or '(no model)'} at {x.url}"
                           + ("" if tuple(x.checks) == ("injection", "harm") else f" for {', '.join(x.checks)}")
                           + ("" if x.api == "auto" else f" ({x.api})") for x in cfg.guard_local_servers],
-        "local_skills": [x.path + ("" if tuple(x.checks) == ("injection", "harm") else f" for {', '.join(x.checks)}")
+        "local_skills": [x.path + ("" if tuple(x.places) == ("injection", "handback", "harm")
+                                   else f" for {', '.join(x.places)}" if x.places else " (parked)")
                          for x in cfg.guard_local_skills],
         "local_handback": cfg.guard_local_handback,
         "local_handback_instructions": (_fingerprint("string", cfg.guard_local_handback_instructions)

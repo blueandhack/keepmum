@@ -121,13 +121,16 @@ def test_a_summary_without_a_user_message_asks_without_one():
     assert "<message>\nfix it\n</message>" in asked[1]["content"] and "The tool result:" in asked[1]["content"]
 
 
-def test_the_injection_skills_follow_the_instruction_for_a_summary(tmp_path):
-    (tmp_path / "inj.md").write_text("INJECTION-SKILL keep file paths.")
+def test_the_handback_skills_follow_the_instruction_for_a_summary(tmp_path):
+    (tmp_path / "back.md").write_text("HANDBACK-SKILL keep file paths.")
+    (tmp_path / "answer.md").write_text("ANSWER-SKILL say what it asked for.")
     (tmp_path / "harm.md").write_text("HARM-SKILL.")
-    skills = [Skill(str(tmp_path / "inj.md"), ("injection",)), Skill(str(tmp_path / "harm.md"), ("harm",))]
+    skills = [Skill(str(tmp_path / "back.md"), ("handback",)), Skill(str(tmp_path / "answer.md"), ("injection",)),
+              Skill(str(tmp_path / "harm.md"), ("harm",))]
     rs, seen, _ = run("local", [conversation(ATTACK)], local=writes("ok"), handback=("summary", "Mine first."), skills=skills)
     system = seen["local"][0][3]["messages"][0]["content"]
-    assert system.startswith("Mine first.") and "INJECTION-SKILL" in system and "HARM-SKILL" not in system
+    assert system.startswith("Mine first.") and "HANDBACK-SKILL" in system
+    assert "ANSWER-SKILL" not in system and "HARM-SKILL" not in system  # an answer's rules stay out of a summary
 
 
 # --- When it stays local ------------------------------------------------------------------------------

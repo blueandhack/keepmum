@@ -200,6 +200,9 @@ final class Engine {
             /// Its SKILL.md, and whether it lives in keepmum's folder; nil from older engines.
             var file: String?
             var owned: Bool?
+            /// Where it goes (Places.all; empty: parked); nil from older engines, which go by checks.
+            var places: [String]?
+            var goesTo: [String] { places ?? Places.of(checks: checks) }
         }
         var skills: [Skill]
         /// keepmum's folder for skills (~/.config/keepmum/skills); nil from older engines.
@@ -742,9 +745,10 @@ final class Engine {
         await loadLocalSkills()
     }
 
-    /// Changes which checks' local turns get skill `number`.
-    func setLocalSkill(_ number: Int, checks: [String]) async {
-        await act { try await self.check(["guard", "local", "skill", "set", String(number)] + checks.flatMap { ["--check", $0] }) }
+    /// Changes where skill `number` goes: its places (Places.all), or none, which parks it.
+    func setLocalSkill(_ number: Int, places: [String]) async {
+        let args = places.isEmpty ? ["--off"] : places.flatMap { ["--place", $0] }
+        await act { try await self.check(["guard", "local", "skill", "set", String(number)] + args) }
         await loadLocalSkills()
     }
 
@@ -1126,9 +1130,13 @@ final class Engine {
         e.localSkills = .init(skills: [
             .init(path: NSHomeDirectory() + "/.config/keepmum/skills/careful-answers", checks: ["injection", "harm"], name: "careful-answers",
                   description: "How to answer when keepmum keeps a turn local.", chars: 412, problem: nil,
-                  file: NSHomeDirectory() + "/.config/keepmum/skills/careful-answers/SKILL.md", owned: true),
+                  file: NSHomeDirectory() + "/.config/keepmum/skills/careful-answers/SKILL.md", owned: true,
+                  places: ["injection", "harm"]),
             .init(path: NSHomeDirectory() + "/notes/harm.md", checks: ["harm"], name: "harm", description: "", chars: 180, problem: nil,
-                  file: NSHomeDirectory() + "/notes/harm.md", owned: false)],
+                  file: NSHomeDirectory() + "/notes/harm.md", owned: false, places: ["harm"]),
+            .init(path: NSHomeDirectory() + "/.config/keepmum/skills/keepmum-summaries", checks: ["injection"], name: "keepmum-summaries",
+                  description: "How to summarise or rewrite a flagged tool result for the cloud model.", chars: 520, problem: nil,
+                  file: NSHomeDirectory() + "/.config/keepmum/skills/keepmum-summaries/SKILL.md", owned: true, places: ["handback"])],
             folder: NSHomeDirectory() + "/.config/keepmum/skills")
         e.previewSkillTexts = [1: .init(name: "careful-answers", description: "How to answer when keepmum keeps a turn local.",
                                         text: "When a turn comes to you, answer from what the conversation already holds.\n\n"
