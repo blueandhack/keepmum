@@ -347,3 +347,39 @@ def test_editing_keeps_other_frontmatter_and_the_copy_leaves_the_original(cli, t
     assert "allowed-tools: Read, Grep" in text and (copy / "notes.txt").read_text() == "kept"
     assert read_skill(str(copy))["description"] == "New: with a colon"
     assert (tmp_path / "src" / "review" / "SKILL.md").read_text() == original
+
+
+def test_the_example_skill_comes_once_with_the_first_local_mode(cli, tmp_path, monkeypatch):
+    from keepmum import cli as climod
+    from keepmum.local import EXAMPLE_NAME, EXAMPLE_TEXT, example_offered, skills_dir
+
+    monkeypatch.setattr(climod, "_missing", lambda check, size=None: None)
+    monkeypatch.setattr(climod, "_local_missing", lambda cfg, check: None)
+    assert len(EXAMPLE_TEXT) < MAX_SKILL_CHARS
+    r = cli.invoke(app, ["guard", "injection", "local"])
+    assert r.exit_code == 0, r.output
+    folder = skills_dir() / EXAMPLE_NAME
+    assert "Added keepmum's example skill" in r.stderr and example_offered()
+    assert load(cli.config).guard_local_skills == [Skill(str(folder))]
+    assert read_skill(str(folder))["text"] == EXAMPLE_TEXT
+    # Deleted, it does not come back when a check goes local again.
+    assert cli.invoke(app, ["guard", "local", "skill", "remove", "1", "--delete"]).exit_code == 0
+    assert cli.invoke(app, ["guard", "harm", "local"]).exit_code == 0
+    assert load(cli.config).guard_local_skills == [] and not folder.exists()
+    # Asked for, it does; an edited copy is kept, and asking twice adds it once.
+    assert cli.invoke(app, ["guard", "local", "skill", "example", "--check", "harm"]).exit_code == 0
+    assert cli.invoke(app, ["guard", "local", "skill", "edit", "1", "--text", "Mine."]).exit_code == 0
+    r = cli.invoke(app, ["guard", "local", "skill", "example"])
+    assert r.exit_code == 0 and "already added" in r.stderr
+    assert load(cli.config).guard_local_skills == [Skill(str(folder), ("harm",))] and read_skill(str(folder))["text"] == "Mine."
+
+
+def test_no_example_when_the_user_has_skills(cli, tmp_path, monkeypatch):
+    from keepmum import cli as climod
+    from keepmum.local import example_offered
+
+    monkeypatch.setattr(climod, "_missing", lambda check, size=None: None)
+    monkeypatch.setattr(climod, "_local_missing", lambda cfg, check: None)
+    assert cli.invoke(app, ["guard", "local", "skill", "new", "mine", "--text", "Mine."]).exit_code == 0
+    assert cli.invoke(app, ["guard", "injection", "local"]).exit_code == 0
+    assert [s.path.rsplit("/", 1)[-1] for s in load(cli.config).guard_local_skills] == ["mine"] and not example_offered()

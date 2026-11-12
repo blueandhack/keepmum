@@ -658,6 +658,14 @@ final class Engine {
         await loadLocalSkills()
     }
 
+    /// Adds keepmum's example skill (`keepmum guard local skill example`): a starting point to edit.
+    /// Its number, or nil.
+    func addExampleSkill() async -> Int? {
+        await act { try await self.check(["guard", "local", "skill", "example"]) }
+        await loadLocalSkills()
+        return localSkills?.skills.firstIndex { ($0.path as NSString).lastPathComponent == "keepmum-local-turns" }.map { $0 + 1 }
+    }
+
     /// Skill `number`'s name, description and instructions, for the Skills window.
     func loadSkillText(_ number: Int) async -> SkillText? {
         if previewing { return previewSkillTexts[number] }

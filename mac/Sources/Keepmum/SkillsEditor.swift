@@ -120,6 +120,8 @@ struct SkillsEditor: View {
                     Menu {
                         Button("New Skill…") { newName = ""; naming = true }
                         Button("Import a SKILL.md or Folder…") { importSkill() }
+                        Divider()
+                        Button("Add keepmum\u{2019}s Example Skill") { Task { if let n = await engine.addExampleSkill() { select(n) } } }
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -209,7 +211,12 @@ struct SkillsEditor: View {
                 Text("A skill is your own instructions for the local model, given on the turns a check keeps on this Mac, after keepmum\u{2019}s note.")
                     .font(.km(.body)).foregroundStyle(Theme.textSecondary).multilineTextAlignment(.center).frame(maxWidth: 420)
                 HStack(spacing: Space.s) {
-                    PillButton(title: "New Skill…", icon: "plus", prominent: true) { newName = ""; naming = true }
+                    if skills.isEmpty {
+                        PillButton(title: "Start from keepmum\u{2019}s Example", icon: "doc.text", prominent: true) {
+                            Task { if let n = await engine.addExampleSkill() { select(n) } }
+                        }
+                    }
+                    PillButton(title: "New Skill…", icon: "plus", prominent: !skills.isEmpty) { newName = ""; naming = true }
                     PillButton(title: "Import…", icon: "square.and.arrow.down") { importSkill() }
                 }
                 .disabled(!engine.isBundled || engine.busy)

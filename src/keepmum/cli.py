@@ -700,7 +700,25 @@ def _set_mode(check: str, mode: str, model: str | None = None) -> None:
     typer.echo(f"{check}: {(_COMMANDS_TEXT if check == 'commands' else _MODE_TEXT)[mode]}"
                + (f", {harm.NAMES[size]}" if check == "harm" and mode != "off" else ""),
                err=True)
+    if mode == "local":
+        _first_example(_config())
     typer.echo("Running proxies switch on their next request.", err=True)
+
+
+def _first_example(cfg) -> None:
+    """The first time a check goes local with no skills, keepmum's example skill comes with it."""
+    from .local import CHECKS, Skill, add_example, example_offered
+
+    if cfg.guard_local_skills or example_offered():
+        return
+    try:
+        folder = add_example()
+    except OSError as e:
+        typer.echo(f"note: keepmum's example skill could not be written: {e}", err=True)
+        return
+    _save_skills(cfg, [Skill(str(folder), CHECKS)], "keepmum guard local skill example")
+    typer.echo(f"Added keepmum's example skill for local turns, {folder}: edit it, or delete it "
+               "(`keepmum guard local skill`, or the Skills window in the Mac app). It is not added again.", err=True)
 
 
 @guard_app.command("injection")
@@ -1342,6 +1360,29 @@ def guard_local_skill_assist(request: str = typer.Option(..., "--request", help=
     typer.echo(f"{out['name']}" + (f": {out['description']}" if out["description"] else "") + f"\n\n{out['text']}")
     if out["note"]:
         typer.echo(f"\n({out['note']})", err=True)
+
+
+@skill_app.command("example")
+def guard_local_skill_example(check: list[str] = typer.Option(None, "--check", help="Only for this check: injection or harm (repeat for both; default both).")) -> None:
+    """Add keepmum's example skill: how to answer on a turn keepmum kept on this Mac. A starting point to edit."""
+    from pathlib import Path
+
+    from .local import CHECKS, EXAMPLE_NAME, Skill, add_example
+
+    try:
+        folder = add_example()
+    except OSError as e:
+        typer.echo(f"keepmum guard local skill example: {e}", err=True)
+        raise typer.Exit(1)
+    cfg = _config()
+    skills = list(cfg.guard_local_skills)
+    if any(Path(x.path).expanduser().resolve() == folder.resolve() for x in skills):
+        typer.echo(f"keepmum's example skill is already added: {folder}", err=True)
+        return
+    checks = _checks_option(check) or CHECKS
+    skills.append(Skill(str(folder), checks))
+    _save_skills(cfg, skills, "keepmum guard local skill example")
+    typer.echo(f"skill {len(skills)}: {EXAMPLE_NAME}, for {_skill_checks(checks)}, in {folder}", err=True)
 
 
 @skill_app.command("show")

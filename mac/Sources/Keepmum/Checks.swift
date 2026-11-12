@@ -563,7 +563,15 @@ struct LocalSkillsSection: View {
         FormSection(title: "Skills for local turns",
                     footer: "Your own instructions for the local model, in Claude Code's SKILL.md format, kept in keepmum's folder (~/.config/keepmum/skills): write, import, edit and delete them in the Skills window. An imported skill is copied there, so editing it leaves the original alone. Each local turn of the checks a skill is for gets its text after keepmum's note, which says why the turn stayed on this Mac and that the model has no tools. Edits apply on the next turn; one that cannot be read, or is over 20,000 characters, is left out.") {
             if rows.isEmpty {
-                FormRow(title: "No skills", detail: "Local models get keepmum's note and the agent's own instructions") { addButton }
+                FormRow(title: "No skills", detail: "Local models get keepmum's note and the agent's own instructions. keepmum's example says how to answer on these turns: a starting point to edit.") {
+                    HStack(spacing: Space.s) {
+                        PillButton(title: "Add the example", icon: "doc.text") {
+                            Task { if let n = await engine.addExampleSkill() { SkillsWindow.show(openWindow, engine: engine, skill: n) } }
+                        }
+                        .disabled(!engine.isBundled || engine.busy)
+                        addButton
+                    }
+                }
             } else {
                 ForEach(Array(rows.enumerated()), id: \.offset) { i, skill in
                     row(i + 1, skill)
