@@ -63,6 +63,7 @@ from .handback import notice as handback_notice
 from .handback import wrap as handback_wrap
 from .handback import written as handback_written
 from .local import DEFAULT_MAX_TOKENS as LOCAL_MAX_TOKENS
+from .local import NO_THINKING
 from .local import ChatStream, answer_text, from_chat, skills_text, to_chat
 from .local import LocalRoute
 from .local import prepare as prepare_local
@@ -679,9 +680,12 @@ class Proxy:
         failures = []
         for server in servers:
             data = {"model": server.model, "stream": False, "max_tokens": LOCAL_MAX_TOKENS,
-                    "messages": handback_messages(strategy, text, source, prompt, instructions, skills)}
+                    "messages": handback_messages(strategy, text, source, prompt, instructions, skills), **NO_THINKING}
             try:
                 resp = await self.client.post(server.url + LOCAL_CHAT_PATH, json=data)
+                if resp.status_code in (400, 422):  # a server that refuses the fields that turn thinking off
+                    resp = await self.client.post(server.url + LOCAL_CHAT_PATH,
+                                                  json={k: v for k, v in data.items() if k not in NO_THINKING})
             except httpx.HTTPError as e:
                 failures.append(f"{server.url} did not answer ({type(e).__name__})")
                 continue

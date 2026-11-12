@@ -532,3 +532,26 @@ def test_flows_reads_older_events_without_hand_backs():
     f = flows(old, 0)
     assert f["handback"] == {} and f["local"] == [{"client": "codex", "n": 1}]
     assert {o["kind"] for o in f["out"]} == {"clean", "local"}
+
+
+def test_the_summary_is_asked_for_without_thinking():
+    rs, seen, _ = run("local", [conversation(ATTACK)], local=writes("README: install with make."), handback=("summary", ""))
+    body = next(b for _, path, _, b in seen["local"] if path == "/v1/chat/completions")
+    assert body["reasoning_effort"] == "none" and body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert seen["upstream"] == ["/v1/messages"]
+
+
+def test_a_server_that_refuses_the_no_thinking_fields_is_asked_again_without_them():
+    asked = []
+
+    def handler(request, body):
+        if chats(request):
+            asked.append(set(body))
+            if "reasoning_effort" in body:
+                return httpx.Response(400, json={"error": "unknown field reasoning_effort"})
+            return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "README: make install."}}]})
+        return answer(body, body["model"])
+
+    rs, seen, _ = run("local", [conversation(ATTACK)], local={11434: handler}, handback=("rewrite", ""))
+    assert len(asked) == 2 and "reasoning_effort" in asked[0] and not {"reasoning_effort", "chat_template_kwargs"} & asked[1]
+    assert seen["upstream"] == ["/v1/messages"]

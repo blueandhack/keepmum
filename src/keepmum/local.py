@@ -59,6 +59,11 @@ PATHS = {"messages": "/v1/messages", "responses": "/v1/responses"}
 APIS_LOCAL = (*PATHS, "gemini")
 CHAT_PATH = "/v1/chat/completions"
 DEFAULT_MAX_TOKENS = 4096
+# For a summary or rewrite of a flagged result (handback.py): no thinking. A thinking model could
+# spend the whole budget on its reasoning and write nothing, which keeps the turn local. Ollama
+# reads reasoning_effort, llama.cpp's server (and others that render the chat template) reads
+# chat_template_kwargs; a server that refuses either is asked again without them.
+NO_THINKING = {"reasoning_effort": "none", "chat_template_kwargs": {"enable_thinking": False}}
 # Where the usual local servers listen, for `keepmum guard local add --preset` and the app.
 PRESETS = {"ollama": ("Ollama", "http://localhost:11434"), "lmstudio": ("LM Studio", "http://localhost:1234"),
            "llamacpp": ("llama.cpp", "http://localhost:8080"), "mlx": ("MLX", "http://localhost:8080")}
