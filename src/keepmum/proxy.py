@@ -62,6 +62,8 @@ from .handback import messages as handback_messages
 from .handback import notice as handback_notice
 from .handback import wrap as handback_wrap
 from .handback import written as handback_written
+from .review import Review, Reviews
+from .review import applies as review_applies
 from .local import DEFAULT_MAX_TOKENS as LOCAL_MAX_TOKENS
 from .local import NO_THINKING
 from .local import ChatStream, answer_text, from_chat, skills_text, to_chat
@@ -205,7 +207,7 @@ class Proxy:
                  chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
                  gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM,
                  tools=None, guards=None, commands=None, local=None, antigravity_upstream: str = ANTIGRAVITY_UPSTREAM,
-                 local_skills=None, handback=None):
+                 local_skills=None, handback=None, review=None):
         self.redactor = redactor
         # The checks on a request's texts (guard.Guard): "injection" on tool results, "harm" on what
         # the user typed. Warn-mode checks run after the request is sent, in `_background`.
@@ -221,6 +223,10 @@ class Proxy:
         # local_handback_instructions), and the results handed back so far (handback.py).
         self._handback = handback if callable(handback) else (lambda: ("stay", ""))
         self.handbacks = Handbacks()
+        # Whether the user reviews a summary or rewrite before it goes: a callable giving ([guard]
+        # local_handback_review, _wait, _timeout), and the reviews waiting for an answer (review.py).
+        self._review = review if callable(review) else (lambda: ("off", 60, "stay"))
+        self.reviews = Reviews()
         # (server URL, API) pairs a server answered 404/405/501 for and then answered as Chat
         # Completions: asked that way from then on, until keepmum restarts.
         self._chat_only: set[tuple[str, str]] = set()
@@ -289,6 +295,8 @@ class Proxy:
         path = request.url.path
         if not _host_is_local(request):
             return api_error(403, "permission_error", "requests must come from this machine")
+        if path == "/_keepmum/reviews" or path.startswith("/_keepmum/reviews/"):
+            return await self._reviews_route(request, path)
         if path.startswith("/_keepmum/"):
             return self._local(request, path)
         if request.headers.get("upgrade"):
@@ -319,6 +327,28 @@ class Proxy:
             self._record(path, "blocked", 403, origin=self._origin(request, t))
             return api_error(403, "permission_error", f"refusing to forward {request.method} {path}: keepmum does not scan this endpoint")
         return await self._forward_raw(request, t)
+
+    async def _reviews_route(self, request: Request, path: str) -> Response:
+        """GET /_keepmum/reviews: the hand-backs waiting for the user (review.py), and the settings;
+        asking says someone is there to answer. POST /_keepmum/reviews/<id> {"action": send | edit |
+        withhold | local, "text": the edit}: the answer. The stats token, as for the stats feed."""
+        given = request.headers.get("authorization", "").removeprefix("Bearer ")
+        if not self.stats_token or not hmac.compare_digest(given, self.stats_token):
+            return api_error(401, "authentication_error", "missing or wrong stats token")
+        if path == "/_keepmum/reviews" and request.method == "GET":
+            self.reviews.seen()
+            mode, wait, timeout = self._review()
+            return JSONResponse({"reviews": self.reviews.pending(), "mode": mode, "wait": wait, "timeout": timeout})
+        if request.method == "POST" and path.count("/") == 3:
+            try:
+                answer = json.loads(await request.body() or b"{}")
+            except ValueError:
+                return api_error(400, "invalid_request_error", "the body must be JSON: {\"action\": …}")
+            why = self.reviews.decide(path.rsplit("/", 1)[-1], str(answer.get("action")), answer.get("text"))
+            if why:
+                return api_error(404 if why.startswith("no such") else 400, "invalid_request_error", why)
+            return JSONResponse({"ok": True})
+        return api_error(405, "invalid_request_error", "GET /_keepmum/reviews, or POST /_keepmum/reviews/<id>")
 
     def _local(self, request: Request, path: str) -> Response:
         if path == "/_keepmum/health":
@@ -640,7 +670,7 @@ class Proxy:
         skills = self.local_skills("handback") if callable(self.local_skills) else []
         skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
         prompt = (texts.get("harm") or [(None, None, None)])[-1][1]
-        done, server = [], None
+        done, server, reviews = [], None, []
         guard = next((g for g in self.guards if g.name == "injection"), None)
         for text, source in flagged.items():
             got = await self._write_locally(strategy, text, source, prompt, instructions, skills, path)
@@ -658,12 +688,36 @@ class Proxy:
                 log.info("%s: the injection check flagged the local model's %s; answered locally", path, strategy)
                 return {"strategy": strategy, "model": server.model, "url": server.url,
                         "kept": "what the local model wrote was flagged too"}
+            mode, wait, timeout = self._review()
+            if review_applies(mode, strategy) and self.reviews.present():
+                log.info("%s: holding the %s for the user's review (up to %d s)", path, strategy, wait)
+                decision = await self.reviews.ask(Review(strategy, source, path, text, out, server.model, wait), timeout)
+                reviewed = {"send": "approved", "edit": "edited", "withhold": "withheld", "local": "kept local"}[decision.action]
+                if decision.timed_out:
+                    reviewed = f"no answer in {wait} s: " + ("sent as written" if decision.action == "send" else "kept local")
+                reviews.append(reviewed)
+                if decision.action == "local":
+                    for t in flagged:
+                        self.handbacks.keep_local(t)
+                    log.info("%s: the %s was kept on this Mac (%s)", path, strategy, reviewed)
+                    return {"strategy": strategy, "model": server.model, "url": server.url, "review": reviewed,
+                            "kept": "you kept it on this Mac" if not decision.timed_out else f"no answer in {wait} s"}
+                if decision.action == "withhold":
+                    done.append((text, handback_notice("withhold", source)))
+                    continue
+                if decision.action == "edit":
+                    out = decision.text
+                    try:  # the user's own text: checked, and noted if flagged, but theirs to send
+                        if guard and await anyio.to_thread.run_sync(guard.check, [("your edit", out, True)], True):
+                            reviews[-1] = "edited; the check flagged the edit, sent as you approved it"
+                    except Exception:
+                        pass
             done.append((text, handback_wrap(strategy, source, out, custom=bool(instructions))))
         for text, replacement in done:
             self.handbacks.add(text, replacement, strategy)
         log.info("%s: the local model %s at %s wrote a %s of the flagged result; checking it", path, server.model,
                  server.url, strategy)
-        return {"strategy": strategy, "model": server.model, "url": server.url}
+        return {"strategy": strategy, "model": server.model, "url": server.url, **({"review": "; ".join(reviews)} if reviews else {})}
 
     @staticmethod
     def _flagged_texts(route: LocalRoute, texts: dict | None) -> dict[str, str | None]:

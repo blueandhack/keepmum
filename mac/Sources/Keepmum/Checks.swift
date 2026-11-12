@@ -873,12 +873,67 @@ struct LocalHandbackSection: View {
                             .disabled(!engine.isBundled || engine.busy)
                     }
                 }
+                if let review = engine.localHandback?.review {
+                    Hairline()
+                    reviewRows(review)
+                }
             }
         }
         .task(id: engine.status?.guard?.local) { await engine.loadLocalHandback() }
         .sheet(isPresented: $editing) {
             HandbackInstructionsSheet(engine: engine, strategy: current, own: own,
                                       keepmums: engine.localHandback?.defaultInstructions[current] ?? "")
+        }
+    }
+
+    static let reviewModes: [(id: String, label: String)] = [
+        ("off", "Off"), ("rewrite", "Rewrites only"), ("all", "Summaries and rewrites"),
+    ]
+    static let waits = [30, 60, 120, 300]
+
+    private func seconds(_ s: Int) -> String { s < 120 ? "\(s) s" : "\(s / 60) min" }
+
+    @ViewBuilder private func reviewRows(_ review: Engine.LocalHandback.Review) -> some View {
+        let label = Self.reviewModes.first { $0.id == review.mode }?.label ?? review.mode
+        let skipped = review.mode == "rewrite" && current == "summary"
+        FormRow(title: "Review first",
+                detail: review.mode == "off" ? "Off: what the local model wrote goes straight to the cloud"
+                    : skipped ? "Rewrites only: summaries go without a review"
+                    : "A panel shows what the local model wrote: send it, edit it, withhold the result or keep the turn local",
+                help: "keepmum holds the request while the panel waits for you. It does not take the keyboard: click into it to edit. Each flagged result is reviewed once; later turns reuse your answer. With the app closed (and no `keepmum review --watch`), nothing waits.") {
+            choiceMenu(label, Self.reviewModes.map { m in (m.label, { await engine.setLocalHandbackReview(mode: m.id) }) })
+        }
+        if review.mode != "off" {
+            Hairline()
+            FormRow(title: "Wait", detail: "The agent waits too, up to this long") {
+                choiceMenu(seconds(review.wait),
+                           (Self.waits.contains(review.wait) ? Self.waits : (Self.waits + [review.wait]).sorted())
+                               .map { w in (seconds(w), { await engine.setLocalHandbackReview(wait: w) }) })
+            }
+            Hairline()
+            FormRow(title: "If no answer",
+                    detail: review.timeout == "send" ? "What the local model wrote goes as written" : "The turn stays on this Mac, answered by the local model") {
+                choiceMenu(review.timeout == "send" ? "Send as written" : "Keep it local",
+                           [("Keep it local", { await engine.setLocalHandbackReview(timeout: "stay") }),
+                            ("Send as written", { await engine.setLocalHandbackReview(timeout: "send") })])
+            }
+        }
+    }
+
+    @ViewBuilder private func choiceMenu(_ label: String, _ items: [(String, @MainActor () async -> Void)]) -> some View {
+        if isSnapshot {
+            HStack(spacing: Space.xxs) {
+                Text(label).font(.km(.callout)).foregroundStyle(Theme.text)
+                Image(systemName: "chevron.down").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+            }
+        } else {
+            Menu(label) {
+                ForEach(items.indices, id: \.self) { i in
+                    Button(items[i].0) { Task { await items[i].1() } }
+                }
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+            .disabled(!engine.isBundled || engine.busy)
         }
     }
 

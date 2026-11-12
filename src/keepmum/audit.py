@@ -268,6 +268,8 @@ def config_state(cfg) -> dict:
                                    else f" for {', '.join(x.places)}" if x.places else " (parked)")
                          for x in cfg.guard_local_skills],
         "local_handback": cfg.guard_local_handback,
+        "local_handback_review": (f"{cfg.guard_local_handback_review}, {cfg.guard_local_handback_review_wait} s, "
+                                  f"then {cfg.guard_local_handback_review_timeout}"),
         "local_handback_instructions": (_fingerprint("string", cfg.guard_local_handback_instructions)
                                         if cfg.guard_local_handback_instructions else ""),
     }
@@ -284,7 +286,8 @@ _SETTINGS = {
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
 _ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers", "local_skills",
-                "injection_threshold", "harm_sensitivity", "local_handback", "local_handback_instructions"}
+                "injection_threshold", "harm_sensitivity", "local_handback", "local_handback_instructions",
+                "local_handback_review"}
 # Local is below block: a flagged request is answered (on this Mac) rather than refused.
 _GUARD_RANK = {"off": 0, "warn": 1, "local": 2, "block": 3}
 # After a local turn (handback.py): how little of a flagged result reaches the cloud. A rewrite keeps
@@ -329,6 +332,14 @@ def config_changes(old: dict, new: dict) -> list[dict]:
     if "local_handback" in old and old["local_handback"] != new.get("local_handback"):
         out.append({"setting": "guard.local_handback", "from": old["local_handback"], "to": new.get("local_handback"),
                     "weakens": _HANDBACK_RANK.get(new.get("local_handback"), 3) < _HANDBACK_RANK.get(old["local_handback"], 3)})
+    a, b = old.get("local_handback_review"), new.get("local_handback_review")
+    if "local_handback_review" in old and a != b:
+        # Reviewing a hand-back before it goes: less of it (off, or rewrites only after all), or sending
+        # on no answer, lets more of the local model's text reach the cloud unseen.
+        rank = {"all": 2, "rewrite": 1, "off": 0}
+        mode = lambda s: (s or "off").split(",")[0]
+        out.append({"setting": "guard.local_handback_review", "from": a, "to": b,
+                    "weakens": rank.get(mode(b), 0) < rank.get(mode(a), 0) or (str(b).endswith("send") and not str(a).endswith("send"))})
     a, b = old.get("local_handback_instructions"), new.get("local_handback_instructions")
     if "local_handback_instructions" in old and a != b:
         # The user's own instruction for what the local model hands back: it may keep more of a

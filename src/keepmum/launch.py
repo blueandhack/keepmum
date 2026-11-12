@@ -106,7 +106,9 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
                   commands=CommandsCheck(lambda: observe.config.guard_commands),
                   local=lambda check: servers_for(observe.config.guard_local_servers, check),
                   local_skills=lambda check: skills_for(observe.config.guard_local_skills, check),
-                  handback=lambda: (observe.config.guard_local_handback, observe.config.guard_local_handback_instructions))
+                  handback=lambda: (observe.config.guard_local_handback, observe.config.guard_local_handback_instructions),
+                  review=lambda: (observe.config.guard_local_handback_review, observe.config.guard_local_handback_review_wait,
+                                  observe.config.guard_local_handback_review_timeout))
     proxy.gateways = {**cfg.gateways, **(gateways or {})}
     proxy.destinations = cfg.destinations
     switch = ModelSwitch(pipeline, proxy._scan_lock)

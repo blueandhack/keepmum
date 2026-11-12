@@ -44,10 +44,11 @@ struct MenuLabel: View {
         HStack(spacing: 3) {
             let live = store.connection == .live || store.connection == .sample
             let attention = store.toolsNeedReview || engine.aroundClient != nil || store.scriptWarning != nil
+                || !ReviewCenter.shared.pending.isEmpty
             Image(nsImage: !live ? Brand.menuBarIdle : attention ? Brand.menuBarAttention : Brand.menuBarActive)
             if unique > 0 { Text(unique.compact).monospacedDigit() }
         }
-        .task { store.start(); engine.start(); Updates.shared.start() }
+        .task { store.start(); engine.start(); Updates.shared.start(); ReviewCenter.shared.start { store.port } }
         .onChange(of: engine.status?.port, initial: true) { _, p in
             if let p { store.configuredPort = p }
         }
@@ -107,6 +108,18 @@ struct MenuPanel: View {
             ProtectionRow(engine: engine) {
                 engine.settingsRequested = .setup
                 DashboardWindow.show(openWindow)
+            }
+            if !ReviewCenter.shared.pending.isEmpty {
+                let waiting = ReviewCenter.shared.pending.count
+                HStack(spacing: Space.s) {
+                    Image(systemName: "hand.raised.square").foregroundStyle(Theme.accent)
+                    Text(waiting == 1 ? "A hand-back waits for you" : "\(waiting) hand-backs wait for you")
+                        .font(.km(.callout)).foregroundStyle(Theme.text)
+                    Spacer(minLength: Space.s)
+                    PillButton(title: "Review") { ReviewCenter.shared.reopen() }
+                }
+                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
+                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
             }
             if let around = engine.aroundClient {
                 // The gateway's own app pointed the agent back at itself (switching a model, say).
@@ -449,6 +462,14 @@ enum Snapshotter {
         render(MenuPanel(store: store, engine: .preview(around: true)), to: "\(dir)/menu-around-light.png", dark: false)
         render(Dashboard(store: store, engine: .preview(around: true), page: .settings).frame(width: 1200, height: 1100),
                to: "\(dir)/settings-around-light.png", dark: false)
+        // A hand-back waiting for review: the panel, and the menu with its row.
+        ReviewCenter.shared.inject([.sample])
+        for dark in [false, true] {
+            render(ReviewCard(center: .shared, review: .sample, more: 1).frame(width: 560).background(Theme.canvas),
+                   to: "\(dir)/review-\(dark ? "dark" : "light").png", dark: dark)
+        }
+        render(MenuPanel(store: store, engine: .preview()), to: "\(dir)/menu-review-light.png", dark: false)
+        ReviewCenter.shared.inject([], mode: "off")
         // The menu bar icon, plain and with the dot that points at Settings › Tools.
         for (name, image) in [("menubar", Brand.menuBarActive), ("menubar-attention", Brand.menuBarAttention)] {
             if let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {

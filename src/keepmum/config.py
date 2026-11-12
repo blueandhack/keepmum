@@ -54,6 +54,11 @@
     # with the flagged result replaced: "answer" (after the local answer), "summary", "rewrite" or "withhold"
     local_handback = "stay"
     local_handback_instructions = ""  # your own instruction for summary and rewrite, in place of keepmum's
+    # look at a summary or rewrite before it goes to the cloud (review.py): "off", "rewrite" or "all"
+    # (summaries too), the seconds to wait for an answer, and then "stay" (on this Mac) or "send"
+    local_handback_review = "off"
+    local_handback_review_wait = 60
+    local_handback_review_timeout = "stay"
 
     [log]
     level = "info"
@@ -81,7 +86,8 @@ _SCHEMA = {
     "log": {"level": str, "previews": bool, "context": bool},
     "audit": {"keep_days": int},
     "guard": {"injection": str, "injection_threshold": float, "harm": str, "harm_model": str, "harm_sensitivity": str, "commands": str, "local_url": str, "local_model": str,
-              "local_servers": list, "local_skills": list, "local_handback": str, "local_handback_instructions": str},
+              "local_servers": list, "local_skills": list, "local_handback": str, "local_handback_instructions": str,
+              "local_handback_review": str, "local_handback_review_wait": int, "local_handback_review_timeout": str},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
 _HOST = re.compile(r"(?i)(?:[a-z0-9_-]+\.)*[a-z0-9-]+\.[a-z]{2,63}|localhost|\d{1,3}(?:\.\d{1,3}){3}")
@@ -145,6 +151,11 @@ class Config:
     # What follows a local turn of the injection check (handback.py), and the user's own instruction.
     guard_local_handback: str = "stay"
     guard_local_handback_instructions: str = ""
+    # Whether the user reviews a summary or rewrite before it goes (review.py): off, rewrite or all;
+    # how long to wait for them; and what happens when they do not answer: stay or send.
+    guard_local_handback_review: str = "off"
+    guard_local_handback_review_wait: int = 60
+    guard_local_handback_review_timeout: str = "stay"
     path: Path | None = None
 
 
@@ -300,6 +311,15 @@ def load(path: Path | None = None) -> Config:
         cfg.guard_local_handback, cfg.guard_local_handback_instructions = parse_handback(
             guard.get("local_handback", cfg.guard_local_handback),
             guard.get("local_handback_instructions", cfg.guard_local_handback_instructions))
+    except ValueError as e:
+        raise ConfigError(f"{path}: {e}")
+    from .review import parse as parse_review
+
+    try:
+        cfg.guard_local_handback_review, cfg.guard_local_handback_review_wait, cfg.guard_local_handback_review_timeout = parse_review(
+            guard.get("local_handback_review", cfg.guard_local_handback_review),
+            guard.get("local_handback_review_wait", cfg.guard_local_handback_review_wait),
+            guard.get("local_handback_review_timeout", cfg.guard_local_handback_review_timeout))
     except ValueError as e:
         raise ConfigError(f"{path}: {e}")
     # A harm check turned on before "small" existed, without a model set, keeps the default it had.

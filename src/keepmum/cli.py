@@ -1559,6 +1559,9 @@ HANDBACK_HELP = {
 def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer, summary, rewrite or withhold. None: show it."),
                          instructions: str = typer.Option(None, "--instructions", help="Your own instruction for summary and rewrite, in place of keepmum's (\"\" for keepmum's again)."),
                          instructions_file: str = typer.Option(None, "--instructions-file", help="The same, read from a file."),
+                         review: str = typer.Option(None, "--review", help="Look at it before it goes: off, rewrite, or all (summaries too)."),
+                         review_wait: int = typer.Option(None, "--review-wait", help="Seconds to wait for your answer (10-600; default 60)."),
+                         review_timeout: str = typer.Option(None, "--review-timeout", help="With no answer: stay (on this Mac, the default) or send."),
                          as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
     """What follows a local turn of the injection check: stay local, or hand the conversation back to the cloud model."""
     import json
@@ -1582,7 +1585,18 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
     if instructions is not None and len(instructions.strip()) > MAX_INSTRUCTIONS:
         typer.echo(f"keepmum guard local handback: the instructions are over {MAX_INSTRUCTIONS:,} characters", err=True)
         raise typer.Exit(2)
+    from .review import parse as parse_review
+
     cfg = _config()
+    asked = (review, review_wait, review_timeout) != (None, None, None)
+    if asked:
+        try:
+            r_mode, r_wait, r_timeout = parse_review(review or cfg.guard_local_handback_review,
+                                                     cfg.guard_local_handback_review_wait if review_wait is None else review_wait,
+                                                     review_timeout or cfg.guard_local_handback_review_timeout, "--review")
+        except ValueError as e:
+            typer.echo(f"keepmum guard local handback: {str(e).replace('--review.local_handback_review', '--review')}", err=True)
+            raise typer.Exit(2)
     command = "keepmum guard local handback" + (f" {strategy}" if strategy else "")
     try:
         if strategy is not None and strategy != cfg.guard_local_handback:
@@ -1590,20 +1604,31 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
         if instructions is not None and instructions.strip() != cfg.guard_local_handback_instructions:
             _update_config(cfg.path, "guard", "local_handback_instructions", instructions.strip() or None,
                            command + " --instructions")
+        if asked:
+            for key, value, default in (("local_handback_review", r_mode, "off"), ("local_handback_review_wait", r_wait, 60),
+                                        ("local_handback_review_timeout", r_timeout, "stay")):
+                if value != getattr(cfg, f"guard_{key}"):
+                    _update_config(cfg.path, "guard", key, None if value == default else value, command + " --review")
     except (ConfigError, OSError) as e:
         typer.echo(f"keepmum guard local handback: {e}", err=True)
         raise typer.Exit(1)
-    if strategy is not None or instructions is not None:
+    if strategy is not None or instructions is not None or asked:
         typer.echo("Running proxies use it on their next flagged result.", err=True)
         cfg = _config()
     now, own = cfg.guard_local_handback, cfg.guard_local_handback_instructions
+    rv = {"mode": cfg.guard_local_handback_review, "wait": cfg.guard_local_handback_review_wait,
+          "timeout": cfg.guard_local_handback_review_timeout}
     if as_json:
         typer.echo(json.dumps({"handback": now, "instructions": own, "default_instructions": INSTRUCTIONS,
-                               "strategies": [{"id": k, "about": v} for k, v in HANDBACK_HELP.items()]}))
+                               "strategies": [{"id": k, "about": v} for k, v in HANDBACK_HELP.items()], "review": rv}))
         return
     typer.echo(f"{now}: {HANDBACK_HELP[now]}")
     if now in WRITTEN:
         typer.echo("instructions: " + ("your own (" + f"{len(own):,} characters)" if own else "keepmum's"))
+        typer.echo("review: " + ("off: it goes without a look" if rv["mode"] == "off" else
+                                 f"{'rewrites' if rv['mode'] == 'rewrite' else 'summaries and rewrites'} wait for you in the Mac app "
+                                 f"or `keepmum review --watch`, up to {rv['wait']} s, then "
+                                 + ("stay on this Mac" if rv["timeout"] == "stay" else "go as written")))
     if cfg.guard_injection != "local" and strategy is None:
         typer.echo(f"(the injection check is {cfg.guard_injection}: this applies in local mode, `keepmum guard injection local`)")
     if now != "stay" and strategy is None:
@@ -2218,6 +2243,114 @@ def _extensions_status() -> dict:
     except Exception as e:
         return {"watching": False, "new": [], "error": type(e).__name__}
     return {"watching": r["watching"], "new": [i for i in r["items"] if i["new"]], "count": len(r["items"])}
+
+
+def _reviews_call(cfg, method: str, path: str = "", body: dict | None = None):
+    """GET or POST the running keepmum's /_keepmum/reviews, with the stats token."""
+    import httpx
+
+    from .stats import token_file
+
+    try:
+        token = token_file().read_text().strip()
+    except OSError:
+        typer.echo("keepmum review: keepmum is not running here (no stats token): `keepmum serve`, or the Mac app", err=True)
+        raise typer.Exit(1)
+    try:
+        r = httpx.request(method, f"http://127.0.0.1:{cfg.port}/_keepmum/reviews{path}", json=body,
+                          headers={"authorization": f"Bearer {token}"}, timeout=5)
+    except httpx.HTTPError:
+        typer.echo(f"keepmum review: nothing answers on port {cfg.port}: start keepmum (`keepmum serve`, or the Mac app)", err=True)
+        raise typer.Exit(1)
+    if r.status_code != 200:
+        try:
+            why = r.json()["error"]["message"]
+        except (ValueError, KeyError, TypeError):
+            why = f"HTTP {r.status_code}"
+        typer.echo(f"keepmum review: {why}", err=True)
+        raise typer.Exit(1)
+    return r.json()
+
+
+def _show_review(r: dict) -> None:
+    typer.echo(f"\n{r['id']}: the local model's {r['strategy']} of what {r['source'] or 'a tool'} returned "
+               f"({r['seconds_left']} s left), from {r['model']}")
+    typer.echo("--- it would send ---\n" + r["proposed"] + "\n--- in place of the flagged result ---\n"
+               + (r["flagged"][:1500] + ("\n…" if len(r["flagged"]) > 1500 else "")) + "\n---")
+
+
+@app.command()
+def review(rid: str = typer.Argument(None, help="A review's id, to answer it."),
+           action: str = typer.Argument(None, help="send, edit, withhold or local."),
+           text_file: str = typer.Option(None, "--text-file", help="For edit: the text to send in its place."),
+           watch: bool = typer.Option(False, "--watch", help="Keep asking for reviews, and answer each as it comes."),
+           as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """Hand-backs waiting for you before they go to the cloud (`keepmum guard local handback --review`).
+    No arguments: list them. ID ACTION: answer one. --watch: be the reviewer in this terminal."""
+    import json
+    import os
+    import subprocess
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from .review import ACTIONS
+
+    cfg = _config()
+    if rid is not None:
+        if action not in ACTIONS:
+            typer.echo(f"keepmum review: give an action: {', '.join(ACTIONS)}", err=True)
+            raise typer.Exit(2)
+        text = None
+        if action == "edit":
+            if text_file is None:
+                typer.echo("keepmum review: edit needs --text-file with the text to send", err=True)
+                raise typer.Exit(2)
+            text = Path(text_file).expanduser().read_text(encoding="utf-8")
+        _reviews_call(cfg, "POST", f"/{rid}", {"action": action, "text": text})
+        typer.echo(f"review {rid}: {action}", err=True)
+        return
+    if not watch:
+        data = _reviews_call(cfg, "GET")
+        if as_json:
+            typer.echo(json.dumps(data))
+            return
+        if data["mode"] == "off":
+            typer.echo("review is off: `keepmum guard local handback --review all` turns it on")
+        if not data["reviews"]:
+            typer.echo("nothing waiting for review")
+        for r in data["reviews"]:
+            _show_review(r)
+            typer.echo(f"answer: keepmum review {r['id']} send | withhold | local | edit --text-file FILE")
+        return
+    typer.echo("watching for hand-backs to review (Ctrl-C stops); keepmum holds them only while something watches", err=True)
+    answered: set[str] = set()
+    try:
+        while True:
+            for r in _reviews_call(cfg, "GET")["reviews"]:
+                if r["id"] in answered:
+                    continue
+                _show_review(r)
+                choice = typer.prompt("send, edit, withhold or local", default="send")
+                if choice not in ACTIONS:
+                    typer.echo("not one of them: left waiting", err=True)
+                    continue
+                text = None
+                if choice == "edit":
+                    with tempfile.NamedTemporaryFile("w+", suffix=".txt", delete=False) as f:
+                        f.write(r["proposed"])
+                    subprocess.run([os.environ.get("EDITOR", "vi"), f.name])
+                    text = Path(f.name).read_text(encoding="utf-8")
+                    os.unlink(f.name)
+                try:
+                    _reviews_call(cfg, "POST", f"/{r['id']}", {"action": choice, "text": text})
+                    typer.echo(f"review {r['id']}: {choice}", err=True)
+                except typer.Exit:
+                    pass  # ran out of time meanwhile: keepmum already did what --review-timeout says
+                answered.add(r["id"])
+            time.sleep(1)
+    except KeyboardInterrupt:
+        typer.echo("", err=True)
 
 
 @app.command()
