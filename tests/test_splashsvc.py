@@ -87,3 +87,25 @@ def test_the_cli_says_when_splash_is_missing(mac, monkeypatch):
     monkeypatch.setattr(splashsvc, "find", lambda: None)
     r = CliRunner().invoke(app, ["guard", "local", "splash", "--start"])
     assert r.exit_code == 1 and "brew install incoai/tap/splash" in r.stderr
+
+
+@pytest.mark.parametrize("version, chip, why", [
+    ("27.2.1", "Apple M5 Pro", None),
+    ("26.4", "Apple M3", None),
+    ("26.3.1", "Apple M5 Pro", "macOS 26.4 or later"),
+    ("27.0", "Apple M2 Max", "an M3 or newer chip"),
+    ("27.0", "Intel(R) Core(TM) i9", "an M3 or newer chip"),
+])
+def test_why_not_checks_the_chip_and_macos(monkeypatch, version, chip, why):
+    import platform
+
+    monkeypatch.setattr(platform, "mac_ver", lambda: (version, ("", "", ""), "arm64"))
+    monkeypatch.setattr(splashsvc.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, chip + "\n", ""))
+    got = splashsvc.why_not()
+    assert got is None if why is None else why in got
+
+
+def test_the_listing_says_whether_splash_can_run(mac, monkeypatch):
+    monkeypatch.setattr(splashsvc, "why_not", lambda: None)
+    data = json.loads(CliRunner().invoke(app, ["guard", "local", "--json"]).stdout)
+    assert data["splash"] == {"installed": True, "supported": True, "why": None, "install": "brew install incoai/tap/splash"}

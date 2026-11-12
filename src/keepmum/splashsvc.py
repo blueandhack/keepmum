@@ -26,6 +26,27 @@ class SplashError(Exception):
     pass
 
 
+def why_not() -> str | None:
+    """Why Splash cannot run on this Mac, or None: it needs an M3 or newer chip and macOS 26.4 or later."""
+    import platform
+
+    version = tuple(int(x) for x in re.findall(r"\d+", platform.mac_ver()[0])[:2]) or (0,)
+    if version < (26, 4):
+        return f"Splash needs macOS 26.4 or later (this Mac has {platform.mac_ver()[0] or 'another system'})"
+    chip = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True).stdout.strip()
+    m = re.match(r"Apple M(\d+)", chip)
+    if not m or int(m.group(1)) < 3:
+        return f"Splash needs an M3 or newer chip (this Mac has {chip or 'another chip'})"
+    return None
+
+
+def status() -> dict:
+    """For the app: whether Splash is installed, and whether this Mac can run it."""
+    why = why_not()
+    return {"installed": find() is not None, "supported": why is None, "why": why,
+            "install": "brew install incoai/tap/splash"}
+
+
 def plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 

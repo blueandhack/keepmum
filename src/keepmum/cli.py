@@ -804,7 +804,7 @@ def guard_local(ctx: typer.Context,
     if as_json:
         typer.echo(json.dumps({"servers": rows, "presets": [{"id": k, "name": n, "url": u} for k, (n, u) in PRESETS.items()],
                                "picks": picks_json(), "default_pick": DEFAULT_PICK,
-                               "contexts": list(CONTEXTS), "default_context": DEFAULT_CONTEXT}))
+                               "contexts": list(CONTEXTS), "default_context": DEFAULT_CONTEXT, "splash": _splash_status()}))
         return
     if not rows:
         typer.echo("no local servers: `keepmum guard local pull` downloads keepmum's pick to Ollama and uses it "
@@ -954,6 +954,12 @@ def _splash_start(server, name: str | None) -> str | None:
         return None
     port = server.url.rsplit(":", 1)[-1]
     return splash_command(server.model) + ("" if server.url == SPLASH_URL else f" --port {port}")
+
+
+def _splash_status() -> dict:
+    from . import splashsvc
+
+    return splashsvc.status()
 
 
 def _splash_managed(server, name: str | None) -> dict:

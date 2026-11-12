@@ -189,8 +189,11 @@ final class Engine {
         /// The context sizes offered, in tokens, and keepmum's default.
         var contexts: [Int]?
         var defaultContext: Int?
+        /// Whether Splash is installed and this Mac can run it; nil from older engines.
+        struct SplashInfo: Decodable, Equatable { var installed: Bool; var supported: Bool; var why: String?; var install: String }
+        var splash: SplashInfo?
         enum CodingKeys: String, CodingKey {
-            case servers, presets, picks, contexts, defaultPick = "default_pick", defaultContext = "default_context"
+            case servers, presets, picks, contexts, splash, defaultPick = "default_pick", defaultContext = "default_context"
         }
     }
     private(set) var localServers: LocalServers?

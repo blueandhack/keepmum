@@ -277,6 +277,8 @@ struct LocalServersSection: View {
     @State private var otherURL = "http://localhost:"
     /// The Splash command just copied, to say what to do with it.
     @State private var copiedSplash: String?
+    /// The command that installs Splash, just copied.
+    @State private var installCopied: String?
     /// Downloading another model to Ollama server `number`: a Hugging Face link or an Ollama name.
     @State private var pullingTo: Int?
     @State private var pullRef = ""
@@ -312,11 +314,7 @@ struct LocalServersSection: View {
                         if let p = engine.localPull, p.server == nil {
                             pullProgress(p.progress)
                         } else if let pick = defaultPick {
-                            PillButton(title: "Use keepmum's pick (\(Self.gb(pick.downloadGB)))", icon: "arrow.down.circle", prominent: true) {
-                                Task { await engine.pullLocalModel(pick.id) }
-                            }
-                            .disabled(!engine.isBundled || engine.busy)
-                            .help("Downloads \(pick.name) to Ollama and uses it. Ollama must be running.")
+                            usePickMenu(pick)
                         }
                         addMenu
                     }
@@ -330,6 +328,11 @@ struct LocalServersSection: View {
             }
         }
         .task(id: engine.status?.guard?.local) { await engine.loadLocalServers() }
+        .alert("Install Splash", isPresented: Binding(get: { installCopied != nil }, set: { if !$0 { installCopied = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This command is copied. Paste it into Terminal, then choose Use keepmum\u{2019}s pick \u{203A} With Splash again.\n\n\(installCopied ?? "")")
+        }
         .alert("Start Splash in Terminal", isPresented: Binding(get: { copiedSplash != nil }, set: { if !$0 { copiedSplash = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -376,6 +379,44 @@ struct LocalServersSection: View {
             moreMenu(n, server)
         }
         .padding(.vertical, Space.s)
+    }
+
+    /// keepmum's pick, with Splash (faster, where this Mac runs it) or with Ollama.
+    @ViewBuilder private func usePickMenu(_ pick: Engine.LocalServers.Pick) -> some View {
+        let splash = engine.localServers?.splash
+        let splashReady = splash?.installed == true && splash?.supported == true && pick.splash != nil
+        if isSnapshot {
+            PillButton(title: "Use keepmum\u{2019}s pick", icon: "chevron.down", prominent: true) {}
+        } else {
+            Menu {
+                if let spec = pick.splash, splash?.supported != false {
+                    Button(splashReady ? "With Splash: faster, runs in the background" : "With Splash: install it first\u{2026}") {
+                        if splashReady {
+                            Task { await engine.startSplash(url: "http://localhost:8000", model: spec) }
+                        } else {
+                            copyInstall(splash?.install ?? "brew install incoai/tap/splash")
+                        }
+                    }
+                }
+                Button("With Ollama: download \(Self.gb(pick.downloadGB))") { Task { await engine.pullLocalModel(pick.id) } }
+                if let why = splash?.why, pick.splash != nil {
+                    Divider()
+                    Text(why)
+                }
+            } label: {
+                Label("Use keepmum\u{2019}s pick", systemImage: splashReady ? "bolt.fill" : "arrow.down.circle")
+            }
+            .menuStyle(.button).buttonStyle(.borderedProminent).fixedSize()
+            .tint(Theme.accentFill)
+            .disabled(!engine.isBundled || engine.busy)
+            .help("\(pick.name). With Splash it writes about 1.6 times as fast and Splash downloads it the first time; with Ollama, Ollama downloads it. Ollama or Splash must be installed.")
+        }
+    }
+
+    private func copyInstall(_ command: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(command, forType: .string)
+        installCopied = command
     }
 
     /// Start or Stop for a Splash server: keepmum runs it in the background, and again at login.
@@ -455,7 +496,8 @@ struct LocalServersSection: View {
         guard let pick = defaultPick else { return "Add Ollama, LM Studio, llama.cpp, MLX or another server on this Mac" }
         let fit = memoryGB + 0.5 < Double(pick.macGB)
             ? " It suits a Mac with \(pick.macGB) GB or more; this one has \(Int(memoryGB.rounded())) GB, so choose a lighter pick after." : ""
-        return "keepmum's pick, \(pick.name), downloads to Ollama and takes about \(Self.gb(pick.memoryGB)) while it answers.\(fit) Or add LM Studio, llama.cpp, MLX or another server."
+        let runner = pick.splash != nil && engine.localServers?.splash?.supported == true ? "runs in Splash (faster) or Ollama" : "downloads to Ollama"
+        return "keepmum's pick, \(Self.pickShortName(pick.name)), \(runner) and takes about \(Self.gb(pick.memoryGB)) while it answers.\(fit) Or add another server."
     }
 
     /// A pick's menu item: its name, what it takes, and whether it downloads first or suits this Mac.
