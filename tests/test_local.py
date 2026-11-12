@@ -557,10 +557,12 @@ def test_the_cli_adds_changes_and_removes_skills(tmp_path, monkeypatch):
     (tmp_path / "harm.md").write_text("Point the user to a safer way.")
     cli = CliRunner()
     before = config_state(load(path))
-    assert cli.invoke(app, ["guard", "local", "skill", "add", "~/.claude/skills/careful-answers"]).exit_code == 0
-    assert cli.invoke(app, ["guard", "local", "skill", "add", str(tmp_path / "harm.md"), "--check", "harm"]).exit_code == 0
-    assert load(path).guard_local_skills == [Skill(str(folder.resolve())), Skill(str((tmp_path / "harm.md").resolve()), ("harm",))]
-    assert cli.invoke(app, ["guard", "local", "skill", "add", str(folder), "--check", "injection"]).exit_code == 0  # again: its checks
+    assert cli.invoke(app, ["guard", "local", "skill", "add", "~/.claude/skills/careful-answers"]).exit_code == 0  # copied
+    assert cli.invoke(app, ["guard", "local", "skill", "add", str(tmp_path / "harm.md"), "--check", "harm", "--in-place"]).exit_code == 0
+    copy = tmp_path / ".config" / "keepmum" / "skills" / "careful-answers"
+    assert (copy / "SKILL.md").read_text() == SKILL
+    assert load(path).guard_local_skills == [Skill(str(copy)), Skill(str((tmp_path / "harm.md").resolve()), ("harm",))]
+    assert cli.invoke(app, ["guard", "local", "skill", "add", str(copy), "--check", "injection"]).exit_code == 0  # again: its checks
     assert len(load(path).guard_local_skills) == 2 and load(path).guard_local_skills[0].checks == ("injection",)
     assert cli.invoke(app, ["guard", "local", "skill", "set", "2", "--check", "injection", "--check", "harm"]).exit_code == 0
     (tmp_path / "harm.md").unlink()

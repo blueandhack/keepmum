@@ -145,7 +145,7 @@ def parse_skills(value, where: str) -> list[Skill]:
     """[guard] local_skills, checked; raises ValueError with what is wrong. A missing file is not an
     error here (`keepmum guard local skill` says so): a request that goes local just leaves it out."""
     if not isinstance(value, list):
-        raise ValueError(f"{where} must be a list of tables, like [{{ path = \"~/.claude/skills/review/SKILL.md\" }}]")
+        raise ValueError(f"{where} must be a list of tables, like [{{ path = \"~/.config/keepmum/skills/review\" }}]")
     out = []
     for i, entry in enumerate(value, 1):
         at = f"{where}[{i}]"
@@ -215,6 +215,71 @@ def read_skill(path: str) -> dict:
         raise ValueError(f"{f}: {len(body):,} characters, more than {MAX_SKILL_CHARS:,} (a local model's context is small)")
     name = meta.get("name") or (f.parent.name if f.name == SKILL_FILE else f.stem)
     return {"name": name, "description": meta.get("description", ""), "text": body, "file": str(f)}
+
+
+def skills_dir() -> Path:
+    """keepmum's own folder for skills: one folder per skill, each with its SKILL.md."""
+    return Path.home() / ".config" / "keepmum" / "skills"
+
+
+def owned(path: str) -> bool:
+    """Whether a skill lives in keepmum's folder (keepmum may move or delete it), not someone else's."""
+    try:
+        return bool(Path(path).expanduser().resolve().relative_to(skills_dir().resolve()).parts)  # inside it, not the folder itself
+    except ValueError:
+        return False
+
+
+def skill_folder(name: str) -> Path:
+    """A new folder in keepmum's skills for `name`: its name as a slug, numbered if taken."""
+    import re
+
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:60] or "skill"
+    folder, n = skills_dir() / slug, 2
+    while folder.exists():
+        folder, n = skills_dir() / f"{slug}-{n}", n + 1
+    return folder
+
+
+def _yaml_line(key: str, value: str) -> str:
+    """`key: value` as YAML: plain, or a folded block where plain would be read otherwise."""
+    value = " ".join(value.split())
+    if value and value[0] not in "\"'&*!|>%@`{[#-?:,]" and ": " not in value and " #" not in value and not value.endswith(":"):
+        return f"{key}: {value}"
+    return f"{key}: >-\n  {value}" if value else f"{key}: \"\""
+
+
+def write_skill(path: str, name: str, description: str, text: str) -> Path:
+    """Write a skill's SKILL.md: its name and description in the frontmatter (other keys there are
+    kept), then its instructions. Raises ValueError if it could not be used."""
+    text = text.replace("\r\n", "\n").strip()
+    name = " ".join(name.split())
+    if not name:
+        raise ValueError("a skill needs a name")
+    if not text:
+        raise ValueError("a skill needs instructions")
+    if len(text) > MAX_SKILL_CHARS:
+        raise ValueError(f"{len(text):,} characters, more than {MAX_SKILL_CHARS:,} (a local model's context is small)")
+    p = Path(path).expanduser()
+    f = skill_file(path) if p.exists() else p if p.suffix.lower() == ".md" else p / SKILL_FILE  # a new skill: a folder
+    keep: list[str] = []
+    if f.exists():
+        raw = f.read_text(encoding="utf-8").replace("\r\n", "\n").split("\n")
+        if raw and raw[0].strip() == "---":
+            end = next((i for i in range(1, len(raw)) if raw[i].strip() == "---"), None)
+            skipping = False
+            for line in raw[1:end or 1]:
+                top = line[:1] not in (" ", "\t") and line.strip()
+                if top:
+                    skipping = line.split(":", 1)[0].strip() in ("name", "description")
+                if not skipping:
+                    keep.append(line)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    out = "\n".join(["---", _yaml_line("name", name), _yaml_line("description", description), *keep, "---", "", text, ""])
+    tmp = f.with_name(f".{f.name}.tmp")
+    tmp.write_text(out, encoding="utf-8")
+    tmp.replace(f)
+    return f
 
 
 def skills_for(skills: list[Skill], check: str) -> list[Skill]:

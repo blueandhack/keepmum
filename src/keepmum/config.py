@@ -44,8 +44,9 @@
     # the first of these that answers; checks: only for those (default both); api: "auto", "native" or "chat"
     local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
                      { url = "http://localhost:1234", model = "qwen/qwen3-8b", checks = ["harm"] }]
-    # skills for those local turns, after keepmum's note: a SKILL.md, or a folder holding one (checks as above)
-    local_skills = [{ path = "~/.claude/skills/careful-answers" }, { path = "~/notes/harm.md", checks = ["harm"] }]
+    # skills for those local turns, after keepmum's note: a SKILL.md, or a folder holding one (checks as above);
+    # `keepmum guard local skill new` and `add` keep them in ~/.config/keepmum/skills
+    local_skills = [{ path = "~/.config/keepmum/skills/careful-answers" }, { path = "~/notes/harm.md", checks = ["harm"] }]
     # after a local turn of the injection check (handback.py): "stay" on the local model, or back to the cloud
     # with the flagged result replaced: "answer" (after the local answer), "summary", "rewrite" or "withhold"
     local_handback = "stay"

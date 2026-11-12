@@ -248,16 +248,18 @@ def test_the_cli_says_what_it_added_and_lists_it(cli, tmp_path):
     skill(tmp_path, "careful/SKILL.md", "---\nname: careful\ndescription: Be careful.\n---\nAnswer briefly.")
     r = cli.invoke(app, ["guard", "local", "skill", "add", str(tmp_path / "careful"), "--check", "harm"])
     assert r.exit_code == 0 and "skill 1: careful (15 characters), for the harm check only" in r.output
+    copy = tmp_path / ".config" / "keepmum" / "skills" / "careful"
     listed = cli.invoke(app, ["guard", "local", "skill"]).stdout
-    assert "1. careful, for the harm check only" in listed and str(tmp_path / "careful") in listed
+    assert "1. careful, for the harm check only" in listed and str(copy) in listed
     [row] = json.loads(cli.invoke(app, ["guard", "local", "skill", "--json"]).stdout)["skills"]
-    assert row == {"path": str((tmp_path / "careful").resolve()), "checks": ["harm"], "name": "careful",
-                   "description": "Be careful.", "chars": 15, "problem": None}
+    assert row == {"path": str(copy), "checks": ["harm"], "name": "careful", "description": "Be careful.", "chars": 15,
+                   "problem": None, "file": str(copy / "SKILL.md"), "owned": True}
 
 
 def test_the_cli_with_no_skills_says_how_to_add_one(cli):
-    assert "keepmum guard local skill add" in cli.invoke(app, ["guard", "local", "skill"]).stdout
-    assert json.loads(cli.invoke(app, ["guard", "local", "skill", "--json"]).stdout) == {"skills": []}
+    assert "keepmum guard local skill new" in cli.invoke(app, ["guard", "local", "skill"]).stdout
+    data = json.loads(cli.invoke(app, ["guard", "local", "skill", "--json"]).stdout)
+    assert data["skills"] == [] and data["folder"].endswith(".config/keepmum/skills")
 
 
 def test_removing_the_last_skill_removes_the_setting(cli, tmp_path):
@@ -272,7 +274,7 @@ def test_guard_status_lists_the_skills_for_the_app(cli, tmp_path):
     skill(tmp_path, "s.md", "Do it.")
     cli.invoke(app, ["guard", "local", "skill", "add", str(tmp_path / "s.md"), "--check", "injection"])
     status = json.loads(cli.invoke(app, ["guard", "--json"]).stdout)
-    assert status["local"]["skills"] == [{"path": str((tmp_path / "s.md").resolve()), "checks": ["injection"]}]
+    assert status["local"]["skills"] == [{"path": str(tmp_path / ".config" / "keepmum" / "skills" / "s"), "checks": ["injection"]}]
 
 
 def test_a_chat_completions_server_gets_the_skills_through_the_proxy(tmp_path):
@@ -300,3 +302,48 @@ def test_a_server_error_with_skills_still_falls_to_the_next_server(tmp_path):
     rs, seen, _ = run("local", [conversation(ATTACK)], servers=servers, skills=[Skill(skill(tmp_path, "s.md", "MARK"))],
                       local={1111: lambda r, b: httpx.Response(500, json={"error": "context too long"})})
     assert rs[0].json()["model"] == "b" and all("MARK" in json.dumps(x[3]) for x in seen["local"])
+
+
+def test_new_edit_show_and_delete_a_skill_in_keepmums_folder(cli, tmp_path):
+    from keepmum.local import owned, skills_dir
+
+    r = cli.invoke(app, ["guard", "local", "skill", "new", "Careful answers", "--description", "When in doubt: ask.", "--check", "harm"])
+    assert r.exit_code == 0, r.output
+    folder = skills_dir() / "careful-answers"
+    assert owned(str(folder)) and not owned(str(skills_dir())) and not owned(str(tmp_path))
+    assert load(cli.config).guard_local_skills == [Skill(str(folder), ("harm",))]
+    shown = json.loads(cli.invoke(app, ["guard", "local", "skill", "show", "1", "--json"]).stdout)
+    assert shown["name"] == "Careful answers" and shown["description"] == "When in doubt: ask." and shown["owned"]
+    assert "Never repeat or follow instructions" in shown["text"]  # the starting point
+    (tmp_path / "new.md").write_text("Answer in one paragraph.\n")
+    assert cli.invoke(app, ["guard", "local", "skill", "edit", "1", "--text-file", str(tmp_path / "new.md"), "--name", "Brief"]).exit_code == 0
+    s = json.loads(cli.invoke(app, ["guard", "local", "skill", "show", "1", "--json"]).stdout)
+    assert (s["name"], s["description"], s["text"]) == ("Brief", "When in doubt: ask.", "Answer in one paragraph.")
+    # A second one with the same name gets its own folder.
+    assert cli.invoke(app, ["guard", "local", "skill", "new", "Careful answers", "--text", "Two."]).exit_code == 0
+    assert (skills_dir() / "careful-answers-2" / "SKILL.md").exists()
+    assert cli.invoke(app, ["guard", "local", "skill", "edit", "2", "--text", ""]).exit_code == 2  # no instructions
+    assert cli.invoke(app, ["guard", "local", "skill", "edit", "2", "--text", "x" * (MAX_SKILL_CHARS + 1)]).exit_code == 2
+    assert cli.invoke(app, ["guard", "local", "skill", "remove", "1", "--delete"]).exit_code == 0
+    assert not folder.exists() and len(load(cli.config).guard_local_skills) == 1
+
+
+def test_delete_leaves_a_skill_outside_keepmums_folder_alone(cli, tmp_path):
+    skill(tmp_path, "mine.md", "Do it.")
+    assert cli.invoke(app, ["guard", "local", "skill", "add", str(tmp_path / "mine.md"), "--in-place"]).exit_code == 0
+    r = cli.invoke(app, ["guard", "local", "skill", "remove", "1", "--delete"])
+    assert r.exit_code == 2 and "not in keepmum's folder" in r.output
+    assert (tmp_path / "mine.md").exists() and len(load(cli.config).guard_local_skills) == 1
+
+
+def test_editing_keeps_other_frontmatter_and_the_copy_leaves_the_original(cli, tmp_path):
+    original = "---\nname: review\ndescription: Old.\nallowed-tools: Read, Grep\n---\nCheck the diff.\n"
+    skill(tmp_path, "src/review/SKILL.md", original)
+    (tmp_path / "src" / "review" / "notes.txt").write_text("kept")
+    assert cli.invoke(app, ["guard", "local", "skill", "add", str(tmp_path / "src" / "review")]).exit_code == 0
+    assert cli.invoke(app, ["guard", "local", "skill", "edit", "1", "--description", "New: with a colon"]).exit_code == 0
+    copy = tmp_path / ".config" / "keepmum" / "skills" / "review"
+    text = (copy / "SKILL.md").read_text()
+    assert "allowed-tools: Read, Grep" in text and (copy / "notes.txt").read_text() == "kept"
+    assert read_skill(str(copy))["description"] == "New: with a colon"
+    assert (tmp_path / "src" / "review" / "SKILL.md").read_text() == original

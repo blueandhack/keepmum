@@ -277,7 +277,7 @@ struct LocalServersSection: View {
 
     var body: some View {
         FormSection(title: "Local servers",
-                    footer: "For Local mode. A flagged request goes to the first server here that answers for its check; one that is not running, lacks its model or fails is passed over, and if none answers the request is refused. Each gets the request on this Mac only, without tools or your API key. Ollama, LM Studio and llama.cpp take Claude Code's and Codex's requests as they are; other servers, such as MLX, get them as Chat Completions, and so does every server for the Antigravity CLI and Gemini CLI, whose answers come back in Gemini's format. An Ollama server's model menu offers keepmum's tested picks, downloaded for you, and any other model from Ollama or Hugging Face. Ollama gives a model its longest context unless told otherwise, which takes several GB more: set 64k in Ollama's settings. Use a capable model (8B or larger): a small one may repeat a planted instruction, or help with what the harm check flagged.") {
+                    footer: "For Local mode. A flagged request goes to the first server here that answers for its check; one that is not running, lacks its model or fails is passed over, and if none answers the request is refused. Each gets the request on this Mac only, without tools or your API key. Ollama, LM Studio and llama.cpp take Claude Code's and Codex's requests as they are; other servers, such as MLX, get them as Chat Completions, and so does every server for the Antigravity CLI and Gemini CLI, whose answers come back in Gemini's format. An Ollama server's model menu offers keepmum's tested picks, downloaded for you, and any other model from Ollama or Hugging Face. keepmum gives an Ollama model a 64k context, which takes several GB less than Ollama's own setting (the model's longest); its Context menu offers 16k to 128k, or Ollama's own. It does this with its own copy of the model in Ollama (keepmum/…), which shares the downloaded files: no more disk. Use a capable model (8B or larger): a small one may repeat a planted instruction, or help with what the harm check flagged.") {
             if rows.isEmpty {
                 FormRow(title: "No local servers",
                         detail: used ? "A check is in Local mode with nowhere to send what it flags, so it refuses it. Add a server."
@@ -339,6 +339,7 @@ struct LocalServersSection: View {
             }
             Spacer(minLength: Space.m)
             modelMenu(n, server)
+            if server.kind == "Ollama", server.contextMax != nil { contextMenu(n, server) }
             checksMenu(n, server)
             moreMenu(n)
         }
@@ -353,7 +354,49 @@ struct LocalServersSection: View {
     private func detail(_ server: Engine.LocalServers.Server) -> String {
         if let problem = server.problem { return problem.prefix(1).uppercased() + problem.dropFirst() }
         let checks = server.checks.count == 2 ? "both checks" : "the \(server.checks[0]) check only"
-        return "Answers for \(checks)" + (server.api == "chat" ? ", as Chat Completions" : "")
+        var out = "Answers for \(checks)" + (server.api == "chat" ? ", as Chat Completions" : "")
+        if server.kind == "Ollama", let most = server.contextMax {
+            out += server.context.map { ", with a \(Self.tokens($0)) context" }
+                ?? ", at Ollama\u{2019}s own context: up to \(Self.tokens(most)), the most memory"
+        }
+        return out
+    }
+
+    private var contexts: [Int] { engine.localServers?.contexts ?? [16384, 32768, 65536, 131072] }
+    private var defaultContext: Int { engine.localServers?.defaultContext ?? 65536 }
+
+    static func tokens(_ n: Int) -> String { n.isMultiple(of: 1024) ? "\(n / 1024)k" : n.formatted() }
+
+    /// An Ollama model's context size: keepmum sets it through its own copy of the model, which
+    /// shares the downloaded files. Less takes less memory; a long session needs more.
+    @ViewBuilder private func contextMenu(_ n: Int, _ server: Engine.LocalServers.Server) -> some View {
+        let label = server.context.map { Self.tokens($0) } ?? "Max"
+        if isSnapshot {
+            menuLabel(label)
+        } else {
+            Menu(label) {
+                Section("Context size: less takes less memory") {
+                    ForEach(contexts, id: \.self) { c in
+                        Button(contextLabel(c, server)) { Task { await engine.setLocalContext(n, size: String(c)) } }
+                            .disabled(c == server.context || (server.contextMax.map { c > $0 } ?? false))
+                    }
+                    Button("Ollama\u{2019}s own setting, up to \(server.contextMax.map { Self.tokens($0) } ?? "the model\u{2019}s longest"): the most memory") {
+                        Task { await engine.setLocalContext(n, size: "default") }
+                    }
+                    .disabled(server.context == nil)
+                }
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+            .disabled(!engine.isBundled || engine.busy)
+            .help("How much of a conversation the model takes in. A long agent session needs more; what does not fit is cut.")
+        }
+    }
+
+    private func contextLabel(_ c: Int, _ server: Engine.LocalServers.Server) -> String {
+        var label = "\(Self.tokens(c)) tokens"
+        if c == defaultContext { label += " (keepmum\u{2019}s default)" }
+        if c == server.context { label += " \u{2713}" }
+        return label
     }
 
     private var emptyDetail: String {
@@ -397,7 +440,7 @@ struct LocalServersSection: View {
     }
 
     @ViewBuilder private func modelMenu(_ n: Int, _ server: Engine.LocalServers.Server) -> some View {
-        let label = server.model.isEmpty ? "Choose model…" : pickName(server.model) ?? Self.shortName(server.model)
+        let label = server.model.isEmpty ? "Choose model…" : pickName(server.base ?? server.model) ?? Self.shortName(server.base ?? server.model)
         let ollama = server.kind == "Ollama"
         if let p = engine.localPull, p.server == n {
             pullProgress(p.progress)
@@ -417,8 +460,13 @@ struct LocalServersSection: View {
                 }
                 Section(ollama ? "On this server" : "") {
                     if let have = server.models, !have.isEmpty {
-                        ForEach(have, id: \.self) { name in
-                            Button(Self.shortName(name)) { Task { await engine.setLocalServer(n, model: name) } }
+                        ForEach(have.filter { !$0.hasPrefix("keepmum/") }, id: \.self) { name in
+                            Button(Self.shortName(name)) {
+                                Task {
+                                    await engine.setLocalServer(n, model: name)
+                                    if ollama { await engine.setLocalContext(n, size: String(defaultContext)) }
+                                }
+                            }
                         }
                     } else {
                         Text(server.models == nil ? "Not answering" : "No models there yet")
@@ -503,6 +551,7 @@ struct LocalServersSection: View {
 struct LocalSkillsSection: View {
     var engine: Engine
     @Environment(\.isSnapshot) private var isSnapshot
+    @Environment(\.openWindow) private var openWindow
 
     private var rows: [Engine.LocalSkills.Skill] {
         engine.localSkills?.skills ?? (engine.status?.guard?.local?.skills ?? []).map {
@@ -512,7 +561,7 @@ struct LocalSkillsSection: View {
 
     var body: some View {
         FormSection(title: "Skills for local turns",
-                    footer: "Your own instructions for the local model, in Claude Code's SKILL.md format: a SKILL.md, or a skill's folder, such as one in ~/.claude/skills. Each local turn of the checks a skill is for gets its text after keepmum's note, which says why the turn stayed on this Mac and that the model has no tools. Edits apply on the next turn; one that cannot be read, or is over 20,000 characters, is left out.") {
+                    footer: "Your own instructions for the local model, in Claude Code's SKILL.md format, kept in keepmum's folder (~/.config/keepmum/skills): write, import, edit and delete them in the Skills window. An imported skill is copied there, so editing it leaves the original alone. Each local turn of the checks a skill is for gets its text after keepmum's note, which says why the turn stayed on this Mac and that the model has no tools. Edits apply on the next turn; one that cannot be read, or is over 20,000 characters, is left out.") {
             if rows.isEmpty {
                 FormRow(title: "No skills", detail: "Local models get keepmum's note and the agent's own instructions") { addButton }
             } else {
@@ -535,7 +584,9 @@ struct LocalSkillsSection: View {
                     .foregroundStyle(skill.problem == nil ? Theme.textSecondary : Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .help(skill.path)
+            .help("Edit in the Skills window: " + skill.path)
+            .contentShape(Rectangle())
+            .onTapGesture { if !isSnapshot { SkillsWindow.show(openWindow, engine: engine, skill: n) } }
             Spacer(minLength: Space.m)
             checksMenu(n, skill)
             moreMenu(n, skill)
@@ -574,9 +625,12 @@ struct LocalSkillsSection: View {
             Image(systemName: "ellipsis.circle").foregroundStyle(Theme.textSecondary)
         } else {
             Menu {
+                Button("Edit…") { SkillsWindow.show(openWindow, engine: engine, skill: n) }
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: skill.path)]) }
                 Divider()
-                Button("Remove", role: .destructive) { Task { await engine.removeLocalSkill(n) } }
+                Button(skill.owned == true ? "Move to Trash" : "Remove", role: .destructive) {
+                    Task { await engine.deleteLocalSkill(n) }
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
@@ -588,24 +642,10 @@ struct LocalSkillsSection: View {
 
     @ViewBuilder private var addButton: some View {
         if isSnapshot {
-            PillButton(title: "Add skill…", icon: "plus") {}
+            PillButton(title: "Open Skills…", icon: "square.and.pencil") {}
         } else {
-            PillButton(title: "Add skill…", icon: "plus") { pick() }
-                .disabled(!engine.isBundled || engine.busy)
-        }
-    }
-
-    private func pick() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Add"
-        panel.message = "A SKILL.md, or a skill's folder. Its text goes to the local model after keepmum's note, on both checks' local turns."
-        let skills = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/skills")
-        if FileManager.default.fileExists(atPath: skills.path) { panel.directoryURL = skills }
-        if panel.runModal() == .OK, let url = panel.url {
-            Task { await engine.addLocalSkill(url) }
+            PillButton(title: "Open Skills…", icon: "square.and.pencil") { SkillsWindow.show(openWindow, engine: engine) }
+                .disabled(!engine.isBundled)
         }
     }
 }

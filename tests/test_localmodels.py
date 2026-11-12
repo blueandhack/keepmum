@@ -9,7 +9,7 @@ from keepmum import local, localmodels
 from keepmum.cli import app
 from keepmum.config import load
 from keepmum.local import Server
-from keepmum.localmodels import DEFAULT_PICK, PICKS, PullError, quant_of, resolve
+from keepmum.localmodels import DEFAULT_PICK, PICKS, PullError, copy_name, parse_context, quant_of, resolve
 
 PICK = PICKS[0].model
 
@@ -113,22 +113,36 @@ def home(tmp_path, monkeypatch):
     return path
 
 
-def test_the_cli_pulls_the_default_pick_and_uses_it(home, monkeypatch):
+@pytest.fixture
+def no_copies(monkeypatch):
+    """keepmum's context copies, without an Ollama: the name it would make, from the model's base."""
+    monkeypatch.setattr(localmodels, "base_of", lambda url, model: model)
+
+    def with_context(url, model, ctx, timeout=120.0):
+        base = localmodels.base_of(url, model)
+        return base if ctx is None else copy_name(base, ctx)
+
+    monkeypatch.setattr(localmodels, "with_context", with_context)
+    monkeypatch.setattr(localmodels, "delete_copy", lambda url, model: True)
+
+
+def test_the_cli_pulls_the_default_pick_and_uses_it(home, monkeypatch, no_copies):
     pulled = []
     monkeypatch.setattr(local, "models", lambda url, timeout=3.0: [])
     monkeypatch.setattr(local, "kind", lambda url, timeout=1.5: "Ollama")
     monkeypatch.setattr(localmodels, "pull", lambda url, model, progress=None, timeout=30.0: (pulled.append((url, model)), progress(5, 10)))
     r = CliRunner().invoke(app, ["guard", "local", "pull"])
     assert r.exit_code == 0, r.output
-    assert pulled == [("http://localhost:11434", PICK)] and "50% of" in r.stderr
-    assert load(home).guard_local_servers == [Server("http://localhost:11434", PICK)]
-    # A Hugging Face link onto the same server: its model changes, no second server.
-    r = CliRunner().invoke(app, ["guard", "local", "pull", "https://huggingface.co/o/r", "--quant", "Q4_K_M"])
+    assert pulled == [("http://localhost:11434", PICK)] and "50% of" in r.stderr and "Context: 64k tokens" in r.stderr
+    assert load(home).guard_local_servers == [Server("http://localhost:11434", copy_name(PICK, 65536))]
+    # A Hugging Face link onto the same server, at Ollama's own context: its model changes, no second server.
+    r = CliRunner().invoke(app, ["guard", "local", "pull", "https://huggingface.co/o/r", "--quant", "Q4_K_M", "--context", "default"])
     assert r.exit_code == 0, r.output
-    assert load(home).guard_local_servers == [Server("http://localhost:11434", "hf.co/o/r:Q4_K_M")]
+    assert load(home).guard_local_servers == [Server("http://localhost:11434", "hf.co/o/r:Q4_K_M")] and "Ollama's own" in r.stderr
+    assert CliRunner().invoke(app, ["guard", "local", "pull", "--context", "huge"]).exit_code == 2
 
 
-def test_the_cli_skips_a_model_ollama_has_and_leaves_others_alone(home, monkeypatch):
+def test_the_cli_skips_a_model_ollama_has_and_leaves_others_alone(home, monkeypatch, no_copies):
     home.write_text('[guard]\nlocal_servers = [{ url = "http://localhost:1234", model = "qwen/qwen3-8b" }, '
                     '{ url = "http://localhost:11434", model = "qwen3:8b", checks = ["harm"] }]\n')
     monkeypatch.setattr(local, "models", lambda url, timeout=3.0: [PICK])
@@ -137,7 +151,7 @@ def test_the_cli_skips_a_model_ollama_has_and_leaves_others_alone(home, monkeypa
     r = CliRunner().invoke(app, ["guard", "local", "pull", "recommended"])
     assert r.exit_code == 0 and "already on Ollama" in r.stderr
     assert load(home).guard_local_servers == [Server("http://localhost:1234", "qwen/qwen3-8b"),
-                                              Server("http://localhost:11434", PICK, ("harm",))]
+                                              Server("http://localhost:11434", copy_name(PICK, 65536), ("harm",))]
     r = CliRunner().invoke(app, ["guard", "local", "pull", "--server", "1"])
     assert r.exit_code == 1 and "only Ollama downloads" in r.stderr
 
@@ -150,3 +164,60 @@ def test_the_cli_lists_picks(home, monkeypatch):
     assert data["default_pick"] == "recommended" and [p["id"] for p in data["picks"]] == [p.id for p in PICKS]
     assert "keepmum guard local pull" in CliRunner().invoke(app, ["guard", "local"]).stdout
     assert CliRunner().invoke(app, ["guard", "local", "pull", "ftp://huggingface.co/a/b"]).exit_code == 2
+
+
+def test_parse_context_takes_sizes_and_default():
+    assert parse_context("64k") == 65536 and parse_context("32768") == 32768 and parse_context(" 16K ") == 16384
+    assert parse_context("default") is None and parse_context("max") is None
+    for bad in ("huge", "1k", "4096k", "-1"):
+        with pytest.raises(PullError):
+            parse_context(bad)
+
+
+def test_copy_names_are_ollama_names():
+    assert copy_name(PICK, 65536) == "keepmum/qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive-iq3_m:ctx64k"
+    assert copy_name("qwen3:8b", 32768) == "keepmum/qwen3-8b:ctx32k" and copy_name("m", 50000) == "keepmum/m:ctx50000"
+
+
+def test_with_context_copies_from_the_base_and_reads_it_back(monkeypatch):
+    import httpx
+
+    sent = []
+
+    def post(url, json=None, timeout=None):
+        sent.append((url.rsplit("/", 1)[-1], json))
+        if url.endswith("/api/show"):
+            if json["model"].startswith("keepmum/"):
+                return httpx.Response(200, json={"parameters": "num_ctx                        65536\ntop_k 20",
+                                                 "model_info": {"qwen35moe.context_length": 262144},
+                                                 "details": {"parent_model": "base:q"}})
+            return httpx.Response(200, json={"parameters": "top_k 20", "model_info": {"qwen35moe.context_length": 262144}, "details": {}})
+        return httpx.Response(200, json={"status": "success"})
+
+    monkeypatch.setattr(httpx, "post", post)
+    real = localmodels
+    assert real.show("http://o", "keepmum/base-q:ctx64k") == {"context": 65536, "max": 262144, "parent": "base:q"}
+    assert real.show("http://o", "base:q") == {"context": None, "max": 262144, "parent": None}
+    # From a copy to another size: the new copy is made from the base, never from the copy.
+    assert real.with_context("http://o", "keepmum/base-q:ctx64k", 32768) == "keepmum/base-q:ctx32k"
+    assert sent[-1] == ("create", {"model": "keepmum/base-q:ctx32k", "from": "base:q", "parameters": {"num_ctx": 32768}, "stream": False})
+    assert real.with_context("http://o", "keepmum/base-q:ctx64k", None) == "base:q"
+    assert real.delete_copy("http://o", "base:q") is False  # never a model the user downloaded
+
+
+def test_the_cli_changes_the_context_and_drops_the_old_copy(home, monkeypatch, no_copies):
+    home.write_text(f'[guard]\nlocal_servers = [{{ url = "http://localhost:11434", model = "{copy_name(PICK, 65536)}" }}]\n')
+    dropped = []
+    monkeypatch.setattr(local, "models", lambda url, timeout=3.0: [copy_name(PICK, 65536), PICK])
+    monkeypatch.setattr(local, "kind", lambda url, timeout=1.5: "Ollama")
+    monkeypatch.setattr(localmodels, "base_of", lambda url, model: PICK)
+    monkeypatch.setattr(localmodels, "show", lambda url, model, timeout=5.0: {"context": 65536, "max": 262144, "parent": PICK})
+    monkeypatch.setattr(localmodels, "delete_copy", lambda url, model: dropped.append(model) or True)
+    shown = CliRunner().invoke(app, ["guard", "local", "context"])
+    assert shown.exit_code == 0 and "64k tokens (it takes up to 256k tokens)" in shown.stdout and "Options:" in shown.stdout
+    r = CliRunner().invoke(app, ["guard", "local", "context", "32k"])
+    assert r.exit_code == 0, r.output
+    assert load(home).guard_local_servers == [Server("http://localhost:11434", copy_name(PICK, 32768))]
+    assert dropped == [copy_name(PICK, 65536)]
+    assert CliRunner().invoke(app, ["guard", "local", "context", "lots"]).exit_code == 2
+    assert CliRunner().invoke(app, ["guard", "local", "context", "32k", "--server", "2"]).exit_code == 2
