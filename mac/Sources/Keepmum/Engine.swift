@@ -155,8 +155,10 @@ final class Engine {
             var context: Int?
             var contextMax: Int?
             var base: String?
+            /// For Splash: the command that starts it with this server's model (it runs in a terminal).
+            var start: String?
             enum CodingKeys: String, CodingKey {
-                case url, model, checks, api, kind, models, problem, context, base, contextMax = "context_max"
+                case url, model, checks, api, kind, models, problem, context, base, start, contextMax = "context_max"
             }
         }
         struct Preset: Decodable, Equatable, Identifiable { var id: String; var name: String; var url: String }
@@ -169,8 +171,10 @@ final class Engine {
             var memoryGB: Double
             var macGB: Int
             var note: String
+            /// How Splash names it (`splash serve --model`), if Splash runs it.
+            var splash: String?
             enum CodingKeys: String, CodingKey {
-                case id, name, model, note, downloadGB = "download_gb", memoryGB = "memory_gb", macGB = "mac_gb"
+                case id, name, model, note, splash, downloadGB = "download_gb", memoryGB = "memory_gb", macGB = "mac_gb"
             }
         }
         var servers: [Server]
@@ -1110,6 +1114,10 @@ final class Engine {
                                                              .init(path: NSHomeDirectory() + "/notes/harm.md", checks: ["harm"])],
                                                     handback: "summary", handbackInstructions: "")))
         e.localServers = .init(servers: [
+            .init(url: "http://localhost:8000", model: "HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M",
+                  checks: ["injection", "harm"], api: "auto", kind: nil, models: nil,
+                  problem: "nothing answers at http://localhost:8000 (Splash? `splash serve --model HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M --language-only --max-context 64K`)",
+                  start: "splash serve --model HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M --language-only --max-context 64K"),
             .init(url: "http://localhost:11434", model: "keepmum/qwen3.6-35b-a3b-uncensored-hauhaucs-aggressive-iq3_m:ctx64k",
                   checks: ["injection", "harm"], api: "auto", kind: "Ollama",
                   models: ["hf.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M",
@@ -1128,7 +1136,8 @@ final class Engine {
                       .init(id: "mlx", name: "MLX", url: "http://localhost:8080")],
             picks: [.init(id: "recommended", name: "Qwen3.6 35B-A3B Uncensored (HauhauCS), IQ3_M",
                           model: "hf.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M",
-                          downloadGB: 16.3, memoryGB: 16.1, macGB: 32, note: "The best balance in keepmum's tests."),
+                          downloadGB: 16.3, memoryGB: 16.1, macGB: 32, note: "The best balance in keepmum's tests.",
+                          splash: "HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M"),
                     .init(id: "light", name: "Qwen3.5 9B Defiant Fable (DavidAU), Q8_0",
                           model: "hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q8_0",
                           downloadGB: 11.4, memoryGB: 9.1, macGB: 24, note: "Slower on long answers.")],

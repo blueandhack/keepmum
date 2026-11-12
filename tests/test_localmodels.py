@@ -221,3 +221,78 @@ def test_the_cli_changes_the_context_and_drops_the_old_copy(home, monkeypatch, n
     assert dropped == [copy_name(PICK, 65536)]
     assert CliRunner().invoke(app, ["guard", "local", "context", "lots"]).exit_code == 2
     assert CliRunner().invoke(app, ["guard", "local", "context", "32k", "--server", "2"]).exit_code == 2
+
+
+SPLASH_SPEC = "HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M"
+SPLASH_ID = SPLASH_SPEC  # what Splash serves, started as `splash serve --model SPLASH_SPEC`
+
+
+def test_splash_names_and_command():
+    from keepmum.localmodels import splash_command, splash_id
+
+    assert splash_id(SPLASH_SPEC) == SPLASH_ID and PICKS[0].splash == SPLASH_SPEC
+    assert [p.id for p in PICKS if p.splash] == ["recommended", "larger"]  # Splash has no draft for the 9B
+    want = f"splash serve --model {SPLASH_SPEC} --language-only --max-context 64K"
+    assert splash_command(SPLASH_ID) == splash_command("recommended") == want
+    assert splash_command(SPLASH_SPEC.split(":")[0]) == want  # a local file's served name: the repo alone
+    assert splash_command("owner/other:Q4") == "splash serve --model owner/other:Q4 --language-only --max-context 64K"
+
+
+def test_kind_knows_splash_and_missing_says_how_to_start_it(monkeypatch):
+    import httpx
+
+    def get(url, timeout=None):
+        if url.endswith("/v1/models"):
+            return httpx.Response(200, json={"data": [{"id": SPLASH_ID, "owned_by": "splash"}]})
+        return httpx.Response(404, json={})
+
+    monkeypatch.setattr(httpx, "get", get)
+    assert local.kind("http://localhost:8000") == "Splash"
+    server = Server("http://localhost:8000", SPLASH_ID)
+    assert local.missing(server, [SPLASH_ID], "Splash") is None
+    assert f"`splash serve --model {SPLASH_SPEC}" in local.missing(server, None, "Splash")
+    assert f"(Splash? `splash serve --model {SPLASH_SPEC}" in local.missing(server, None, None)  # down: unnamed
+    other = local.missing(Server("http://localhost:8000", "owner/b"), ["owner/a"], "Splash")
+    assert "it serves owner/a; restart it with `splash serve --model owner/b" in other
+    assert "splash" in local.PRESETS and local.PRESETS["splash"][1] == "http://localhost:8000"
+
+
+def test_the_cli_puts_splash_first_and_prints_how_to_start_it(home, monkeypatch):
+    import shutil
+
+    home.write_text('[guard]\nlocal_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" }]\n')
+    monkeypatch.setattr(local, "models", lambda url, timeout=3.0: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    r = CliRunner().invoke(app, ["guard", "local", "splash"])
+    assert r.exit_code == 0, r.output
+    assert load(home).guard_local_servers == [Server("http://localhost:8000", SPLASH_ID), Server("http://localhost:11434", "qwen3:8b")]
+    assert f"splash serve --model {SPLASH_SPEC} --language-only --max-context 64K" in r.stdout
+    assert "brew install incoai/tap/splash" in r.stderr
+    # Again with the larger pick: the same server, its model changed, still first.
+    assert CliRunner().invoke(app, ["guard", "local", "splash", "larger"]).exit_code == 0
+    servers = load(home).guard_local_servers
+    assert [x.url for x in servers] == ["http://localhost:8000", "http://localhost:11434"]
+    assert servers[0].model == "HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:Q4_K_M"
+    r = CliRunner().invoke(app, ["guard", "local", "splash", "light"])
+    assert r.exit_code == 2 and "Splash does not run light" in r.stderr
+    assert CliRunner().invoke(app, ["guard", "local", "splash", "nonsense"]).exit_code == 2
+    assert CliRunner().invoke(app, ["guard", "local", "splash", "--url", "http://example.com:8000"]).exit_code == 2
+
+
+def test_the_cli_says_when_splash_already_serves_it(home, monkeypatch):
+    monkeypatch.setattr(local, "models", lambda url, timeout=3.0: [SPLASH_ID])
+    monkeypatch.setattr(local, "kind", lambda url, timeout=1.5: "Splash")
+    r = CliRunner().invoke(app, ["guard", "local", "splash", "--url", "http://127.0.0.1:8093"])
+    assert r.exit_code == 0 and "Splash is running with it" in r.stderr and r.stdout == ""
+    assert load(home).guard_local_servers == [Server("http://127.0.0.1:8093", SPLASH_ID)]
+
+
+def test_the_listing_gives_the_command_that_starts_splash(home, monkeypatch):
+    home.write_text(f'[guard]\nlocal_servers = [{{ url = "http://localhost:8000", model = "{SPLASH_ID}" }}, '
+                    '{ url = "http://localhost:11434", model = "qwen3:8b" }]\n')
+    monkeypatch.setattr(local, "models", lambda url, timeout=3.0: None)
+    rows = json.loads(CliRunner().invoke(app, ["guard", "local", "--json"]).stdout)["servers"]
+    assert rows[0]["start"] == f"splash serve --model {SPLASH_SPEC} --language-only --max-context 64K"
+    assert rows[1]["start"] is None
+    picks = json.loads(CliRunner().invoke(app, ["guard", "local", "picks", "--json"]).stdout)["picks"]
+    assert picks[0]["splash"] == SPLASH_SPEC and picks[2]["splash"] is None

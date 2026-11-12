@@ -799,7 +799,8 @@ def guard_local(ctx: typer.Context,
         info = show(server.url, server.model) if name == "Ollama" and server.model and server.model in have else None
         rows.append({"url": server.url, "model": server.model, "checks": list(server.checks), "api": server.api,
                      "kind": name, "models": have, "problem": missing(server, have, name),
-                     "context": info and info["context"], "context_max": info and info["max"], "base": info and info["parent"]})
+                     "context": info and info["context"], "context_max": info and info["max"], "base": info and info["parent"],
+                     "start": _splash_start(server, name)})
     if as_json:
         typer.echo(json.dumps({"servers": rows, "presets": [{"id": k, "name": n, "url": u} for k, (n, u) in PRESETS.items()],
                                "picks": picks_json(), "default_pick": DEFAULT_PICK,
@@ -865,7 +866,7 @@ def guard_local_picks(as_json: bool = typer.Option(False, "--json", help="Print 
         return
     for p in PICKS:
         typer.echo(f"{p.id}{' (default)' if p.id == DEFAULT_PICK else ''}: {p.name}")
-        typer.echo(f"   {p.model}")
+        typer.echo(f"   {p.model}" + (" (Splash runs it too: `keepmum guard local splash " + p.id + "`)" if p.splash else ""))
         typer.echo(f"   {p.download_gb:.1f} GB download, about {p.memory_gb:.1f} GB in use with a 32k context; "
                    f"for a Mac with {p.mac_gb} GB or more. {p.note}")
     typer.echo("`keepmum guard local pull <pick>` downloads one to Ollama and uses it. Any other model works too: "
@@ -945,6 +946,16 @@ def guard_local_pull(model: str = typer.Argument(None, help="A pick (`keepmum gu
     typer.echo(_context_note(size, used, name), err=True)
 
 
+def _splash_start(server, name: str | None) -> str | None:
+    """The command that starts Splash for this server: one that is Splash, or not answering on Splash's port."""
+    from .localmodels import SPLASH_URL, splash_command
+
+    if not server.model or not (name == "Splash" or (name is None and server.url.endswith(":" + SPLASH_URL.rsplit(":", 1)[-1]))):
+        return None
+    port = server.url.rsplit(":", 1)[-1]
+    return splash_command(server.model) + ("" if server.url == SPLASH_URL else f" --port {port}")
+
+
 def _context_text(n: int | None, longest: int | None) -> str:
     from .localmodels import context_label
 
@@ -969,6 +980,56 @@ def _drop_copy(url: str, old: str | None, servers: list) -> None:
 
     if old and not any(x.model == old for x in servers):
         delete_copy(url, old)
+
+
+@local_app.command("splash")
+def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splash runs (`keepmum guard local picks`; default: "
+                                                   "keepmum's pick), or any model Splash serves, as owner/repo[:VARIANT]."),
+                       url: str = typer.Option(None, "--url", help="Where Splash listens (default http://localhost:8000).")) -> None:
+    """Use Splash (github.com/incoai/splash) for local mode: tried first, the other servers kept behind it.
+    Splash is an engine for Apple silicon built around a few models; with keepmum's pick it wrote about
+    1.6 times as fast as Ollama in keepmum's tests. It runs in a terminal: this prints the command."""
+    import dataclasses
+    import shutil
+
+    from .local import Server, kind, models, on_this_mac
+    from .localmodels import DEFAULT_PICK, PICKS, SPLASH_URL, pick, splash_command, splash_id
+
+    where = "keepmum guard local splash"
+    url = (url or SPLASH_URL).rstrip("/")
+    if not on_this_mac(url):
+        typer.echo(f"{where}: --url must be on this Mac (http://localhost:…)", err=True)
+        raise typer.Exit(2)
+    ref = model or DEFAULT_PICK
+    p = pick(ref)
+    if p is not None and not p.splash:
+        runs = ", ".join(x.id for x in PICKS if x.splash)
+        typer.echo(f"{where}: Splash does not run {p.id} ({p.name}); of keepmum's picks it runs {runs}", err=True)
+        raise typer.Exit(2)
+    spec = p.splash if p else ref
+    if "/" not in spec:
+        typer.echo(f"{where}: {spec}: give a pick, or a model as owner/repo[:VARIANT]", err=True)
+        raise typer.Exit(2)
+    served = splash_id(spec)
+    cfg = _config()
+    servers = list(cfg.guard_local_servers)
+    at = next((i for i, x in enumerate(servers) if x.url == url), None)
+    if at is None:
+        servers.insert(0, Server(url, served))
+    else:
+        servers[at] = dataclasses.replace(servers[at], model=served)
+        servers.insert(0, servers.pop(at))
+    _save_servers(cfg, servers, f"{where} {spec}")
+    typer.echo(f"local server 1: Splash at {url}, model {served}; the others stay behind it", err=True)
+    have = models(url)
+    if have is not None and kind(url) == "Splash" and served in have:
+        typer.echo("Splash is running with it: local mode uses it from the next flagged request.", err=True)
+        return
+    if shutil.which("splash") is None:
+        typer.echo("Splash is not installed: `brew install incoai/tap/splash` (an M3 or newer Mac, macOS 26.4 or later).", err=True)
+    typer.echo("Start it in a terminal, and leave it running (the first start downloads the model and its draft):", err=True)
+    typer.echo(f"  {splash_command(spec)}" + ("" if url == SPLASH_URL else f" --port {url.rsplit(':', 1)[-1]}"))
+    typer.echo("Until it answers, flagged requests go to the next server. It frees its memory after 10 minutes idle.", err=True)
 
 
 @local_app.command("context")

@@ -687,7 +687,7 @@ def test_guard_local_refuses_a_url_off_this_mac(home):
 def test_guard_local_add_and_set_check_their_options(home):
     write(home, '[guard]\nlocal_servers = [{ url = "http://localhost:11434", model = "a" }]\n')
     before = home.read_text()
-    for args, said in ((["add", "--preset", "vllm"], "--preset vllm: use ollama, lmstudio, llamacpp, mlx"),
+    for args, said in ((["add", "--preset", "vllm"], "--preset vllm: use ollama, splash, lmstudio, llamacpp, mlx"),
                        (["add", "--api", "grpc"], "--api grpc: use auto, native, chat"),
                        (["set", "1", "--url", "https://example.com"], "--url must be on this Mac"),
                        (["set", "2"], "no server 2 (1 to 1)")):

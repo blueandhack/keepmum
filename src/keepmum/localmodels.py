@@ -36,16 +36,18 @@ class Pick:
     memory_gb: float  # what Ollama holds with a 32k context
     mac_gb: int  # the smallest Mac memory it suits, beside the apps you run
     note: str
+    splash: str | None = None  # how Splash names it (`splash serve --model`), if Splash runs it
 
 
 PICKS = (
     Pick("recommended", "Qwen3.6 35B-A3B Uncensored (HauhauCS), IQ3_M",
          "hf.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M", 16.3, 16.1, 32,
-         "The best balance in keepmum's tests: passed every run, fast (about 85 tokens a second on an M5 Pro), "
-         "and about 2 CPU cores while it answers."),
+         "The best balance in keepmum's tests: passed every run, fast (about 85 tokens a second on an M5 Pro in "
+         "Ollama, 138 in Splash).", "HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M"),
     Pick("larger", "Qwen3.6 35B-A3B Uncensored (HauhauCS), Q4_K_M",
          "hf.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:Q4_K_M", 22.1, 21.7, 64,
-         "The same model with more bits per weight: as fast, and no better in keepmum's tests."),
+         "The same model with more bits per weight: as fast, and no better in keepmum's tests.",
+         "HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:Q4_K_M"),
     Pick("light", "Qwen3.5 9B Defiant Fable (DavidAU), Q8_0",
          "hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q8_0", 11.4, 9.1, 24,
          "Under half a CPU core, but slower (about 28 tokens a second): a long answer can take over a minute."),
@@ -63,6 +65,12 @@ _REPO = re.compile(r"^[\w.-]+/[\w.-]+$")
 CONTEXTS = (16384, 32768, 65536, 131072)
 DEFAULT_CONTEXT = 65536
 COPY_PREFIX = "keepmum/"  # keepmum's copies of a model with its own context size
+
+
+# Splash (github.com/incoai/splash): an engine for Apple silicon built around a few models, with a
+# draft model for speculative decoding. It speaks the Messages, Responses and Chat Completions APIs,
+# serves one model, and names it as it was started (owner/repo:VARIANT).
+SPLASH_URL = "http://localhost:8000"
 
 
 class PullError(Exception):
@@ -237,6 +245,18 @@ def delete_copy(url: str, model: str) -> bool:
         return httpx.request("DELETE", url.rstrip("/") + "/api/delete", json={"model": model}, timeout=10).status_code == 200
     except httpx.HTTPError:
         return False
+
+
+def splash_id(spec: str) -> str:
+    """The name Splash serves a model under when started with `splash serve --model <spec>`: the spec
+    as given, its GGUF variant included. (A local file's is the repo given with --model.)"""
+    return spec
+
+
+def splash_command(model: str) -> str:
+    """The command that starts Splash with `model` (a Splash spec, a served name, or a pick's)."""
+    spec = next((p.splash for p in PICKS if p.splash and model in (p.splash, p.id, p.model, p.splash.split(":", 1)[0])), model)
+    return f"splash serve --model {spec} --language-only --max-context 64K"
 
 
 def _ollama_error(text: str) -> str | None:

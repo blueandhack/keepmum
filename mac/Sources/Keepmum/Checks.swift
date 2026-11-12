@@ -275,6 +275,8 @@ struct LocalServersSection: View {
     var engine: Engine
     @State private var addingOther = false
     @State private var otherURL = "http://localhost:"
+    /// The Splash command just copied, to say what to do with it.
+    @State private var copiedSplash: String?
     /// Downloading another model to Ollama server `number`: a Hugging Face link or an Ollama name.
     @State private var pullingTo: Int?
     @State private var pullRef = ""
@@ -328,6 +330,11 @@ struct LocalServersSection: View {
             }
         }
         .task(id: engine.status?.guard?.local) { await engine.loadLocalServers() }
+        .alert("Start Splash in Terminal", isPresented: Binding(get: { copiedSplash != nil }, set: { if !$0 { copiedSplash = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This command is copied. Paste it into Terminal and leave it running; the first start downloads the model and its draft.\n\n\(copiedSplash ?? "")")
+        }
         .alert("Download a model to Ollama", isPresented: Binding(get: { pullingTo != nil }, set: { if !$0 { pullingTo = nil } })) {
             TextField("https://huggingface.co/owner/repo, or qwen3:8b", text: $pullRef)
             TextField("Quant, for Hugging Face: Q4_K_M, IQ3_M…", text: $pullQuant)
@@ -359,20 +366,20 @@ struct LocalServersSection: View {
                 Text(detail(server)).font(.km(.caption))
                     .foregroundStyle(server.problem == nil ? Theme.textSecondary : Theme.warning)
                     .lineLimit(2).truncationMode(.tail)
-                    .help(server.problem ?? "")
+                    .help(server.start.map { "Start it in Terminal: \($0)" } ?? server.problem ?? "")
             }
             Spacer(minLength: Space.m)
             modelMenu(n, server)
             if server.kind == "Ollama", server.contextMax != nil { contextMenu(n, server) }
             checksMenu(n, server)
-            moreMenu(n)
+            moreMenu(n, server)
         }
         .padding(.vertical, Space.s)
     }
 
     private func title(_ server: Engine.LocalServers.Server) -> String {
         let host = server.url.replacingOccurrences(of: "http://", with: "").replacingOccurrences(of: "https://", with: "")
-        return server.kind.map { "\($0) · \(host)" } ?? host
+        return (server.kind ?? (server.start != nil ? "Splash" : nil)).map { "\($0) · \(host)" } ?? host
     }
 
     private func detail(_ server: Engine.LocalServers.Server) -> String {
@@ -438,10 +445,24 @@ struct LocalServersSection: View {
         return "\(pick.name)\(star): \(size)\(fit)"
     }
 
+    /// The command that starts Splash with a model, as the engine writes it (localmodels.splash_command).
+    static func splashCommand(_ spec: String, url: String) -> String {
+        let port = url.split(separator: ":").last.map(String.init) ?? "8000"
+        return "splash serve --model \(spec) --language-only --max-context 64K" + (port == "8000" ? "" : " --port \(port)")
+    }
+
+    private func copySplash(_ command: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(command, forType: .string)
+        copiedSplash = command
+    }
+
     /// A pick's name for a label: the model and its quant, without who made it.
     private func pickShort(_ model: String) -> String? {
-        guard let name = picks.first(where: { $0.model == model })?.name else { return nil }
-        return Self.pickShortName(name)
+        if let name = picks.first(where: { $0.model == model || $0.splash == model })?.name { return Self.pickShortName(name) }
+        // Splash serving a local file names it by its repo alone, so the quant is not in it.
+        guard let name = picks.first(where: { $0.splash?.split(separator: ":").first.map(String.init) == model })?.name else { return nil }
+        return Self.pickShortName(name).components(separatedBy: ", ").first
     }
 
     /// "Qwen3.6 35B-A3B Uncensored (HauhauCS), IQ3_M" -> "Qwen3.6 35B-A3B, IQ3_M".
@@ -469,6 +490,10 @@ struct LocalServersSection: View {
     /// and commands, which the row has no room for (it stays in the tooltip).
     static func plainProblem(_ problem: String, _ server: Engine.LocalServers.Server) -> String {
         if problem.hasPrefix("no model chosen") { return "No model chosen yet" }
+        if server.start != nil, problem.hasPrefix("nothing answers") {
+            return "Not running: start Splash in Terminal"
+        }
+        if server.kind == "Splash", problem.contains("has no model") { return "Splash serves another model: restart it with this one" }
         if problem.hasPrefix("nothing answers") {
             return server.kind == "Ollama" || server.url.hasSuffix(":11434") ? "Not running: open the Ollama app" : "Not running"
         }
@@ -500,12 +525,27 @@ struct LocalServersSection: View {
     @ViewBuilder private func modelMenu(_ n: Int, _ server: Engine.LocalServers.Server) -> some View {
         let label = server.model.isEmpty ? "Choose model…" : pickShort(server.base ?? server.model) ?? Self.shortName(server.base ?? server.model)
         let ollama = server.kind == "Ollama"
+        let splash = server.kind == "Splash" || server.start != nil
         if let p = engine.localPull, p.server == n {
             pullProgress(p.progress)
         } else if isSnapshot {
             menuLabel(label).frame(maxWidth: 230, alignment: .trailing)
         } else {
             Menu(label) {
+                if splash, picks.contains(where: { $0.splash != nil }) {
+                    Section("keepmum\u{2019}s picks for Splash") {
+                        ForEach(picks.filter { $0.splash != nil }) { pick in
+                            Button(Self.pickShortName(pick.name) + (pick.id == engine.localServers?.defaultPick ? " (recommended)" : "")) {
+                                let spec = pick.splash ?? ""
+                                Task {
+                                    await engine.setLocalServer(n, model: spec)
+                                    copySplash(Self.splashCommand(spec, url: server.url))
+                                }
+                            }
+                            .help(pick.note)
+                        }
+                    }
+                }
                 if ollama, !picks.isEmpty {
                     Section("keepmum's picks") {
                         ForEach(picks) { pick in
@@ -557,11 +597,15 @@ struct LocalServersSection: View {
         }
     }
 
-    @ViewBuilder private func moreMenu(_ n: Int) -> some View {
+    @ViewBuilder private func moreMenu(_ n: Int, _ server: Engine.LocalServers.Server) -> some View {
         if isSnapshot {
             Image(systemName: "ellipsis.circle").foregroundStyle(Theme.textSecondary)
         } else {
             Menu {
+                if let start = server.start {
+                    Button("Copy Splash Command") { copySplash(start) }
+                    Divider()
+                }
                 Button("Move up") { Task { await engine.moveLocalServer(n, to: n - 1) } }.disabled(n == 1)
                 Button("Move down") { Task { await engine.moveLocalServer(n, to: n + 1) } }.disabled(n == rows.count)
                 Divider()

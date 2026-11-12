@@ -65,8 +65,9 @@ DEFAULT_MAX_TOKENS = 4096
 # chat_template_kwargs; a server that refuses either is asked again without them.
 NO_THINKING = {"reasoning_effort": "none", "chat_template_kwargs": {"enable_thinking": False}}
 # Where the usual local servers listen, for `keepmum guard local add --preset` and the app.
-PRESETS = {"ollama": ("Ollama", "http://localhost:11434"), "lmstudio": ("LM Studio", "http://localhost:1234"),
-           "llamacpp": ("llama.cpp", "http://localhost:8080"), "mlx": ("MLX", "http://localhost:8080")}
+PRESETS = {"ollama": ("Ollama", "http://localhost:11434"), "splash": ("Splash", "http://localhost:8000"),
+           "lmstudio": ("LM Studio", "http://localhost:1234"), "llamacpp": ("llama.cpp", "http://localhost:8080"),
+           "mlx": ("MLX", "http://localhost:8080")}
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
 SKILL_FILE = "SKILL.md"  # a skill folder's file, as in Claude Code
 MAX_SKILL_CHARS = 20_000  # per skill: a local model's context is small, and the conversation comes after
@@ -859,8 +860,8 @@ def models(url: str, timeout: float = 3.0) -> list[str] | None:
 
 
 def kind(url: str, timeout: float = 1.5) -> str:
-    """Which server this is, to name it and say how to add a model: Ollama, llama.cpp, LM Studio,
-    or "local server"."""
+    """Which server this is, to name it and say how to add a model: Ollama, Splash, llama.cpp,
+    LM Studio, or "local server"."""
     import httpx
 
     base = url.rstrip("/")
@@ -869,6 +870,12 @@ def kind(url: str, timeout: float = 1.5) -> str:
         if r.status_code == 200 and "version" in r.json() and r.headers.get("content-type", "").startswith("application/json"):
             if httpx.get(base + "/api/tags", timeout=timeout).status_code == 200:
                 return "Ollama"
+    except (httpx.HTTPError, ValueError, AttributeError):
+        pass
+    try:  # Splash lists its one model as owned by "splash"
+        r = httpx.get(base + "/v1/models", timeout=timeout)
+        if r.status_code == 200 and any(isinstance(m, dict) and m.get("owned_by") == "splash" for m in r.json().get("data", [])):
+            return "Splash"
     except (httpx.HTTPError, ValueError, AttributeError):
         pass
     try:
@@ -886,14 +893,25 @@ def kind(url: str, timeout: float = 1.5) -> str:
     return "local server"
 
 
+def _splash_command(model: str) -> str:
+    from .localmodels import splash_command
+
+    return splash_command(model)
+
+
 def missing(server: Server, have: list[str] | None, name: str | None = None) -> str | None:
     """Why this server cannot answer yet, or None."""
     name = name or "the local server"
     if not server.model:
         return "no model chosen yet"
     if have is None:
-        return f"nothing answers at {server.url}" + (": open the Ollama app, or `ollama serve`" if name == "Ollama" else "")
+        how = {"Ollama": ": open the Ollama app, or `ollama serve`",
+               "Splash": f": start it with `{_splash_command(server.model)}`"}.get(name, "")
+        if not how and server.url.rstrip("/").endswith(":8000"):  # nothing answers, so it cannot say it is Splash
+            how = f" (Splash? `{_splash_command(server.model)}`)"
+        return f"nothing answers at {server.url}" + how
     if server.model not in have:
-        how = f": `ollama pull {server.model}`" if name == "Ollama" else ""
+        how = {"Ollama": f": `ollama pull {server.model}`",
+               "Splash": f": it serves {', '.join(have) or 'nothing yet'}; restart it with `{_splash_command(server.model)}`"}.get(name, "")
         return f"{name} at {server.url} has no model {server.model}{how}"
     return None

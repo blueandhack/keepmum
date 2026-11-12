@@ -361,7 +361,7 @@ def test_the_cli_adds_orders_and_removes_servers(tmp_path, monkeypatch):
     out = cli.invoke(app, ["guard", "local", "--json"])
     data = json.loads(out.stdout)
     assert [x["model"] for x in data["servers"]] == ["gemma3:12b", "mlx-community/Qwen3-8B-4bit"]
-    assert data["servers"][0]["models"] is None and {p["id"] for p in data["presets"]} == {"ollama", "lmstudio", "llamacpp", "mlx"}
+    assert data["servers"][0]["models"] is None and {p["id"] for p in data["presets"]} == {"ollama", "splash", "lmstudio", "llamacpp", "mlx"}
     for bad in (["add", "--url", "http://localhost.evil.example"], ["add", "--check", "commands"], ["remove", "9"], ["set", "1", "--api", "x"]):
         assert cli.invoke(app, ["guard", "local", *bad]).exit_code == 2, bad
 
