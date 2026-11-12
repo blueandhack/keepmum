@@ -18,7 +18,11 @@ FAKE = textwrap.dedent("""\
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
-        do_POST = do_GET
+        def do_POST(self):
+            # Read the body before answering, as llama-server does: a socket closed with unread
+            # data resets the connection, and the client can get the reset before the reply.
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.do_GET()
         def log_message(self, *a): pass
     http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
 """)
