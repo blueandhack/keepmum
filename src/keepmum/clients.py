@@ -473,6 +473,9 @@ def _opencode_effective(port: int) -> dict[str, str | None]:
             raise ProtectError(f"{path} is not valid JSON ({e}); fix it first") from e
         if not isinstance(data, dict):
             raise ProtectError(f"{path} does not hold a config object")
+        for key in ("provider", "providers"):
+            if not isinstance(data.get(key) or {}, dict):
+                raise ProtectError(f"{path}: `{key}` should be an object of providers; fix it first")
         for p in urls:
             url = _opencode_base(data, p)
             if url is not None:
