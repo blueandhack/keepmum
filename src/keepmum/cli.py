@@ -1559,7 +1559,7 @@ HANDBACK_HELP = {
 def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer, summary, rewrite or withhold. None: show it."),
                          instructions: str = typer.Option(None, "--instructions", help="Your own instruction for summary and rewrite, in place of keepmum's (\"\" for keepmum's again)."),
                          instructions_file: str = typer.Option(None, "--instructions-file", help="The same, read from a file."),
-                         review: str = typer.Option(None, "--review", help="Look at it before it goes: off, rewrite, or all (summaries too)."),
+                         review: str = typer.Option(None, "--review", help="Look at it before it goes: off, rewrite, or all (answers and summaries too)."),
                          review_wait: int = typer.Option(None, "--review-wait", help="Seconds to wait for your answer (10-600; default 60)."),
                          review_timeout: str = typer.Option(None, "--review-timeout", help="With no answer: stay (on this Mac, the default) or send."),
                          as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
@@ -1625,8 +1625,9 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
     typer.echo(f"{now}: {HANDBACK_HELP[now]}")
     if now in WRITTEN:
         typer.echo("instructions: " + ("your own (" + f"{len(own):,} characters)" if own else "keepmum's"))
+    if now in (*WRITTEN, "answer"):
         typer.echo("review: " + ("off: it goes without a look" if rv["mode"] == "off" else
-                                 f"{'rewrites' if rv['mode'] == 'rewrite' else 'summaries and rewrites'} wait for you in the Mac app "
+                                 f"{'rewrites' if rv['mode'] == 'rewrite' else 'answers, summaries and rewrites'} wait for you in the Mac app "
                                  f"or `keepmum review --watch`, up to {rv['wait']} s, then "
                                  + ("stay on this Mac" if rv["timeout"] == "stay" else "go as written")))
     if cfg.guard_injection != "local" and strategy is None:
@@ -2273,8 +2274,11 @@ def _reviews_call(cfg, method: str, path: str = "", body: dict | None = None):
 
 
 def _show_review(r: dict) -> None:
-    typer.echo(f"\n{r['id']}: the local model's {r['strategy']} of what {r['source'] or 'a tool'} returned "
-               f"({r['seconds_left']} s left), from {r['model']}")
+    what = (f"hand-back after the local model's answer to what {r['source'] or 'a tool'} returned"
+            if r["strategy"] == "answer" else f"the local model's {r['strategy']} of what {r['source'] or 'a tool'} returned")
+    typer.echo(f"\n{r['id']}: {what} ({r['seconds_left']} s left), from {r['model']}")
+    if r.get("answer") is not None:
+        typer.echo("--- the local answer (the cloud model sees it as that turn's reply) ---\n" + r["answer"][:1500])
     typer.echo("--- it would send ---\n" + r["proposed"] + "\n--- in place of the flagged result ---\n"
                + (r["flagged"][:1500] + ("\n…" if len(r["flagged"]) > 1500 else "")) + "\n---")
 

@@ -58,11 +58,13 @@ from .local import CHAT_PATH as LOCAL_CHAT_PATH
 from .local import APIS_LOCAL
 from .local import PATHS as LOCAL_PATHS
 from .handback import WRITTEN, Handbacks
+from .handback import _key as handback_key
+from .handback import edited as handback_edited
 from .handback import messages as handback_messages
 from .handback import notice as handback_notice
 from .handback import wrap as handback_wrap
 from .handback import written as handback_written
-from .review import Review, Reviews
+from .review import MAX_WAIT, Review, Reviews
 from .review import applies as review_applies
 from .local import DEFAULT_MAX_TOKENS as LOCAL_MAX_TOKENS
 from .local import NO_THINKING
@@ -95,6 +97,13 @@ ANTIGRAVITY_METADATA = CODE_ASSIST_METADATA | {"fetchUserInfo", "fetchAvailableM
                                                "writeTrajectoryAcls"}
 GOOGLE_PREFIXES = ("/gemini", "/codeassist", "/antigravity")
 MESSAGES = frozenset({"/v1/messages", "/v1/messages/count_tokens"})
+def _reviewed(decision, wait: int) -> str:
+    """How a review ended, for the Logs page."""
+    if decision.timed_out:
+        return f"no answer in {wait} s: " + ("sent as written" if decision.action == "send" else "kept local")
+    return {"send": "approved", "edit": "edited", "withhold": "withheld", "local": "kept local"}[decision.action]
+
+
 # Of a streamed local answer, what is kept to check before it is handed back (handback.py "answer").
 MAX_ANSWER_BYTES = 4 * 1024 * 1024
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
@@ -227,6 +236,9 @@ class Proxy:
         # local_handback_review, _wait, _timeout), and the reviews waiting for an answer (review.py).
         self._review = review if callable(review) else (lambda: ("off", 60, "stay"))
         self.reviews = Reviews()
+        # "answer" under review: the flagged results whose hand-back waits for the user, by key; a
+        # request carrying one waits for the answer (`_wait_for_reviews`).
+        self._held: dict[bytes, anyio.Event] = {}
         # (server URL, API) pairs a server answered 404/405/501 for and then answered as Chat
         # Completions: asked that way from then on, until keepmum restarts.
         self._chat_only: set[tuple[str, str]] = set()
@@ -426,6 +438,8 @@ class Proxy:
         # Results handed back to the cloud (handback.py) go as their replacements; a local model
         # still gets the request as the agent wrote it.
         seen: list = []  # the handed-back results this request carries
+        if self._held:
+            await self._wait_for_reviews(body, path)
         original, (body, _) = body, self._handed_back(body, seen)
         first = handed = None
         while True:
@@ -692,26 +706,20 @@ class Proxy:
             if review_applies(mode, strategy) and self.reviews.present():
                 log.info("%s: holding the %s for the user's review (up to %d s)", path, strategy, wait)
                 decision = await self.reviews.ask(Review(strategy, source, path, text, out, server.model, wait), timeout)
-                reviewed = {"send": "approved", "edit": "edited", "withhold": "withheld", "local": "kept local"}[decision.action]
-                if decision.timed_out:
-                    reviewed = f"no answer in {wait} s: " + ("sent as written" if decision.action == "send" else "kept local")
-                reviews.append(reviewed)
+                reviews.append(_reviewed(decision, wait))
                 if decision.action == "local":
                     for t in flagged:
                         self.handbacks.keep_local(t)
-                    log.info("%s: the %s was kept on this Mac (%s)", path, strategy, reviewed)
-                    return {"strategy": strategy, "model": server.model, "url": server.url, "review": reviewed,
+                    log.info("%s: the %s was kept on this Mac (%s)", path, strategy, reviews[-1])
+                    return {"strategy": strategy, "model": server.model, "url": server.url, "review": reviews[-1],
                             "kept": "you kept it on this Mac" if not decision.timed_out else f"no answer in {wait} s"}
                 if decision.action == "withhold":
                     done.append((text, handback_notice("withhold", source)))
                     continue
                 if decision.action == "edit":
                     out = decision.text
-                    try:  # the user's own text: checked, and noted if flagged, but theirs to send
-                        if guard and await anyio.to_thread.run_sync(guard.check, [("your edit", out, True)], True):
-                            reviews[-1] = "edited; the check flagged the edit, sent as you approved it"
-                    except Exception:
-                        pass
+                    if await self._edit_flagged(guard, out):  # the user's own text: noted if flagged, theirs to send
+                        reviews[-1] = "edited; the check flagged the edit, sent as you approved it"
             done.append((text, handback_wrap(strategy, source, out, custom=bool(instructions))))
         for text, replacement in done:
             self.handbacks.add(text, replacement, strategy)
@@ -757,7 +765,7 @@ class Proxy:
                     "; ".join(failures) or "no local server is set for the injection check")
         return None
 
-    async def _after_answer(self, route: LocalRoute, flagged: dict, answer: str, path: str) -> None:
+    async def _after_answer(self, route: LocalRoute, flagged: dict, answer: str, path: str, model: str = "") -> None:
         """local_handback "answer": once the local model has answered, the flagged results are withheld
         from the next request on, which goes to the cloud, unless the injection check flags the answer."""
         guard = next((g for g in self.guards if g.name == "injection"), None)
@@ -772,9 +780,76 @@ class Proxy:
                 self.stats.note_guard(route.entries, handed_back={"strategy": "answer",
                                                                   "kept": "the local model's answer was flagged too"})
                 return
+        mode, wait, timeout = self._review()
+        if review_applies(mode, "answer") and self.reviews.present():
+            for text in flagged:  # held now, so the next request waits even if it comes at once
+                self._held[handback_key(text)] = anyio.Event()
+            log.info("%s: holding the hand-back after the local answer for the user's review (up to %d s)", path, wait)
+            self._later(self._review_answer(route, flagged, answer, model, path, wait, timeout))
+            return
         for text, source in flagged.items():
             self.handbacks.add(text, handback_notice("answer", source), "answer")
         self.stats.note_guard(route.entries, handed_back={"strategy": "answer"})
+
+    async def _review_answer(self, route: LocalRoute, flagged: dict, answer: str, model: str, path: str,
+                             wait: int, timeout: str) -> None:
+        """The user's review of the hand-back after a local answer, one flagged result at a time;
+        then the requests waiting on it go on."""
+        reviews: list[str] = []
+        guard = next((g for g in self.guards if g.name == "injection"), None)
+        try:
+            for text, source in flagged.items():
+                notice = handback_notice("answer", source)
+                decision = await self.reviews.ask(Review("answer", source, path, text, notice, model, wait, answer=answer),
+                                                  timeout)
+                reviews.append(_reviewed(decision, wait))
+                if decision.action == "local":
+                    for t in flagged:
+                        self.handbacks.keep_local(t)
+                    self.stats.note_guard(route.entries, handed_back={
+                        "strategy": "answer", "review": "; ".join(reviews),
+                        "kept": "you kept it on this Mac" if not decision.timed_out else f"no answer in {wait} s"})
+                    return
+                replacement = notice
+                if decision.action == "edit":
+                    replacement = handback_edited(source, decision.text)
+                    if await self._edit_flagged(guard, decision.text):
+                        reviews[-1] = "edited; the check flagged the edit, sent as you approved it"
+                self.handbacks.add(text, replacement, "answer")
+            self.stats.note_guard(route.entries, handed_back={"strategy": "answer", "review": "; ".join(reviews)})
+        finally:
+            for text in flagged:
+                if (held := self._held.pop(handback_key(text), None)) is not None:
+                    held.set()
+
+    async def _wait_for_reviews(self, body, path: str) -> None:
+        """A request carrying a flagged result whose hand-back is under review waits for the answer."""
+        waiting: list[anyio.Event] = []
+
+        def walk(value):
+            if isinstance(value, str):
+                if (held := self._held.get(handback_key(value))) is not None and held not in waiting:
+                    waiting.append(held)
+            elif isinstance(value, dict):
+                for v in value.values():
+                    walk(v)
+            elif isinstance(value, list):
+                for v in value:
+                    walk(v)
+
+        walk(body)
+        if waiting:
+            log.info("%s: waiting for the user's review of a hand-back", path)
+        for held in waiting:
+            with anyio.move_on_after(MAX_WAIT + 5):  # the review ends by its own deadline before this
+                await held.wait()
+
+    async def _edit_flagged(self, guard, text: str) -> bool:
+        """The user's edit, checked: a flag is noted, the edit is theirs to send."""
+        try:
+            return bool(guard and await anyio.to_thread.run_sync(guard.check, [("your edit", text, True)], True))
+        except Exception:
+            return False
 
     async def _answer_locally(self, request: Request, t: Target, body: dict, route: LocalRoute, origin,
                               texts: dict | None = None) -> Response:
@@ -796,10 +871,11 @@ class Proxy:
         local_origin = (origin[0] if origin else None, "local")
         after = None
         if route.check == "injection" and self._handback()[0] == "answer":
-            flagged = {k: v for k, v in self._flagged_texts(route, texts).items() if not self.handbacks.made(k)}
+            flagged = {k: v for k, v in self._flagged_texts(route, texts).items()
+                       if not self.handbacks.made(k) and not self.handbacks.kept(k)}  # kept: the user said local
             if flagged:
-                async def after(answer: str) -> None:
-                    await self._after_answer(route, flagged, answer, path)
+                async def after(answer: str, model: str) -> None:
+                    await self._after_answer(route, flagged, answer, path, model)
         skills = self.local_skills(route.check) if callable(self.local_skills) else []
         skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
         failures: list[str] = []
@@ -894,7 +970,7 @@ class Proxy:
                     sent.append(end := translate.end())
                     yield end
                 if after:
-                    await after(answer_text(api, b"".join(sent), True))
+                    await after(answer_text(api, b"".join(sent), True), server.model)
 
             if translate:
                 headers["content-type"] = "text/event-stream"
@@ -909,7 +985,7 @@ class Proxy:
         self._record(path, "local", resp.status_code, origin=origin, guard=hits)
         log.info("%s -> local model %s at %s%s: %d", path, server.model, server.url, how, resp.status_code)
         if after:
-            await after(answer_text(api, content, False))
+            await after(answer_text(api, content, False), server.model)
         return Response(content, status_code=resp.status_code, headers=headers)
 
     async def _check_later(self, guard, items, path: str, origin, kind: str = "clean", request: str | None = None,

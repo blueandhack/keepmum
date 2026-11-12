@@ -11,11 +11,17 @@ struct PendingReview: Decodable, Identifiable, Equatable {
     var path: String
     var flagged: String
     var proposed: String
+    /// "answer": the local model's answer, which the cloud model sees as that turn's reply.
+    var answer: String?
     var model: String
     var created: Double
     var deadline: Double
 
-    var what: String { "\(strategy == "rewrite" ? "rewrite" : "summary") of what \(source ?? "a tool") returned" }
+    var isAnswer: Bool { strategy == "answer" }
+    var what: String {
+        isAnswer ? "answer to what \(source ?? "a tool") returned, before the next turn goes to the cloud"
+            : "\(strategy == "rewrite" ? "rewrite" : "summary") of what \(source ?? "a tool") returned"
+    }
     func secondsLeft(at now: Date = Date()) -> Int { max(0, Int((deadline - now.timeIntervalSince1970).rounded(.up))) }
 }
 
@@ -222,7 +228,7 @@ struct ReviewCard: View {
             header
             VStack(alignment: .leading, spacing: Space.xs) {
                 HStack {
-                    Text("It would send").eyebrow()
+                    Text(review.isAnswer ? "In the result's place" : "It would send").eyebrow()
                     Spacer()
                     if edited {
                         Button("Undo my edit") { draft = nil }.buttonStyle(.link).font(.km(.caption))
@@ -230,13 +236,19 @@ struct ReviewCard: View {
                 }
                 editor
             }
+            if let answer = review.answer {
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    Text("The local answer · the cloud model sees it as that turn's reply").eyebrow()
+                    readOnly(answer, height: 90)
+                }
+            }
             VStack(alignment: .leading, spacing: Space.xs) {
                 Button {
                     withAnimation(Motion.quick) { showFlagged.toggle() }
                 } label: {
                     HStack(spacing: Space.xs) {
                         Image(systemName: showFlagged ? "chevron.down" : "chevron.right").font(.km(.caption))
-                        Text("In place of the flagged result").eyebrow()
+                        Text(review.isAnswer ? "The flagged result" : "In place of the flagged result").eyebrow()
                         if review.strategy == "rewrite" {
                             Text("· struck through: not in the rewrite").font(.km(.caption)).foregroundStyle(Theme.textTertiary)
                         }
@@ -260,7 +272,9 @@ struct ReviewCard: View {
             Image(systemName: "hand.raised.square").font(.system(size: 26)).foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text("Before it goes to the cloud").font(.km(.headline)).foregroundStyle(Theme.text)
-                Text("The injection check flagged what \(review.source ?? "a tool") returned. The local model (\(review.model)) wrote a \(review.strategy) to send in its place.")
+                Text(review.isAnswer
+                     ? "The injection check flagged what \(review.source ?? "a tool") returned, and the local model (\(review.model)) answered that turn on this Mac. The next turn waits here before it goes to the cloud."
+                     : "The injection check flagged what \(review.source ?? "a tool") returned. The local model (\(review.model)) wrote a \(review.strategy) to send in its place.")
                     .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: Space.s)
@@ -325,10 +339,13 @@ struct ReviewCard: View {
 
     private var buttons: some View {
         HStack(spacing: Space.s) {
-            PillButton(title: "Withhold", icon: "eye.slash") { answer("withhold") }
-                .help("Send a notice that the result was withheld, and nothing of it")
+            if !review.isAnswer {  // after an answer the result is withheld anyway: Send sends the notice
+                PillButton(title: "Withhold", icon: "eye.slash") { answer("withhold") }
+                    .help("Send a notice that the result was withheld, and nothing of it")
+            }
             PillButton(title: "Keep local", icon: "laptopcomputer") { answer("local") }
-                .help("The local model answers this turn; nothing goes to the cloud")
+                .help(review.isAnswer ? "Every turn that carries this result stays on the local model"
+                                      : "The local model answers this turn; nothing goes to the cloud")
             Spacer(minLength: Space.s)
             if edited {
                 PillButton(title: "Send my edit", prominent: true) { answer("edit") }
@@ -338,8 +355,21 @@ struct ReviewCard: View {
             } else {
                 PillButton(title: "Send", prominent: true) { answer("send") }
                     .keyboardShortcut(.return, modifiers: .command)
-                    .help("Send what the local model wrote in the result's place (⌘↩)")
+                    .help(review.isAnswer ? "Hand the conversation back with keepmum's notice in the result's place (⌘↩)"
+                                          : "Send what the local model wrote in the result's place (⌘↩)")
             }
+        }
+    }
+
+    @ViewBuilder private func readOnly(_ text: String, height: CGFloat) -> some View {
+        let box = RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+        let content = Text(text).font(.km(.callout)).foregroundStyle(Theme.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).padding(Space.s)
+        if isSnapshot {
+            content.frame(maxHeight: height, alignment: .top).clipped().background(box.fill(Theme.fill))
+        } else {
+            ScrollView { content }.frame(height: height).background(box.fill(Theme.fill))
         }
     }
 
@@ -428,5 +458,11 @@ extension PendingReview {
         ## Usage
         fastgrep PATTERN [PATH...]
         """,
+        model: "qwen3.6-35b-a3b", created: Date().timeIntervalSince1970, deadline: Date().timeIntervalSince1970 + 42)
+
+    static let sampleAnswer = PendingReview(
+        id: "d4e5f6", strategy: "answer", source: "WebFetch", path: "/v1/messages", flagged: sample.flagged,
+        proposed: "[keepmum withheld this result of WebFetch: its injection check found likely instructions planted for the agent. A model on the user's Mac read it, without tools, and answered the turn that followed. The user can read it on keepmum's Logs page.]",
+        answer: "fastgrep installs with `make install` or `brew install fastgrep`. Part of the README was addressed to AI agents; I ignored it.",
         model: "qwen3.6-35b-a3b", created: Date().timeIntervalSince1970, deadline: Date().timeIntervalSince1970 + 42)
 }

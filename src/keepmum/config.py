@@ -54,8 +54,8 @@
     # with the flagged result replaced: "answer" (after the local answer), "summary", "rewrite" or "withhold"
     local_handback = "stay"
     local_handback_instructions = ""  # your own instruction for summary and rewrite, in place of keepmum's
-    # look at a summary or rewrite before it goes to the cloud (review.py): "off", "rewrite" or "all"
-    # (summaries too), the seconds to wait for an answer, and then "stay" (on this Mac) or "send"
+    # look at a hand-back before it goes to the cloud (review.py): "off", "rewrite" or "all"
+    # (answers and summaries too), the seconds to wait for an answer, and then "stay" (on this Mac) or "send"
     local_handback_review = "off"
     local_handback_review_wait = 60
     local_handback_review_timeout = "stay"
@@ -151,7 +151,7 @@ class Config:
     # What follows a local turn of the injection check (handback.py), and the user's own instruction.
     guard_local_handback: str = "stay"
     guard_local_handback_instructions: str = ""
-    # Whether the user reviews a summary or rewrite before it goes (review.py): off, rewrite or all;
+    # Whether the user reviews a hand-back before it goes (review.py): off, rewrite or all;
     # how long to wait for them; and what happens when they do not answer: stay or send.
     guard_local_handback_review: str = "off"
     guard_local_handback_review_wait: int = 60

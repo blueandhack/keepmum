@@ -7,6 +7,11 @@ waits meanwhile, so a review that gets no answer within `wait` seconds does what
 "stay" (the turn stays local, as when the local model fails: nothing reaches the cloud unasked) or
 "send" (as written).
 
+With "answer", the local model's answer goes back to the agent at once; the review is of the hand-back
+that follows: the next request, carrying the flagged result, waits for it. Sending puts keepmum's
+notice in the result's place, an edit puts the user's text there, and keeping it local keeps every
+turn that carries the result on this Mac.
+
 Someone has to be there to answer: the Mac app (or `keepmum review --watch`) asks for pending
 reviews every second or so, and keepmum holds a request only while someone asked within PRESENT_S.
 With nobody there, a hand-back goes as it would without review.
@@ -20,7 +25,7 @@ from dataclasses import dataclass, field
 
 import anyio
 
-MODES = ("off", "rewrite", "all")  # all: summaries and rewrites
+MODES = ("off", "rewrite", "all")  # all: answers, summaries and rewrites
 TIMEOUTS = ("stay", "send")
 DEFAULT_WAIT = 60
 MIN_WAIT, MAX_WAIT = 10, 600
@@ -39,7 +44,7 @@ def parse(mode, wait, timeout, where: str = "guard") -> tuple[str, int, str]:
 
 
 def applies(mode: str, strategy: str) -> bool:
-    return mode == "all" and strategy in ("summary", "rewrite") or mode == "rewrite" and strategy == "rewrite"
+    return mode == "all" and strategy in ("answer", "summary", "rewrite") or mode == "rewrite" and strategy == "rewrite"
 
 
 @dataclass
@@ -55,9 +60,10 @@ class Review:
     source: str | None
     path: str
     flagged: str  # the tool result the check flagged
-    proposed: str  # what the local model wrote
+    proposed: str  # what would take the result's place: the local model's text, or for an answer, keepmum's notice
     model: str
     wait: int
+    answer: str | None = None  # "answer": the local model's answer, which the cloud model sees as that turn's reply
     id: str = field(default_factory=lambda: secrets.token_hex(6))
     created: float = field(default_factory=time.time)
     decision: Decision | None = None
@@ -65,7 +71,8 @@ class Review:
 
     def public(self) -> dict:
         return {"id": self.id, "strategy": self.strategy, "source": self.source, "path": self.path,
-                "flagged": self.flagged, "proposed": self.proposed, "model": self.model, "created": self.created,
+                "flagged": self.flagged, "proposed": self.proposed, "answer": self.answer, "model": self.model,
+                "created": self.created,
                 "deadline": self.created + self.wait, "seconds_left": max(0, round(self.created + self.wait - time.time()))}
 
 

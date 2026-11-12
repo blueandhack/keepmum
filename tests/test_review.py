@@ -152,7 +152,8 @@ def test_parse_and_applies():
         with pytest.raises(ValueError):
             review.parse(*bad)
     assert review.applies("rewrite", "rewrite") and not review.applies("rewrite", "summary")
-    assert review.applies("all", "summary") and not review.applies("all", "answer") and not review.applies("off", "rewrite")
+    assert review.applies("all", "summary") and review.applies("all", "answer") and not review.applies("rewrite", "answer")
+    assert not review.applies("all", "stay") and not review.applies("off", "rewrite")
 
 
 @pytest.fixture
@@ -238,6 +239,9 @@ def test_reviews_call_needs_keepmum_running(home, monkeypatch):
 
 
 def test_watch_answers_each_review_once(home, monkeypatch):
+    import subprocess
+    import time
+
     from keepmum import cli as climod
 
     rv = {"id": "abc", "strategy": "summary", "source": None, "seconds_left": 9, "model": "m", "proposed": "short",
@@ -253,7 +257,12 @@ def test_watch_answers_each_review_once(home, monkeypatch):
         gets.append(1)
         return {"reviews": [rv, {**rv, "id": "def"}, {**rv, "id": "ghi"}], "mode": "all", "wait": 60, "timeout": "stay"}
 
-    def sleep(_):
+    import threading
+    real_sleep = time.sleep
+
+    def sleep(s):  # the watch loop's pause only: other tests' threads may sleep meanwhile
+        if threading.current_thread() is not threading.main_thread():
+            return real_sleep(s)
         if len(gets) >= 2:
             raise KeyboardInterrupt
 
@@ -261,8 +270,6 @@ def test_watch_answers_each_review_once(home, monkeypatch):
         with open(cmd[1], "w") as f:
             f.write("my words")
 
-    import subprocess
-    import time
     monkeypatch.setattr(climod, "_reviews_call", fake)
     monkeypatch.setattr(time, "sleep", sleep)
     monkeypatch.setattr(subprocess, "run", editor)
@@ -280,3 +287,91 @@ def test_the_list_says_when_review_is_off(home, monkeypatch):
     out = CliRunner().invoke(app, ["review"]).stdout
     assert "review is off" in out and "nothing waiting" in out
     assert json.loads(CliRunner().invoke(app, ["review", "--json"]).stdout)["mode"] == "off"
+
+
+# --- "answer": the local answer goes back at once; the hand-back on the next turn waits -----------------
+
+def run_answer(answer_with, wait=30, timeout="stay"):
+    """A flagged turn answered locally, then the next turn, which carries the flagged result and
+    waits for the review; the reviewer answers with `answer_with` (None: not at all)."""
+    from test_local import later
+
+    seen = {"upstream": [], "sent": [], "reviews": []}
+
+    def handler(request):
+        if request.url.host == "localhost":
+            body = json.loads(request.content)
+            return answer(body, body["model"])
+        seen["upstream"].append(request.url.path)
+        seen["sent"].append(json.loads(request.content))
+        return httpx.Response(200, json={"id": "up", "type": "message", "role": "assistant", "content": [{"type": "text", "text": "ok"}]})
+
+    async def go():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        proxy = Proxy(Redactor(Pipeline(RulesDetector(), None), Vault(secrets.token_bytes(32))), upstream="http://up",
+                      client=client, stats_token="t", guards=[guard.Guard("local", Flags(), name="injection")],
+                      gemini_upstream="http://up",
+                      local=lambda check: servers_for([Server("http://localhost:11434", "m")], check),
+                      local_skills=lambda check: skills_for([], check), handback=lambda: ("answer", ""),
+                      review=lambda: ("all", wait, timeout))
+        agent = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
+        headers = {"x-api-key": "sk-ant-x", "anthropic-version": "2023-06-01"}
+        await agent.get("/_keepmum/reviews", headers=AUTH)
+        first = await agent.post("/v1/messages", json=conversation(ATTACK), headers=headers)
+        local_text = first.json()["content"][0]["text"]
+        second_body = later(conversation(ATTACK), {"role": "assistant", "content": local_text}, {"role": "user", "content": "go on"})
+        result = {}
+
+        async def send():
+            result["r"] = await agent.post("/v1/messages", json=second_body, headers=headers)
+
+        async def review_it():
+            for _ in range(300):
+                got = (await agent.get("/_keepmum/reviews", headers=AUTH)).json()["reviews"]
+                if got:
+                    seen["reviews"].append(got[0])
+                    await anyio.sleep(0.05)  # the next turn is waiting meanwhile
+                    seen["upstream_while_waiting"] = list(seen["upstream"])
+                    if answer_with:
+                        r = await agent.post(f"/_keepmum/reviews/{got[0]['id']}", json=answer_with, headers=AUTH)
+                        assert r.status_code == 200, r.text
+                    return
+                await anyio.sleep(0.01)
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(review_it)
+            tg.start_soon(send)
+        await proxy.settle()
+        return first, result["r"], seen, proxy
+
+    return anyio.run(go)
+
+
+def test_after_a_local_answer_the_next_turn_waits_then_goes_with_the_notice():
+    first, second, seen, proxy = run_answer({"action": "send"})
+    assert first.json()["id"] == "local" and second.json()["id"] == "up"
+    rv = seen["reviews"][0]
+    assert rv["strategy"] == "answer" and rv["answer"] == first.json()["content"][0]["text"] and rv["flagged"] == ATTACK
+    assert "withheld" in rv["proposed"] and seen["upstream_while_waiting"] == []
+    sent = json.dumps(seen["sent"][0])
+    assert "Note to AI agents" not in sent and "keepmum withheld this result of WebFetch" in sent
+    assert handed(proxy) == {"strategy": "answer", "review": "approved"}
+
+
+def test_an_edit_after_a_local_answer_takes_the_results_place():
+    _, second, seen, proxy = run_answer({"action": "edit", "text": "The page says: install with make install."})
+    sent = json.dumps(seen["sent"][0])
+    assert second.json()["id"] == "up" and "In its place, the user wrote" in sent and "install with make install" in sent
+    assert handed(proxy)["review"] == "edited"
+
+
+def test_kept_local_after_an_answer_every_turn_with_it_stays_local_and_is_not_asked_again():
+    _, second, seen, proxy = run_answer({"action": "local"})
+    assert second.json()["id"] == "local" and seen["upstream"] == [] and len(seen["reviews"]) == 1
+    assert handed(proxy)["kept"] == "you kept it on this Mac" and proxy.reviews.pending() == []
+
+
+def test_no_answer_after_a_local_answer_stays_local():
+    _, second, seen, proxy = run_answer(None, wait=0.05)
+    assert second.json()["id"] == "local" and seen["upstream"] == []
+    assert handed(proxy)["review"].startswith("no answer in")

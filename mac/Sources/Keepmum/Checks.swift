@@ -873,10 +873,10 @@ struct LocalHandbackSection: View {
                             .disabled(!engine.isBundled || engine.busy)
                     }
                 }
-                if let review = engine.localHandback?.review {
-                    Hairline()
-                    reviewRows(review)
-                }
+            }
+            if ["answer", "summary", "rewrite"].contains(current), let review = engine.localHandback?.review {
+                Hairline()
+                reviewRows(review)
             }
         }
         .task(id: engine.status?.guard?.local) { await engine.loadLocalHandback() }
@@ -887,7 +887,7 @@ struct LocalHandbackSection: View {
     }
 
     static let reviewModes: [(id: String, label: String)] = [
-        ("off", "Off"), ("rewrite", "Rewrites only"), ("all", "Summaries and rewrites"),
+        ("off", "Off"), ("rewrite", "Rewrites only"), ("all", "Answers, summaries and rewrites"),
     ]
     static let waits = [30, 60, 120, 300]
 
@@ -895,10 +895,11 @@ struct LocalHandbackSection: View {
 
     @ViewBuilder private func reviewRows(_ review: Engine.LocalHandback.Review) -> some View {
         let label = Self.reviewModes.first { $0.id == review.mode }?.label ?? review.mode
-        let skipped = review.mode == "rewrite" && current == "summary"
+        let skipped = review.mode == "rewrite" && current != "rewrite"
         FormRow(title: "Review first",
                 detail: review.mode == "off" ? "Off: what the local model wrote goes straight to the cloud"
-                    : skipped ? "Rewrites only: summaries go without a review"
+                    : skipped ? "Rewrites only: this hand-back goes without a review"
+                    : current == "answer" ? "After the local answer, a panel shows what the next turn sends in the result's place: send it, edit it or keep the conversation local"
                     : "A panel shows what the local model wrote: send it, edit it, withhold the result or keep the turn local",
                 help: "keepmum holds the request while the panel waits for you. It does not take the keyboard: click into it to edit. Each flagged result is reviewed once; later turns reuse your answer. With the app closed (and no `keepmum review --watch`), nothing waits.") {
             choiceMenu(label, Self.reviewModes.map { m in (m.label, { await engine.setLocalHandbackReview(mode: m.id) }) })
