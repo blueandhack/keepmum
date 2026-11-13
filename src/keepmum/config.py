@@ -59,6 +59,10 @@
     local_handback_review = "off"
     local_handback_review_wait = 60
     local_handback_review_timeout = "stay"
+    # how long a local server keeps its model loaded after a request: 5m, 15m, 30m, 1h, any such
+    # duration, or "always". Splash gets it when keepmum starts it; Ollama gets it after each request
+    local_keep_loaded = "5m"
+    local_answer_thinking = true  # false: a local answer comes without the model's thinking first, several times as fast
 
     [log]
     level = "info"
@@ -87,7 +91,8 @@ _SCHEMA = {
     "audit": {"keep_days": int},
     "guard": {"injection": str, "injection_threshold": float, "harm": str, "harm_model": str, "harm_sensitivity": str, "commands": str, "local_url": str, "local_model": str,
               "local_servers": list, "local_skills": list, "local_handback": str, "local_handback_instructions": str,
-              "local_handback_review": str, "local_handback_review_wait": int, "local_handback_review_timeout": str},
+              "local_handback_review": str, "local_handback_review_wait": int, "local_handback_review_timeout": str,
+              "local_keep_loaded": str, "local_answer_thinking": bool},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
 _HOST = re.compile(r"(?i)(?:[a-z0-9_-]+\.)*[a-z0-9-]+\.[a-z]{2,63}|localhost|\d{1,3}(?:\.\d{1,3}){3}")
@@ -156,6 +161,10 @@ class Config:
     guard_local_handback_review: str = "off"
     guard_local_handback_review_wait: int = 60
     guard_local_handback_review_timeout: str = "stay"
+    # How long a local server keeps its model loaded (local.KEEP_LOADED), and whether a local answer
+    # may think first.
+    guard_local_keep_loaded: str = "5m"
+    guard_local_answer_thinking: bool = True
     path: Path | None = None
 
 
@@ -322,6 +331,13 @@ def load(path: Path | None = None) -> Config:
             guard.get("local_handback_review_timeout", cfg.guard_local_handback_review_timeout))
     except ValueError as e:
         raise ConfigError(f"{path}: {e}")
+    from .local import parse_keep_loaded
+
+    try:
+        cfg.guard_local_keep_loaded = parse_keep_loaded(guard.get("local_keep_loaded", cfg.guard_local_keep_loaded))
+    except ValueError as e:
+        raise ConfigError(f"{path}: {e}")
+    cfg.guard_local_answer_thinking = guard.get("local_answer_thinking", cfg.guard_local_answer_thinking)
     # A harm check turned on before "small" existed, without a model set, keeps the default it had.
     cfg.guard_harm_model = guard.get("harm_model", "0.6b" if cfg.guard_harm != "off" else cfg.guard_harm_model)
     if cfg.guard_harm_model not in ("small", "0.6b", "4b"):

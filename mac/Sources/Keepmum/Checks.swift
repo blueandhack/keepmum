@@ -268,7 +268,7 @@ struct ChecksSection: View {
     }
 }
 
-/// Settings › Checks, beside the checks: the servers on this Mac that local mode sends a flagged
+/// Settings › Local models: the servers on this Mac that local mode sends a flagged
 /// request to, in the order tried (`keepmum guard local`). Each has a model, and answers for both
 /// checks or one; the first that answers for the check gives the answer.
 struct LocalServersSection: View {
@@ -324,6 +324,10 @@ struct LocalServersSection: View {
                     row(i + 1, server)
                     Hairline()
                 }
+                if needsBackup, let pick = defaultPick {
+                    backupRow(pick)
+                    Hairline()
+                }
                 HStack { Spacer(); addMenu }.padding(.vertical, Space.s)
             }
         }
@@ -355,6 +359,25 @@ struct LocalServersSection: View {
             Button("Add") { let url = otherURL; Task { await engine.addLocalServer(url: url) } }
         } message: {
             Text("Its URL, on this Mac: http://localhost, 127.0.0.1 or [::1], with its port.")
+        }
+    }
+
+    /// Splash is set and Ollama is not: while Splash is stopped or starting, nothing answers.
+    private var needsBackup: Bool {
+        rows.contains { $0.kind == "Splash" || $0.start != nil || $0.managed == true }
+            && !rows.contains { $0.kind == "Ollama" || $0.url.hasSuffix(":11434") }
+    }
+
+    @ViewBuilder private func backupRow(_ pick: Engine.LocalServers.Pick) -> some View {
+        FormRow(title: "Add a backup",
+                detail: "While Splash is stopped or starting, a flagged turn has nowhere else to go and is refused. Ollama behind it answers instead.",
+                help: "Adds Ollama at localhost:11434 with keepmum's pick, after Splash. Ollama downloads the model (\(Self.gb(pick.downloadGB))) if it does not have it yet; Ollama must be installed.") {
+            if let p = engine.localPull, p.server == nil {
+                pullProgress(p.progress)
+            } else {
+                PillButton(title: "Add Ollama", icon: "plus") { Task { await engine.pullLocalModel(pick.id) } }
+                    .disabled(!engine.isBundled || engine.busy)
+            }
         }
     }
 
@@ -715,7 +738,7 @@ struct LocalServersSection: View {
     }
 }
 
-/// Settings › Checks, under the local servers: the user's skills for local turns (`keepmum guard
+/// Settings › Skills: the user's skills for local turns (`keepmum guard
 /// local skill`). Each is a SKILL.md, or a folder holding one, read on every local turn and given to
 /// the local model after keepmum's note, in the places the user chose (Places).
 struct LocalSkillsSection: View {
@@ -857,6 +880,24 @@ struct LocalHandbackSection: View {
     private var choice: (id: String, label: String, detail: String) { Self.choices.first { $0.id == current } ?? Self.choices[0] }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: Space.xl) {
+            strategySection
+            if ["answer", "summary", "rewrite"].contains(current), let review = engine.localHandback?.review {
+                FormSection(title: "Review before it goes",
+                            footer: "keepmum holds the request while you look, in a panel that does not take the keyboard. With this app closed, and no keepmum review --watch in a terminal, nothing waits.",
+                            details: "Each flagged result is reviewed once; later turns reuse your answer. An edit of yours is checked for injection like the local model's text; if the check flags it, it is still sent, as you wrote it, and the hit is logged.") {
+                    reviewRows(review)
+                }
+            }
+        }
+        .task(id: engine.status?.guard?.local) { await engine.loadLocalHandback() }
+        .sheet(isPresented: $editing) {
+            HandbackInstructionsSheet(engine: engine, strategy: current, own: own,
+                                      keepmums: engine.localHandback?.defaultInstructions[current] ?? "")
+        }
+    }
+
+    private var strategySection: some View {
         FormSection(title: "After a local turn",
                     footer: "For the injection check. The cloud model never gets the flagged result, only what takes its place.",
                     details: "For the injection check. The cloud model never gets the flagged result itself. What takes its place is masked like the rest of the request and checked first: if the check flags what the local model wrote, that turn stays local. A harm hit always stays local: it is what you typed, and handing it back would send it to the provider the check kept it from.") {
@@ -874,15 +915,6 @@ struct LocalHandbackSection: View {
                     }
                 }
             }
-            if ["answer", "summary", "rewrite"].contains(current), let review = engine.localHandback?.review {
-                Hairline()
-                reviewRows(review)
-            }
-        }
-        .task(id: engine.status?.guard?.local) { await engine.loadLocalHandback() }
-        .sheet(isPresented: $editing) {
-            HandbackInstructionsSheet(engine: engine, strategy: current, own: own,
-                                      keepmums: engine.localHandback?.defaultInstructions[current] ?? "")
         }
     }
 
@@ -900,41 +932,24 @@ struct LocalHandbackSection: View {
                 detail: review.mode == "off" ? "Off: what the local model wrote goes straight to the cloud"
                     : skipped ? "Rewrites only: this hand-back goes without a review"
                     : current == "answer" ? "After the local answer, a panel shows what the next turn sends in the result's place: send it, edit it or keep the conversation local"
-                    : "A panel shows what the local model wrote: send it, edit it, withhold the result or keep the turn local",
-                help: "keepmum holds the request while the panel waits for you. It does not take the keyboard: click into it to edit. Each flagged result is reviewed once; later turns reuse your answer. With the app closed (and no `keepmum review --watch`), nothing waits.") {
-            choiceMenu(label, Self.reviewModes.map { m in (m.label, { await engine.setLocalHandbackReview(mode: m.id) }) })
+                    : "A panel shows what the local model wrote: send it, edit it, withhold the result or keep the turn local") {
+            ChoiceMenu(engine: engine, label: label,
+                       items: Self.reviewModes.map { m in (m.label, { await engine.setLocalHandbackReview(mode: m.id) }) })
         }
         if review.mode != "off" {
             Hairline()
             FormRow(title: "Wait", detail: "The agent waits too, up to this long") {
-                choiceMenu(seconds(review.wait),
-                           (Self.waits.contains(review.wait) ? Self.waits : (Self.waits + [review.wait]).sorted())
+                ChoiceMenu(engine: engine, label: seconds(review.wait),
+                           items: (Self.waits.contains(review.wait) ? Self.waits : (Self.waits + [review.wait]).sorted())
                                .map { w in (seconds(w), { await engine.setLocalHandbackReview(wait: w) }) })
             }
             Hairline()
             FormRow(title: "If no answer",
                     detail: review.timeout == "send" ? "What the local model wrote goes as written" : "The turn stays on this Mac, answered by the local model") {
-                choiceMenu(review.timeout == "send" ? "Send as written" : "Keep it local",
-                           [("Keep it local", { await engine.setLocalHandbackReview(timeout: "stay") }),
-                            ("Send as written", { await engine.setLocalHandbackReview(timeout: "send") })])
+                ChoiceMenu(engine: engine, label: review.timeout == "send" ? "Send as written" : "Keep it local",
+                           items: [("Keep it local", { await engine.setLocalHandbackReview(timeout: "stay") }),
+                                   ("Send as written", { await engine.setLocalHandbackReview(timeout: "send") })])
             }
-        }
-    }
-
-    @ViewBuilder private func choiceMenu(_ label: String, _ items: [(String, @MainActor () async -> Void)]) -> some View {
-        if isSnapshot {
-            HStack(spacing: Space.xxs) {
-                Text(label).font(.km(.callout)).foregroundStyle(Theme.text)
-                Image(systemName: "chevron.down").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
-            }
-        } else {
-            Menu(label) {
-                ForEach(items.indices, id: \.self) { i in
-                    Button(items[i].0) { Task { await items[i].1() } }
-                }
-            }
-            .menuStyle(.borderlessButton).fixedSize()
-            .disabled(!engine.isBundled || engine.busy)
         }
     }
 
@@ -953,6 +968,99 @@ struct LocalHandbackSection: View {
             .menuStyle(.borderlessButton).fixedSize()
             .disabled(!engine.isBundled || engine.busy)
             .help("What follows a turn the injection check kept on this Mac")
+        }
+    }
+}
+
+/// A setting's menu of choices, each running its action (an engine call); a stand-in in snapshots.
+struct ChoiceMenu: View {
+    var engine: Engine
+    var label: String
+    var items: [(String, @MainActor () async -> Void)]
+    @Environment(\.isSnapshot) private var isSnapshot
+
+    var body: some View {
+        if isSnapshot {
+            HStack(spacing: Space.xxs) {
+                Text(label).font(.km(.callout)).foregroundStyle(Theme.text)
+                Image(systemName: "chevron.down").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+            }
+        } else {
+            Menu(label) {
+                ForEach(items.indices, id: \.self) { i in
+                    Button(items[i].0) { Task { await items[i].1() } }
+                }
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+            .disabled(!engine.isBundled || engine.busy)
+        }
+    }
+}
+
+/// How fast local turns go: how long a server keeps its model loaded, and whether a local answer
+/// thinks first (`keepmum guard local speed`).
+struct LocalSpeedSection: View {
+    var engine: Engine
+
+    static let keeps: [(id: String, label: String)] = [
+        ("5m", "5 minutes"), ("15m", "15 minutes"), ("30m", "30 minutes"), ("1h", "1 hour"), ("always", "Always"),
+    ]
+
+    private var keep: String { engine.localServers?.keepLoaded ?? "5m" }
+    private var thinks: Bool { engine.localServers?.answerThinking ?? true }
+
+    var body: some View {
+        FormSection(title: "Speed",
+                    footer: "On an M5 Pro with keepmum\u{2019}s pick in Splash: an answer took about 7 s with thinking and 1.5 s without; a 37,000-token request took 14 s to read cold, and 0.1 s from the cache.",
+                    details: "A server that unloads its model loads it again on the next request, in a few seconds, and then reads that whole request from scratch: a coding agent sends tens of thousands of tokens each time. While the model stays loaded, it reads only what is new. keepmum tells Ollama after each request, and starts the Splash it runs again when this changes. A loaded model keeps its memory in use: about 16 GB for keepmum\u{2019}s pick. Thinking applies to local answers, of either check; summaries and rewrites for the cloud never think.") {
+            FormRow(title: "Keep the model loaded",
+                    detail: keep == "always" ? "Always: its memory stays in use until you quit the server"
+                        : "For \(label(keep)) after the last request; then the next one waits for it to load and reads its prompt again",
+                    help: "Splash restarts with the new setting, and loads its model again in a few seconds.") {
+                ChoiceMenu(engine: engine, label: label(keep) + (keep == "5m" ? " (default)" : ""),
+                           items: (Self.keeps.contains { $0.id == keep } ? Self.keeps : Self.keeps + [(keep, keep)]).map { k in
+                               (k.label, { await engine.setLocalSpeed(keepLoaded: k.id) })
+                           })
+            }
+            Hairline()
+            FormRow(title: "Think before answering",
+                    detail: thinks ? "Better on a hard turn, and several times slower: the model reasons before it answers"
+                                   : "Off: the local model answers at once") {
+                Switch(isOn: thinks) { on in Task { await engine.setLocalSpeed(thinking: on) } }
+                    .disabled(!engine.isBundled || engine.busy)
+                    .accessibilityLabel("Think before answering")
+            }
+        }
+    }
+
+    private func label(_ id: String) -> String {
+        Self.keeps.first { $0.id == id }?.label ?? id
+    }
+}
+
+/// On the Checks pane, when a check answers on this Mac: where local mode's settings are.
+struct LocalModeSummary: View {
+    var engine: Engine
+    var open: (SettingsPane) -> Void
+
+    var body: some View {
+        let local = engine.status?.guard?.local
+        let servers = engine.localServers?.servers.count ?? local?.servers.count ?? 0
+        let skills = engine.localSkills?.skills.count ?? local?.skills?.count ?? 0
+        let handback = engine.localHandback?.handback ?? local?.handback ?? "stay"
+        FormSection(title: "Local mode") {
+            row("Local models", servers == 0 ? "None set: what a check keeps local is refused"
+                    : "\(servers) server\(servers == 1 ? "" : "s"), tried in order", warn: servers == 0, .localModels)
+            Hairline()
+            row("Hand-back", LocalHandbackSection.choices.first { $0.id == handback }?.label ?? handback, .handback)
+            Hairline()
+            row("Skills", skills == 0 ? "None" : "\(skills) skill\(skills == 1 ? "" : "s")", .skills)
+        }
+    }
+
+    private func row(_ title: String, _ detail: String, warn: Bool = false, _ pane: SettingsPane) -> some View {
+        FormRow(title: title, detail: detail, detailTone: warn ? Theme.warning : Theme.textSecondary) {
+            PillButton(title: "Open", icon: "chevron.right") { open(pane) }
         }
     }
 }

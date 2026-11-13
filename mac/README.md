@@ -27,7 +27,8 @@ A menu-bar app that sets keepmum up, runs it in the background and shows what it
 ![Detection: per type, who found it, and your rules](docs/detection-light.png)
 ![Audit: whether the log is intact, its head, and every change that turned protection down](docs/audit-light.png)
 ![Settings › Setup: the local model, the background service, and one switch per coding agent](docs/settings-light.png)
-![Settings › Checks: each check off, warn, block or local, its sensitivity, and the local servers](docs/checks-light.png)
+![Settings › Checks: each check off, warn, block or local, its sensitivity, and where local mode's settings are](docs/checks-light.png)
+![Settings › Local models: the servers on this Mac, in the order tried, and how fast they answer](docs/local-light.png)
 ![Settings › Extensions: what other apps added to your coding agents, to keep or remove](docs/extensions-light.png)
 ![The menu bar panel: the background service, which agents are protected, and what needs you](docs/menu-light.png)
 

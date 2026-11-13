@@ -192,8 +192,13 @@ final class Engine {
         /// Whether Splash is installed and this Mac can run it; nil from older engines.
         struct SplashInfo: Decodable, Equatable { var installed: Bool; var supported: Bool; var why: String?; var install: String }
         var splash: SplashInfo?
+        /// How long a server keeps its model loaded, and whether a local answer thinks first
+        /// (`keepmum guard local speed`); nil from older engines.
+        var keepLoaded: String?
+        var answerThinking: Bool?
         enum CodingKeys: String, CodingKey {
-            case servers, presets, picks, contexts, splash, defaultPick = "default_pick", defaultContext = "default_context"
+            case servers, presets, picks, contexts, splash, defaultPick = "default_pick", defaultContext = "default_context",
+                 keepLoaded = "keep_loaded", answerThinking = "answer_thinking"
         }
     }
     private(set) var localServers: LocalServers?
@@ -596,7 +601,7 @@ final class Engine {
         await act { try await self.check(["guard", check, mode] + (model.map { ["--model", $0] } ?? [])) }
     }
 
-    /// The local servers and what each has, for Settings › Checks. Asks each (on this Mac) every time.
+    /// The local servers and what each has, for Settings › Local models. Asks each (on this Mac) every time.
     func loadLocalServers() async {
         guard let out = try? await run(["guard", "local", "--json"]), out.code == 0,
               let m = try? JSONDecoder().decode(LocalServers.self, from: Data(out.stdout.utf8)) else { return }
@@ -667,6 +672,16 @@ final class Engine {
         }
     }
 
+    /// How fast local turns go (`keepmum guard local speed`): how long a server keeps its model
+    /// loaded (5m, 15m, 30m, 1h or always), and whether a local answer thinks first.
+    func setLocalSpeed(keepLoaded: String? = nil, thinking: Bool? = nil) async {
+        var args = ["guard", "local", "speed"]
+        if let keepLoaded { args += ["--keep-loaded", keepLoaded] }
+        if let thinking { args += ["--thinking", thinking ? "on" : "off"] }
+        await act { try await self.check(args) }
+        await loadLocalServers()
+    }
+
     /// The context size of local server `number`'s Ollama model (`keepmum guard local context`): a
     /// number of tokens, or "default" for Ollama's own setting.
     func setLocalContext(_ number: Int, size: String) async {
@@ -684,7 +699,7 @@ final class Engine {
         await loadLocalServers()
     }
 
-    /// The skills for local turns, for Settings › Checks: each SKILL.md is read every time.
+    /// The skills for local turns, for Settings › Skills: each SKILL.md is read every time.
     func loadLocalSkills() async {
         guard let out = try? await run(["guard", "local", "skill", "--json"]), out.code == 0,
               let m = try? JSONDecoder().decode(LocalSkills.self, from: Data(out.stdout.utf8)) else { return }
@@ -1118,7 +1133,7 @@ final class Engine {
     /// For snapshots: an engine that is set up and protecting Claude Code; with `starting`, one
     /// whose background service was just started and has yet to answer.
     /// With `around`, Claude Code was pointed back at the gateway keepmum was in front of.
-    static func preview(starting: Bool = false, around: Bool = false) -> Engine {
+    static func preview(starting: Bool = false, around: Bool = false, localOff: Bool = false) -> Engine {
         let e = Engine()
         e.previewing = true
         e.status = Status(model: "~/.local/share/keepmum/models/privacy-filter-q8.gguf", modelSize: 1_637_572_192,
@@ -1132,7 +1147,7 @@ final class Engine {
                           clients: ["codex": .init(installed: true, on: true, via: "http://127.0.0.1:3425/v1"),
                                     "pi": .init(installed: true, on: false, other: .many(["openai"]), otherUrl: "https://llm.corp.example/v1")],
                           destinations: ["gitlab-token": ["gitlab.corp.example"]], previews: true, context: true, keepDays: 90,
-                          guard: .init(injection: .init(mode: "warn", installed: true,
+                          guard: .init(injection: .init(mode: localOff ? "warn" : "local", installed: true,
                                                         server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0",
                                                         threshold: 0.8, defaultThreshold: 0.8, shortChars: 200, shortThreshold: 0.995,
                                                         levels: ["high": .init(threshold: 0.65, caught: 0.993, ordinary: 0.017, security: 0.069, short: 0.99, sessions: 0.031),
@@ -1185,7 +1200,7 @@ final class Engine {
                     .init(id: "light", name: "Qwen3.5 9B Defiant Fable (DavidAU), Q8_0",
                           model: "hf.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q8_0",
                           downloadGB: 11.4, memoryGB: 9.1, macGB: 24, note: "Slower on long answers.")],
-            defaultPick: "recommended")
+            defaultPick: "recommended", keepLoaded: "30m", answerThinking: true)
         e.localSkills = .init(skills: [
             .init(path: NSHomeDirectory() + "/.config/keepmum/skills/careful-answers", checks: ["injection", "harm"], name: "careful-answers",
                   description: "How to answer when keepmum keeps a turn local.", chars: 412, problem: nil,

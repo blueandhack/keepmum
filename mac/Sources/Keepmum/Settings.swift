@@ -1,10 +1,33 @@
 import SwiftUI
 
-/// Settings, one pane at a time: a list of panes beside the content. A pane with two groups of
-/// sections lays them side by side when the window is wide enough, and one under the other when not.
+/// Settings, one pane at a time: a rail of panes in groups beside one column of sections, so each
+/// pane holds a few related things and stays short enough to scan.
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case setup, masking, tools, checks, extensions, general, doctor
+    case setup, masking, tools, checks, extensions, localModels, handback, skills, general, doctor
     var id: String { rawValue }
+
+    /// The rail's groups, in order; the first has no heading.
+    enum Group: CaseIterable {
+        case start, protection, local, app
+        var title: String? {
+            switch self {
+            case .start: nil
+            case .protection: "Protection"
+            case .local: "Local mode"
+            case .app: "This app"
+            }
+        }
+        var panes: [SettingsPane] { SettingsPane.allCases.filter { $0.group == self } }
+    }
+
+    var group: Group {
+        switch self {
+        case .setup: .start
+        case .masking, .tools, .checks, .extensions: .protection
+        case .localModels, .handback, .skills: .local
+        case .general, .doctor: .app
+        }
+    }
 
     var title: String {
         switch self {
@@ -13,6 +36,9 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .tools: "Tools"
         case .checks: "Checks"
         case .extensions: "Extensions"
+        case .localModels: "Local models"
+        case .handback: "Hand-back"
+        case .skills: "Skills"
         case .general: "General"
         case .doctor: "Check this Mac"
         }
@@ -25,6 +51,9 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .tools: "network"
         case .checks: "checkmark.shield"
         case .extensions: "puzzlepiece.extension"
+        case .localModels: "cpu"
+        case .handback: "arrow.uturn.up"
+        case .skills: "text.book.closed"
         case .general: "slider.horizontal.3"
         case .doctor: "stethoscope"
         }
@@ -35,10 +64,13 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .setup: "The local model, the background service, and the coding agents keepmum protects"
         case .masking: "What is masked before a request leaves this Mac, and the projects left out"
         case .tools: "What each tool that reaches the network may receive, and where shell commands may send tokens"
-        case .checks: "Optional checks on what tools return, what you type, and the commands in replies, and the local models that answer what they flag"
+        case .checks: "Optional checks on what tools return, what you type, and the commands in replies"
         case .extensions: "The plugins, hooks and MCP servers in your coding agents' settings, and what other apps added"
-        case .general: "Appearance, updates, the Logs page, and this app's connection to keepmum"
-        case .doctor: "The same checks as keepmum doctor: this Mac, the model, keepmum's files"
+        case .localModels: "The models on this Mac that answer what a check keeps local, and how fast they answer"
+        case .handback: "What the cloud model gets after a turn the injection check kept on this Mac, and whether you look first"
+        case .skills: "Your own instructions for the local model on the turns keepmum keeps on this Mac"
+        case .general: "Appearance, updates, and what the Logs page shows"
+        case .doctor: "The same checks as keepmum doctor, and this app's connection to keepmum"
         }
     }
 }
@@ -52,12 +84,12 @@ struct SettingsPage: View {
     @AppStorage(FlowPulseStyle.key) private var flowStyle: FlowPulseStyle = .comet
     @Environment(\.isSnapshot) private var isSnapshot
 
-    /// A column's width when two fit side by side; under two of these, the pane is one column.
-    private static let column: CGFloat = 540
+    /// The column's widest: rows past this get hard to read across.
+    private static let column: CGFloat = 780
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.l) {
-            PageHeader(title: "Settings", subtitle: pane.subtitle)
+            PageHeader(title: pane.title, subtitle: pane.subtitle)
             HStack(alignment: .top, spacing: Space.xl) {
                 SettingsRail(store: store, engine: engine, selection: $pane).frame(width: 200)
                 if isSnapshot {
@@ -70,56 +102,67 @@ struct SettingsPage: View {
     }
 
     private var content: some View {
-        let (left, right) = columns
-        return ViewThatFits(in: .horizontal) {
-            if let right {
-                HStack(alignment: .top, spacing: Space.xl) {
-                    left.frame(minWidth: Self.column, idealWidth: Self.column, maxWidth: 720, alignment: .topLeading)
-                    right.frame(minWidth: Self.column, idealWidth: Self.column, maxWidth: 720, alignment: .topLeading)
-                }
-            }
-            VStack(alignment: .leading, spacing: Space.xl) {
-                left
-                if let right { right }
-            }
-            .frame(maxWidth: 760, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        VStack(alignment: .leading, spacing: Space.xl) { sections }
+            .frame(maxWidth: Self.column, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
-    /// Each pane's sections: the left column, and the right one if it has two groups.
-    private var columns: (AnyView, AnyView?) {
+    /// A check answers on this Mac: the local mode panes apply.
+    private var localUsed: Bool {
+        guard let g = engine.status?.guard else { return false }
+        return [g.injection.mode, g.harm.mode].contains("local")
+    }
+
+    @ViewBuilder private var sections: some View {
         let s = store.snapshot
         switch pane {
         case .setup:
-            return (AnyView(SetupSection(engine: engine, part: .service)),
-                    engine.isBundled ? AnyView(SetupSection(engine: engine, part: .agents)) : nil)
+            SetupSection(engine: engine, part: .service)
+            if engine.isBundled { SetupSection(engine: engine, part: .agents) }
         case .masking:
-            return (AnyView(MaskingSection(engine: engine, observing: s.observe == true, modelError: s.detection.modelError)),
-                    AnyView(ExclusionsSection(engine: engine)))
+            MaskingSection(engine: engine, observing: s.observe == true, modelError: s.detection.modelError)
+            ExclusionsSection(engine: engine)
         case .tools:
-            return (AnyView(ToolsSection(store: store, engine: engine)),
-                    engine.isBundled ? AnyView(ShellDestinationsSection(engine: engine)) : nil)
+            ToolsSection(store: store, engine: engine)
+            if engine.isBundled { ShellDestinationsSection(engine: engine) }
         case .checks:
-            return (AnyView(ChecksSection(engine: engine)),
-                    engine.status?.guard?.local != nil ? AnyView(VStack(alignment: .leading, spacing: Space.xl) {
-                        LocalServersSection(engine: engine)
-                        LocalHandbackSection(engine: engine)
-                        LocalSkillsSection(engine: engine)
-                    }) : nil)
+            ChecksSection(engine: engine)
+            if localUsed { LocalModeSummary(engine: engine) { pane = $0 } }
         case .extensions:
-            return (AnyView(ExtensionsSection(engine: engine)), nil)
+            ExtensionsSection(engine: engine)
+        case .localModels:
+            localOff
+            LocalServersSection(engine: engine)
+            LocalSpeedSection(engine: engine)
+        case .handback:
+            localOff
+            LocalHandbackSection(engine: engine)
+        case .skills:
+            localOff
+            LocalSkillsSection(engine: engine)
         case .general:
-            return (AnyView(VStack(alignment: .leading, spacing: Space.xl) { display; UpdatesSection() }),
-                    AnyView(VStack(alignment: .leading, spacing: Space.xl) {
-                        if engine.isBundled { LogsPageSection(engine: engine) }
-                        connection
-                    }))
+            display
+            UpdatesSection()
+            if engine.isBundled { LogsPageSection(engine: engine) }
         case .doctor:
-            return (engine.isBundled ? AnyView(DoctorSection(engine: engine))
-                                     : AnyView(FormSection(title: "Check this Mac") {
-                                           FormRow(title: "Not available", detail: "Needs the bundled engine") { EmptyView() }
-                                       }), nil)
+            if engine.isBundled {
+                DoctorSection(engine: engine)
+            } else {
+                FormSection(title: "Check this Mac") {
+                    FormRow(title: "Not available", detail: "Needs the bundled engine") { EmptyView() }
+                }
+            }
+            connection
+        }
+    }
+
+    /// On a local mode pane while no check answers on this Mac: these settings wait for one.
+    @ViewBuilder private var localOff: some View {
+        if !localUsed {
+            Banner(tone: .info, icon: "cpu", title: "Local mode is off.",
+                   message: "These apply once Prompt injection or Harmful requests is set to Local.") {
+                PillButton(title: "Open Checks") { pane = .checks }
+            }
         }
     }
 
@@ -187,8 +230,13 @@ private struct SettingsRail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xxs) {
-            ForEach(SettingsPane.allCases) { pane in
-                RailItem(pane: pane, badge: badge(pane), selection: $selection)
+            ForEach(SettingsPane.Group.allCases, id: \.self) { group in
+                if let title = group.title {
+                    Text(title).eyebrow().padding(.horizontal, Space.s).padding(.top, Space.m).padding(.bottom, Space.xs)
+                }
+                ForEach(group.panes) { pane in
+                    RailItem(pane: pane, badge: badge(pane), selection: $selection)
+                }
             }
         }
     }
@@ -214,6 +262,17 @@ private struct SettingsRail: View {
             return failed == 0 ? nil : ("\(failed)", Theme.blocked)
         case .masking:
             return store.snapshot.observe == true ? ("Off", Theme.blocked) : nil
+        case .localModels:
+            // A check answers locally with no server, or none of them ready.
+            guard let g = engine.status?.guard, [g.injection.mode, g.harm.mode].contains("local") else { return nil }
+            let servers = engine.localServers?.servers ?? []
+            if (g.local?.servers ?? []).isEmpty { return ("To do", Theme.warning) }
+            return !servers.isEmpty && servers.allSatisfy({ $0.problem != nil }) ? ("Down", Theme.warning) : nil
+        case .handback:
+            let waiting = ReviewCenter.shared.pending.count
+            return waiting == 0 ? nil : ("\(waiting)", Theme.accent)
+        case .skills:
+            return nil
         }
     }
 }

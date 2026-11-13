@@ -441,6 +441,9 @@ enum Snapshotter {
             render(SkillsEditor(engine: .preview(), initial: 1).frame(width: 980, height: 760),
                    to: "\(dir)/skills-\(dark ? "dark" : "light").png", dark: dark)
         }
+        // A local mode pane while no check answers on this Mac.
+        render(Dashboard(store: store, engine: .preview(localOff: true), page: .settings, settingsPane: .localModels).frame(width: 1200, height: 1240),
+               to: "\(dir)/settings-localModels-off-light.png", dark: false)
         // Every built-in rule, as the Detection page's sheet shows them.
         let rulesEngine = Engine.preview()
         rulesEngine.previewRules()

@@ -68,6 +68,7 @@ from .review import MAX_WAIT, Review, Reviews
 from .review import applies as review_applies
 from .local import DEFAULT_MAX_TOKENS as LOCAL_MAX_TOKENS
 from .local import NO_THINKING
+from .local import keep_alive, thinking_fields, without_thinking
 from .local import ChatStream, answer_text, from_chat, skills_text, to_chat
 from .local import LocalRoute
 from .local import prepare as prepare_local
@@ -216,7 +217,7 @@ class Proxy:
                  chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
                  gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM,
                  tools=None, guards=None, commands=None, local=None, antigravity_upstream: str = ANTIGRAVITY_UPSTREAM,
-                 local_skills=None, handback=None, review=None):
+                 local_skills=None, handback=None, review=None, speed=None):
         self.redactor = redactor
         # The checks on a request's texts (guard.Guard): "injection" on tool results, "harm" on what
         # the user typed. Warn-mode checks run after the request is sent, in `_background`.
@@ -236,6 +237,10 @@ class Proxy:
         # local_handback_review, _wait, _timeout), and the reviews waiting for an answer (review.py).
         self._review = review if callable(review) else (lambda: ("off", 60, "stay"))
         self.reviews = Reviews()
+        # How fast local turns go: a callable giving ([guard] local_keep_loaded, local_answer_thinking).
+        self._speed = speed if callable(speed) else (lambda: ("5m", True))
+        # Whether each local server is Ollama, asked once: Ollama gets keep_alive after a request.
+        self._ollama: dict[str, bool] = {}
         # "answer" under review: the flagged results whose hand-back waits for the user, by key; a
         # request carrying one waits for the answer (`_wait_for_reviews`).
         self._held: dict[bytes, anyio.Event] = {}
@@ -759,6 +764,7 @@ class Proxy:
             except (ValueError, AttributeError, TypeError):
                 out = ""
             if out:
+                self._later(self._keep_loaded(server))
                 return out, server
             failures.append(f"{server.model} at {server.url}: no text")
         log.warning("%s: no local model wrote a %s of the flagged result (%s); answered locally", path, strategy,
@@ -879,6 +885,7 @@ class Proxy:
         skills = self.local_skills(route.check) if callable(self.local_skills) else []
         skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
         failures: list[str] = []
+        think = self._speed()[1]
         for server in servers:
             ways = (["chat"] if t.api not in LOCAL_PATHS or server.api == "chat"  # Gemini: always as Chat Completions
                     or (server.api == "auto" and (server.url, t.api) in self._chat_only)
@@ -891,10 +898,15 @@ class Proxy:
                 headers = {"content-type": "application/json"}
                 if t.api == "messages" and way == "native":
                     headers["anthropic-version"] = request.headers.get("anthropic-version", "2023-06-01")
-                payload = json.dumps(data, ensure_ascii=False).encode("utf-8", "replace")
+                api = "chat" if way == "chat" else t.api
+                if not think:
+                    data = without_thinking(data, api)
                 try:
-                    resp = await self.client.send(self.client.build_request("POST", target, headers=headers, content=payload),
-                                                  stream=True)
+                    resp = await self._send_local(target, headers, data)
+                    if not think and resp.status_code in (400, 422):  # a server that refuses the fields that turn thinking off
+                        await resp.aclose()
+                        resp = await self._send_local(target, headers, {k: v for k, v in data.items()
+                                                                        if k not in thinking_fields(api)})
                 except httpx.HTTPError as e:
                     failures.append(f"{server.url} did not answer ({type(e).__name__})")
                     break  # the next server
@@ -927,6 +939,7 @@ class Proxy:
                     log.warning("%s: %s; answered by the next local server", path, "; ".join(failures))
                 self.stats.note_guard(route.entries, answered_by={"model": server.model, "url": server.url,
                                                                   "api": way, "passed_over": failures})
+                self._later(self._keep_loaded(server))
                 # Gemini: as Code Assist wraps it when the request came wrapped, and as a JSON array for
                 # a streamGenerateContent asked without alt=sse.
                 shape = {"wrapped": isinstance(body.get("request"), dict),
@@ -999,6 +1012,27 @@ class Proxy:
         if hits:
             self._record_hits(guard, hits, "warned", path, origin, self._shown(hits, items, texts))
             self.stats.record_flagged(path, hits, origin, kind=kind, request=request)
+
+    async def _send_local(self, target: str, headers: dict, data: dict) -> httpx.Response:
+        payload = json.dumps(data, ensure_ascii=False).encode("utf-8", "replace")
+        return await self.client.send(self.client.build_request("POST", target, headers=headers, content=payload), stream=True)
+
+    async def _keep_loaded(self, server) -> None:
+        """After a request to an Ollama server, how long it keeps the model loaded ([guard]
+        local_keep_loaded): its Messages and Responses APIs take no keep_alive, its own API does, and
+        a request without a prompt only sets it. Splash gets it when keepmum starts it (splashsvc)."""
+        try:
+            if server.url not in self._ollama:  # as local.kind tells it
+                r = await self.client.get(server.url + "/api/version", timeout=5)
+                self._ollama[server.url] = (r.status_code == 200 and r.headers.get("content-type", "").startswith("application/json")
+                                            and "version" in r.json()
+                                            and (await self.client.get(server.url + "/api/tags", timeout=5)).status_code == 200)
+            if not self._ollama[server.url]:
+                return
+            await self.client.post(server.url + "/api/generate",
+                                   json={"model": server.model, "keep_alive": keep_alive(self._speed()[0])}, timeout=30)
+        except (httpx.HTTPError, ValueError, AttributeError, TypeError) as e:
+            log.debug("could not set how long %s keeps %s loaded (%s)", server.url, server.model, type(e).__name__)
 
     def _later(self, coro) -> None:
         import asyncio

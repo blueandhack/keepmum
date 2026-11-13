@@ -804,7 +804,8 @@ def guard_local(ctx: typer.Context,
     if as_json:
         typer.echo(json.dumps({"servers": rows, "presets": [{"id": k, "name": n, "url": u} for k, (n, u) in PRESETS.items()],
                                "picks": picks_json(), "default_pick": DEFAULT_PICK,
-                               "contexts": list(CONTEXTS), "default_context": DEFAULT_CONTEXT, "splash": _splash_status()}))
+                               "contexts": list(CONTEXTS), "default_context": DEFAULT_CONTEXT, "splash": _splash_status(),
+                               "keep_loaded": cfg.guard_local_keep_loaded, "answer_thinking": cfg.guard_local_answer_thinking}))
         return
     if not rows:
         typer.echo("no local servers: `keepmum guard local pull` downloads keepmum's pick to Ollama and uses it "
@@ -1004,7 +1005,8 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
                        url: str = typer.Option(None, "--url", help="Where Splash listens (default http://localhost:8000)."),
                        start: bool = typer.Option(False, "--start", help="Run it in the background: now, after a crash, and at login."),
                        stop: bool = typer.Option(False, "--stop", help="Stop the Splash keepmum runs, and no longer start it at login."),
-                       idle: str = typer.Option("5m", "--idle", help="With --start: how long without a request before it frees its memory.")) -> None:
+                       idle: str = typer.Option(None, "--idle", help="With --start: how long without a request before it frees its "
+                                                "memory, or off (default: `[guard] local_keep_loaded`, `keepmum guard local speed`).")) -> None:
     """Use Splash (github.com/incoai/splash) for local mode: tried first, the other servers kept behind it.
     Splash is an engine for Apple silicon built around a few models; with keepmum's pick it wrote about
     1.6 times as fast as Ollama in keepmum's tests. --start runs it in the background; without it, this
@@ -1017,8 +1019,10 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
         typer.echo("stopped Splash, and it no longer starts at login" if splashsvc.stop() else "keepmum was not running Splash",
                    err=True)
         return
-    if start and not re.fullmatch(r"\d+[smh]?", idle):
-        typer.echo("keepmum guard local splash: --idle: seconds, or with s, m or h, such as 5m", err=True)
+    if idle is None:
+        idle = splashsvc.idle_release(_config().guard_local_keep_loaded)
+    if start and not re.fullmatch(r"\d+[smh]?|off", idle):
+        typer.echo("keepmum guard local splash: --idle: seconds, or with s, m or h, such as 5m, or off", err=True)
         raise typer.Exit(2)
     import dataclasses
     import shutil
@@ -1059,8 +1063,9 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
             typer.echo(f"{where}: {e}", err=True)
             raise typer.Exit(1)
         typer.echo(f"Splash is starting in the background, and starts again at login (`{where} --stop` stops it). "
-                   f"The first start downloads the model and its draft; it frees its memory after {idle} without a "
-                   f"request and loads it again in a few seconds. Its log: {splashsvc.log_path()}", err=True)
+                   "The first start downloads the model and its draft; "
+                   + ("it keeps it loaded" if idle == "off" else f"it frees its memory after {idle} without a request and "
+                      "loads it again in a few seconds") + f". Its log: {splashsvc.log_path()}", err=True)
         return
     have = models(url)
     if have is not None and kind(url) == "Splash" and served in have:
@@ -1072,6 +1077,65 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
                "(the first start downloads the model and its draft):", err=True)
     typer.echo(f"  {splash_command(spec)}" + ("" if url == SPLASH_URL else f" --port {url.rsplit(':', 1)[-1]}"))
     typer.echo("Until it answers, flagged requests go to the next server. It frees its memory after 10 minutes idle.", err=True)
+
+
+@local_app.command("speed")
+def guard_local_speed(keep_loaded: str = typer.Option(None, "--keep-loaded", help="How long a local server keeps its model "
+                                                      "loaded after a request: 5m (default), 15m, 30m, 1h, any such duration, or always."),
+                      thinking: str = typer.Option(None, "--thinking", help="on (default) or off: whether a local answer may "
+                                                   "think first. Off answers several times as fast; summaries and rewrites never think."),
+                      as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """How fast local turns go. A model that stays loaded answers without reloading and reads a long
+    prompt from its cache; an answer without thinking takes a fraction of the time."""
+    import json
+
+    from . import splashsvc
+    from .config import ConfigError
+    from .local import DEFAULT_KEEP_LOADED, parse_keep_loaded, set_keep_alive
+
+    where = "keepmum guard local speed"
+    if thinking is not None and thinking not in ("on", "off"):
+        typer.echo(f"{where}: --thinking: on or off", err=True)
+        raise typer.Exit(2)
+    if keep_loaded is not None:
+        try:
+            keep_loaded = parse_keep_loaded(keep_loaded, "--keep-loaded")
+        except ValueError:
+            typer.echo(f"{where}: --keep-loaded: a duration such as 5m, 30m or 1h, or always", err=True)
+            raise typer.Exit(2)
+    cfg = _config()
+    changed = keep_loaded is not None and keep_loaded != cfg.guard_local_keep_loaded
+    try:
+        if changed:
+            _update_config(cfg.path, "guard", "local_keep_loaded", None if keep_loaded == DEFAULT_KEEP_LOADED else keep_loaded,
+                           f"{where} --keep-loaded {keep_loaded}")
+        if thinking is not None and (thinking == "on") != cfg.guard_local_answer_thinking:
+            _update_config(cfg.path, "guard", "local_answer_thinking", None if thinking == "on" else False,
+                           f"{where} --thinking {thinking}")
+    except (ConfigError, OSError) as e:
+        typer.echo(f"{where}: {e}", err=True)
+        raise typer.Exit(1)
+    cfg = _config()
+    if changed:
+        m = splashsvc.managed()
+        if m and m["model"] and m["port"]:
+            try:  # Splash reads it when it starts: started again, it loads its model again
+                splashsvc.start(m["model"], m["port"], splashsvc.idle_release(keep_loaded))
+                typer.echo("Splash starts again with it, and loads its model again in a few seconds.", err=True)
+            except (splashsvc.SplashError, OSError) as e:
+                typer.echo(f"{where}: Splash keeps its old setting until it starts again: {e}", err=True)
+        for server in cfg.guard_local_servers:  # a model Ollama has loaded now; later ones get it after each request
+            set_keep_alive(server.url, server.model, keep_loaded)
+    if changed or thinking is not None:
+        typer.echo("Running proxies use it from the next local turn.", err=True)
+    now = {"keep_loaded": cfg.guard_local_keep_loaded, "answer_thinking": cfg.guard_local_answer_thinking}
+    if as_json:
+        typer.echo(json.dumps(now))
+        return
+    kl = now["keep_loaded"]
+    typer.echo("keep loaded: " + ("always" if kl == "always" else f"{kl} after the last request") +
+               (" (default)" if kl == DEFAULT_KEEP_LOADED else ""))
+    typer.echo("local answers: " + ("think first (default)" if now["answer_thinking"] else "no thinking: answer at once"))
 
 
 @local_app.command("context")

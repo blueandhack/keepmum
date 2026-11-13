@@ -60,6 +60,11 @@ def find() -> str | None:
     return shutil.which("splash") or next((p for p in SEARCH if os.access(p, os.X_OK)), None)
 
 
+def idle_release(keep_loaded: str) -> str:
+    """`[guard] local_keep_loaded` as Splash's --idle-release: "always" is off."""
+    return "off" if keep_loaded == "always" else keep_loaded
+
+
 def arguments(exe: str, spec: str, port: int, idle: str = DEFAULT_IDLE) -> list[str]:
     return [exe, "serve", "--model", spec, "--language-only", "--no-webui", "--max-context", "64K",
             "--port", str(port), "--idle-release", idle]

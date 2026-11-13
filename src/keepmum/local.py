@@ -64,6 +64,14 @@ DEFAULT_MAX_TOKENS = 4096
 # reads reasoning_effort, llama.cpp's server (and others that render the chat template) reads
 # chat_template_kwargs; a server that refuses either is asked again without them.
 NO_THINKING = {"reasoning_effort": "none", "chat_template_kwargs": {"enable_thinking": False}}
+# The same for a local answer in the agent's own API, with `[guard] local_answer_thinking = false`:
+# Ollama and Splash read these (a Messages request that asks for no thinking gets none, as Claude's API).
+NO_THINKING_NATIVE = {"messages": {"thinking": {"type": "disabled"}}, "responses": {"reasoning": {"effort": "none"}}}
+# How long a local server keeps its model loaded after a request (`[guard] local_keep_loaded`): a
+# reload costs seconds, and the next request then reads its whole prompt again (a coding agent's is
+# tens of thousands of tokens) instead of from the server's cache. "always" never unloads it.
+KEEP_LOADED = ("5m", "15m", "30m", "1h", "always")
+DEFAULT_KEEP_LOADED = "5m"
 # Where the usual local servers listen, for `keepmum guard local add --preset` and the app.
 PRESETS = {"ollama": ("Ollama", "http://localhost:11434"), "splash": ("Splash", "http://localhost:8000"),
            "lmstudio": ("LM Studio", "http://localhost:1234"), "llamacpp": ("llama.cpp", "http://localhost:8080"),
@@ -132,6 +140,47 @@ class Skill:
 
     def as_toml(self) -> dict:
         return {"path": self.path} | ({} if tuple(self.places) == PLACES else {"places": list(self.places)})
+
+
+def parse_keep_loaded(value, where: str = "guard") -> str:
+    """`[guard] local_keep_loaded`: one of KEEP_LOADED, or any duration as 90s, 45m or 2h."""
+    import re
+
+    if isinstance(value, str) and (value in KEEP_LOADED or re.fullmatch(r"[1-9]\d*[smh]", value)):
+        return value
+    raise ValueError(f"{where}.local_keep_loaded must be a duration such as 5m, 30m or 1h, or \"always\"")
+
+
+def keep_alive(value: str) -> str | int:
+    """`local_keep_loaded` as Ollama's keep_alive: a duration, or -1 for always."""
+    return -1 if value == "always" else value
+
+
+def set_keep_alive(url: str, model: str, value: str, timeout: float = 3.0) -> bool:
+    """Tell an Ollama server at `url` how long to keep `model` loaded, if it has it loaded now (a
+    request without a prompt would load it otherwise). True if it was told."""
+    import httpx
+
+    try:
+        ps = httpx.get(url.rstrip("/") + "/api/ps", timeout=timeout)
+        loaded = {m.get("name") for m in ps.json().get("models", []) if isinstance(m, dict)} if ps.status_code == 200 else set()
+        if model not in loaded:
+            return False
+        r = httpx.post(url.rstrip("/") + "/api/generate", json={"model": model, "keep_alive": keep_alive(value)}, timeout=timeout)
+        return r.status_code == 200
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return False
+
+
+def without_thinking(data: dict, api: str) -> dict:
+    """A local answer's request with thinking turned off, for `api` ("chat" for Chat Completions)."""
+    extra = NO_THINKING if api == "chat" else NO_THINKING_NATIVE.get(api, {})
+    return {**data, **copy.deepcopy(extra)}
+
+
+def thinking_fields(api: str) -> tuple[str, ...]:
+    """The fields `without_thinking` adds, to ask again without them when a server refuses them."""
+    return tuple(NO_THINKING if api == "chat" else NO_THINKING_NATIVE.get(api, {}))
 
 
 def on_this_mac(url: str) -> bool:
