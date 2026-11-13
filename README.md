@@ -4,11 +4,34 @@
 
 <p align="center"><b>Keep secrets and personal data on your Mac while you use Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi or opencode.</b></p>
 
+<p align="center">
+  <a href="https://github.com/blueandhack/keepmum/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/blueandhack/keepmum?include_prereleases&sort=semver&label=release"></a>
+  <a href="https://github.com/blueandhack/keepmum/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/blueandhack/keepmum/total?label=downloads"></a>
+  <a href="https://github.com/blueandhack/keepmum/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/blueandhack/keepmum/ci.yml?branch=main&label=CI"></a>
+  <a href="https://github.com/blueandhack/keepmum/actions/workflows/mac-app.yml"><img alt="Mac app build" src="https://img.shields.io/github/actions/workflow/status/blueandhack/keepmum/mac-app.yml?branch=main&label=mac%20app"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/github/license/blueandhack/keepmum"></a>
+  <br>
+  <img alt="macOS 14+ on Apple silicon" src="https://img.shields.io/badge/macOS-14%2B%20%C2%B7%20Apple%20silicon-000000?logo=apple">
+  <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white">
+  <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-orange">
+  <a href="https://keepmum.app"><img alt="Website: keepmum.app" src="https://img.shields.io/badge/web-keepmum.app-2ea44f"></a>
+</p>
+
+<p align="center">
+  <a href="https://keepmum.app">Website</a> ·
+  <a href="https://github.com/blueandhack/keepmum/releases">Download</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#use">Use</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#limitations">Limitations</a> ·
+  <a href="SECURITY.md">Security</a>
+</p>
+
 keepmum is a local proxy that sits between your coding agent (Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi or opencode) and its model provider (Anthropic, OpenAI or Google). Before a request leaves your Mac, it finds secrets (API keys, tokens, passwords, private keys, connection strings) and, if you want, personal data (names, emails, phones, addresses, account numbers), and replaces each one with a placeholder such as `KEEPMUM_SECRET_7f3a9c2e`. When the model answers, keepmum puts the real values back, so your agent can still edit your `.env` file correctly, but the provider never sees what is in it.
 
 Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned request to the provider. The name comes from "keep mum": to say nothing about a secret.
 
-> **Status: alpha.** The latest release is [0.1.0 alpha 6](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a6) (Nov 9, 2026); the first, 0.1.0 alpha 1, came out on Nov 3. keepmum works end to end, but it has not been audited, and things will change. Treat it as a safety layer, not a guarantee. See [Limitations](#limitations).
+> **Status: alpha.** The latest release is [0.1.0 alpha 7](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a7) (Nov 10, 2026); the first, 0.1.0 alpha 1, came out on Nov 3. keepmum works end to end, but it has not been audited, and things will change. Treat it as a safety layer, not a guarantee. See [Limitations](#limitations).
 
 [![Watch how a request travels through keepmum: detect, mask, send, restore, guard (67 seconds, no sound)](site/img/flow-poster.webp)](https://keepmum.app/video/keepmum-flow-1b4b44f951.mp4)
 
