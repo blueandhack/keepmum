@@ -51,6 +51,13 @@ DETECTORS = {
     "prompt-guard-22m": ("hf", "meta-llama/Llama-Prompt-Guard-2-22M", {"MALICIOUS", "LABEL_1"}, 512, "Llama 4", "gated"),
     "prompt-guard-86m": ("hf", "meta-llama/Llama-Prompt-Guard-2-86M", {"MALICIOUS", "LABEL_1"}, 512, "Llama 4", "gated"),
     "shield-small": ("shield", "ZeroLeaks/shield-small", None, 256, "CC-BY-NC-4.0", "reference only: non-commercial"),
+    # LLM guards as GGUFs in llama-server (bench/llm_guards.py), 8,192-token windows. HaloGuard is a prompt
+    # guard whose 2.0 card says it learned injections; Shieldstral is asked the injection policy.
+    "haloguard2-0.8b": ("llm", "astroware/HaloGuard2-Gen-0.8B", None, 8192, "Apache-2.0", "P(unsafe), Q8_0"),
+    "haloguard1-4b": ("llm", "astroware/HaloGuard1-Gen-4B", None, 8192, "Apache-2.0", "P(unsafe), Q8_0"),
+    "shieldstral-3b": ("llm", "mistralai/Shieldstral-1.0-3B", None, 8192, "Apache-2.0", "injection policy, Q8_0"),
+    "kev-0.8b": ("kev", "jaredpalmer/kev-0.8b", None, 8192, "Apache-2.0", "one yes/no question, MLX"),
+    "kev-4b": ("kev", "jaredpalmer/kev-4b", None, 8192, "Apache-2.0", "one yes/no question, MLX"),
 }
 DEFAULT = "gliguard,wolf-small,wolf,horizon-small,horizon-base,sentinel,vektor-v2,protectai-v2,shield-small"
 
@@ -217,6 +224,22 @@ def _char_chunks(text: str, size: int = 1500, overlap: int = 200):
         start = max(end - overlap, start + 1)
 
 
+class _LLM:
+    """bench/llm_guards.py's LLMGuard, returning (score, windows) like the others."""
+
+    def __init__(self, name: str, kind: str):
+        from llm_guards import KevGuard, LLMGuard
+
+        self.guard = KevGuard(name, "injection") if kind == "kev" else LLMGuard(name, default_policy="injection")
+        self.device = self.guard.device
+
+    def score(self, text: str) -> tuple[float, int]:
+        return self.guard.score(text), self.guard.windows
+
+    def rss_mb(self) -> float:
+        return self.guard.rss_mb()
+
+
 def base(name: str) -> str:
     return name.partition("@")[0]
 
@@ -224,6 +247,8 @@ def base(name: str) -> str:
 def make(name: str, device: str):
     """`name@N` scores in N-token windows instead of the model's own (transformers models only)."""
     kind, repo, labels, window, *_ = DETECTORS[base(name)]
+    if kind in ("llm", "kev"):
+        return _LLM(name, kind)
     if "@" in name:
         window = int(name.partition("@")[2])
     if kind == "hf":
@@ -246,9 +271,11 @@ def worker(name: str, device: str, out: Path) -> None:
             s, windows = det.score(r["text"])
             scores[r["id"]] = {"score": s, "ms": (time.perf_counter() - t) * 1000, "windows": windows,
                                "chars": len(r["text"]), **({"parts": det.parts} if getattr(det, "parts", None) else {})}
-    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # bytes on macOS
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20  # bytes on macOS
+    if hasattr(det, "rss_mb"):  # the model lives in a llama-server process
+        rss = det.rss_mb()
     out.write_text(json.dumps({"detector": name, "device": getattr(det, "device", "cpu"), "load_s": load_s,
-                               "max_rss_mb": rss / 2**20, "scores": scores}))
+                               "max_rss_mb": rss, "scores": scores}))
 
 
 # --- Evaluation (parent side) ---------------------------------------------------------------

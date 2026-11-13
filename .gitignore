@@ -47,3 +47,4 @@ e2e/keys.env
 .coverage
 .coverage.*
 htmlcov/
+bench/data/gguf/

@@ -290,9 +290,11 @@ def worker(name: str, device: str, out: Path) -> None:
         t = time.perf_counter()
         s, _ = det.score(r["text"])
         scores[r["id"]] = {"score": s, "ms": (time.perf_counter() - t) * 1000}
-    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20
+    if hasattr(det, "rss_mb"):  # the model lives in a llama-server process
+        rss = det.rss_mb()
     out.write_text(json.dumps({"detector": name, "device": getattr(det, "device", device), "load_s": load_s,
-                               "max_rss_mb": rss / 2**20, "scores": scores}))
+                               "max_rss_mb": rss, "scores": scores}))
 
 
 # --- Report -----------------------------------------------------------------------------------

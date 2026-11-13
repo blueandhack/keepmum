@@ -63,6 +63,14 @@ DETECTORS = {
     "qwen3guard-0.6b-q4km": ("gguf", "mradermacher/Qwen3Guard-Gen-0.6B-GGUF", "Apache-2.0"),
     "qwen3guard-4b-q8": ("gguf", "mradermacher/Qwen3Guard-Gen-4B-GGUF", "Apache-2.0"),
     "qwen3guard-4b-q4km": ("gguf", "mradermacher/Qwen3Guard-Gen-4B-GGUF", "Apache-2.0"),
+    # Newer guards as GGUFs in llama-server (bench/llm_guards.py); Shieldstral with two of its policies.
+    "haloguard2-0.8b": ("llm", "astroware/HaloGuard2-Gen-0.8B", "Apache-2.0"),
+    "haloguard1-4b": ("llm", "astroware/HaloGuard1-Gen-4B", "Apache-2.0"),
+    "shieldstral-3b@harm": ("llm", "mistralai/Shieldstral-1.0-3B", "Apache-2.0"),
+    "shieldstral-3b@harm-coding": ("llm", "mistralai/Shieldstral-1.0-3B", "Apache-2.0"),
+    # Kev, a Jev-style decision model, asked a yes/no question; its server runs apart (bench/llm_guards.py).
+    "kev-0.8b": ("kev", "jaredpalmer/kev-0.8b", "Apache-2.0"),
+    "kev-4b": ("kev", "jaredpalmer/kev-4b", "Apache-2.0"),
 }
 # GGUF detectors: (file in the repo, the official repo whose chat template formats the prompt).
 GGUF = {
@@ -71,7 +79,7 @@ GGUF = {
     "qwen3guard-4b-q8": ("Qwen3Guard-Gen-4B.Q8_0.gguf", "Qwen/Qwen3Guard-Gen-4B"),
     "qwen3guard-4b-q4km": ("Qwen3Guard-Gen-4B.Q4_K_M.gguf", "Qwen/Qwen3Guard-Gen-4B"),
 }
-DEFAULT = ",".join(n for n in DETECTORS if n not in GGUF)  # GGUFs: --detectors
+DEFAULT = ",".join(n for n in DETECTORS if n not in GGUF and DETECTORS[n][0] not in ("llm", "kev"))  # GGUFs: --detectors
 GLIGUARD_TOXICITY = ["violence_and_weapons", "non_violent_crime", "sexual_content", "hate_and_discrimination",
                      "self_harm_and_suicide", "pii_exposure", "misinformation", "copyright_violation", "child_safety",
                      "political_manipulation", "unethical_conduct", "regulated_advice", "privacy_violation", "other"]
@@ -313,6 +321,14 @@ class LlamaServerGuard:
 
 def make(name):
     kind, repo, _ = DETECTORS[name]
+    if kind == "llm":
+        from llm_guards import LLMGuard
+
+        return LLMGuard(name, default_policy="harm")
+    if kind == "kev":
+        from llm_guards import KevGuard
+
+        return KevGuard(name, "harm")
     if kind == "gguf":
         return LlamaServerGuard(repo, name)
     if kind == "gliner2":

@@ -114,6 +114,45 @@ llama.cpp's tokenizer does not run the normalizer (decoding text smuggled in Uni
 - **The threshold is 0.65**, the original's dev threshold rounded up. The Q8_0's own is 0.635; both give the same verdicts here.
 - Security FPR is 9% here against 6% in the run above: keepmum's `doctor.py`, which now names the model, is one more holdout document flagged. The Q8_0 file is 164 MB, and the conversion is reproducible byte for byte.
 
+## Newer guards and decision models (Nov 13, 2026)
+
+*Nov 13, 2026.* Five newer Apache-2.0 models (the same ones as HARM.md's Nov 13 section), on this set and on real coding-agent output ([`guard-public-20261113-035626.md`](guard-public-20261113-035626.md)). Harness: [`../llm_guards.py`](../llm_guards.py).
+
+- **HaloGuard 2.0 0.8B and 1.0 4B**: prompt guards; the 2.0 card says its injection and jailbreak detection grew several times over. Scored as P(unsafe) on the whole tool result, in 8,192-token windows.
+- **Shieldstral 1.0 3B**: asked an injection policy written for tool results (`llm_guards.POLICIES["injection"]`, the first and only wording tried): instructions planted for an AI agent are injections; documentation, CLAUDE.md, install guides and security writing are not.
+- **Kev 0.8B and 4B**: one yes/no question.
+
+On this benchmark ([`guard-20261113-034240.md`](guard-20261113-034240.md), [`guard-20261113-033313.md`](guard-20261113-033313.md), [`guard-20261113-033431.md`](guard-20261113-033431.md); Horizon Small rerun alongside):
+
+| Detector | Holdout AUC | @dev threshold: recall / ordinary / security FPR | p50 / p95 per doc | Memory |
+| --- | --- | --- | --- | --- |
+| **Horizon-Labs Small** (keepmum's model) | **1.00** | **1.00** / 0.00 / 0.08 | **26** / 267 ms | 1.0 GB |
+| Shieldstral 3B | 0.98 | 0.81 / 0.00 / 0.25 | 211 / 1,990 ms | 4.5 GB |
+| HaloGuard 2.0 0.8B | 0.95 | 0.54 / 0.02 / 0.02 | 106 / 601 ms | 1.4 GB |
+| Kev 0.8B | 0.81 | 0.21 / 0.02 / 0.37 | 45 ms | 2.1 GB |
+| Kev 4B | 0.81 | 0.19 / 0.00 / 0.02 | 206 ms | 4.0 GB |
+| HaloGuard 1.0 4B | 0.76 | 0.42 / 0.05 / 0.27 | 402 / 2,443 ms | 5.4 GB |
+
+On public data, each at the threshold that flags 1% of one half of the SWE-chat and SWE-Hero tool output (the other half's rate is the first column):
+
+| Detector | Coding output flagged | AgentDojo | InjecAgent | LLMail | CodeIPI | prodnull | p50 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| keepmum (Horizon Small GGUF) | 0.6% | 64% | 66% | **96%** | **40%** | 35% | **5 ms** |
+| Shieldstral 3B | 0.9% | **87%** | **74%** | 32% | 9% | **45%** | 90 ms |
+| HaloGuard 2.0 0.8B | 0.4% | 12% | 63% | 2% | 17% | 9% | 63 ms |
+
+- **None of them replaces keepmum's model.** HaloGuard and Kev miss most injections that aren't blunt commands; HaloGuard 2.0 is a prompt guard, and on tool results it catches little beyond InjecAgent's.
+- **Shieldstral is the first model to beat keepmum's on any public source**, and by a wide margin on AgentDojo (87% against 64%), InjecAgent and prodnull. It misses most of what keepmum's catches best: LLMail's emails written to beat defences (32% against 96%) and CodeIPI's injections in code (9% against 40%). Its policy is a single first wording; a tuned one might do better.
+- **The two catch different things, so together they catch more.** Flagging a tool result when either model flags it, with each threshold set for half the false-alarm budget ([`../guard_either.py`](../guard_either.py)):
+
+| keepmum : Shieldstral share of the 1% | Coding output flagged | AgentDojo | InjecAgent | LLMail | CodeIPI | prodnull | Hand-written holdout: caught / ordinary / security |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| keepmum alone | 0.6% | 64% | 66% | 96% | 40% | 35% | 96% / 0% / 0% |
+| 0.5% : 0.5% | 0.6% | **90%** | 72% | 96% | 40% | 46% | 98% / 0% / 12% |
+| 0.7% : 0.3% | 0.7% | 89% | 72% | **97%** | 40% | **47%** | 98% / 0% / 8% |
+
+  At the same false alarms on coding-agent output, the pair catches 25 points more of AgentDojo, 6 more of InjecAgent and 12 more of prodnull, and no less of anything. The cost: 4.5 GB more memory while the check runs, Shieldstral's 90 ms (p50, 525 ms p95) on each tool result in block mode (none in warn mode, which checks after the request goes), and 8–12% of security writing flagged (keepmum's own docs and code, and articles that quote attacks), against none.
+
 ## Verdict
 
 *Nov 4, 2026:* superseded in part. Horizon-Labs Prompt Injection Guard Small (Apache-2.0) now beats Shield Small on this benchmark (above), so point 1's "the best Apache model misses six of ten" no longer holds. keepmum's injection check now uses it, as a GGUF in llama-server, and no longer offers Shield Small or asks users to confirm non-commercial use. Points 2 and 3 stand: the check is optional, off by default, and on top of the restore guards.
@@ -126,3 +165,5 @@ llama.cpp's tokenizer does not run the normalizer (decoding text smuggled in Uni
    - Ask ZeroLeaks about a licence for Shield Small. Its runtime (ONNX Runtime with int8 weights) fits keepmum without PyTorch.
    - Wolf Defender Small as a low-noise "possible injection" note on the dashboard, Apache-2.0, ONNX available. It rarely raises a false alarm, but it misses most attacks, and the UI must not suggest otherwise.
 4. **Re-run when new checkpoints land.** `guard.py` takes any Hugging Face sequence classifier. Patronus says a Wolf retrain is in progress, and Prompt Guard 2 needs only a login.
+
+*Nov 13, 2026:* keepmum's model stays (above). Shieldstral 3B is the first model to beat it on some public sources, and the two together catch more at the same false alarms on coding-agent output; it could become an optional second model for the injection check (4.5 GB, warn mode), at the cost of more false alarms on security writing.
