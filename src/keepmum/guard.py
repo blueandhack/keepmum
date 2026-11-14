@@ -42,43 +42,58 @@ from typing import NamedTuple
 from .detect.pfserve import data_dir
 from .llamacpp import INSTALL_HINT, Server, find_server
 
-# The GGUF keepmum runs, converted from Horizon-Labs' release by bench/horizon_gguf.py.
-REPO = "keepmum/prompt-injection-guard-small-gguf"
-REVISION = "84fe8a2992d10d7e8c5678565dc93b14d126dde2"
-SOURCE = "Horizon-Labs/prompt-injection-guard-small"  # what it was converted from
-SOURCE_REVISION = "9760ad5a613aa87b38c2e621189b9d06bfb6d12b"
-RELEASE = "v2.3"
+# The GGUF keepmum runs: keepmum's fine-tune of Horizon-Labs' release on coding-agent tool output
+# (bench/ft_data.py, bench/ft_train.py; bench/results/GUARD.md), converted by bench/horizon_gguf.py.
+REPO = "keepmum/prompt-injection-guard-small-ft-gguf"
+REVISION = "5f2c815c67019db09de67f196cf30c9a0f74df87"
+SOURCE = "Horizon-Labs/prompt-injection-guard-small"  # what it was fine-tuned from
+SOURCE_REVISION = "2efc2ed5abecd21eb45c2506d231a65d6e392b85"
+RELEASE = "v2.3-km1"
 LICENCE = "Apache-2.0"
-ATTRIBUTION = "Prompt Injection Guard Small v2.3 by Horizon Labs, Apache-2.0"
-GGUF = "prompt-injection-guard-small-v2.3.Q8_0.gguf"
+ATTRIBUTION = "Prompt Injection Guard Small v2.3 by Horizon Labs, fine-tuned by keepmum (v2.3-km1), Apache-2.0"
+GGUF = "prompt-injection-guard-small-v2.3-km1.Q8_0.gguf"
 # Path in the repo: (SHA-256, bytes), checked on download. LICENSE and NOTICE are Horizon Labs' own.
 FILES = {
-    GGUF: ("ebcbbd0918a676bf4ad11b62dd8b2258c13ee29cc9f018a802113355b58c74c3", 164_361_472),
+    GGUF: ("306b1bf5062ef25b0508c26bc3431318cd3d594f9c3c10b248c19a9e5e566926", 164_357_760),
     "LICENSE": ("cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30", 11_358),
     "NOTICE": ("5ffe2383027c7510933df2e7055440edde8c96b67b7a58fb477f9632c72b9c14", 1_566),
 }
-# What earlier keepmum versions downloaded: Shield Small (ZeroLeaks, CC BY-NC 4.0). Removed on setup.
-LEGACY = ("shield-small-s15e",)
+# What earlier keepmum versions downloaded: Shield Small (ZeroLeaks, CC BY-NC 4.0), then Horizon-Labs'
+# model unchanged (v2.3). Removed on setup; with the check on, keepmum downloads this one in their place.
+LEGACY = ("shield-small-s15e", "prompt-injection-guard-small-v2.3")
 MODES = ("off", "warn", "block", "local")  # local: local.py
-THRESHOLD = 0.8  # Medium
+THRESHOLD = 0.222  # Medium
+RANGE = (0.05, 0.45)  # a threshold one can set; the model's scores for injections mostly sit above 0.2
+# v2.3's levels, whose thresholds a config file may still hold: each means the level of the same name.
+PREVIOUS_LEVELS = {0.65: "high", 0.8: "medium", 0.9: "low", 0.98: "lowest"}
 
 
 class Level(NamedTuple):
     threshold: float  # the score at which a tool result flags
     short: float  # the same, for one under SHORT_CHARS
     caught: float  # bench/results/GUARD.md: of its 144 injected documents
-    ordinary: float  # of its 115 ordinary documents, flagged
-    security: float  # of its 101 security documents (writing and code that quotes attacks), flagged
+    ordinary: float  # of its 129 ordinary documents, flagged
+    security: float  # of its 151 security documents (writing and code that quotes attacks), flagged
     sessions: float  # bench/results/guard-public-*.md: of 2,000 tool results from real Claude Code and Codex sessions, flagged
 
 
 # Sensitivity levels for the app and `keepmum guard sensitivity injection`, measured on the GGUF in
-# keepmum's windows. GUARD.md's documents are all longer than SHORT_CHARS.
-LEVELS = {"high": Level(0.65, 0.99, 0.993, 0.017, 0.069, 0.031),
-          "medium": Level(0.8, 0.995, 0.972, 0.0, 0.05, 0.017),
-          "low": Level(0.9, 0.998, 0.938, 0.0, 0.04, 0.009),
-          "lowest": Level(0.98, 0.999, 0.882, 0.0, 0.01, 0.004)}
+# keepmum's windows. Each flags as many of the 2,000 session results as v2.3's level of the same name,
+# long and short apart (bench/guard_levels.py). GUARD.md's documents are all longer than SHORT_CHARS.
+LEVELS = {"high": Level(0.185, 0.185, 0.972, 0.023, 0.04, 0.026),
+          "medium": Level(0.222, 0.222, 0.972, 0.023, 0.033, 0.015),
+          "low": Level(0.241, 0.354, 0.972, 0.023, 0.033, 0.009),
+          "lowest": Level(0.298, 0.354, 0.972, 0.016, 0.026, 0.004)}
 SHORT_CHARS = 200  # a tool result shorter than this needs its level's `short` score to flag
+
+
+def from_previous(threshold: float) -> float:
+    """A threshold from a config file: one on v2.3's scale (0.5 or more) becomes this model's level of the
+    same name, or of the nearest v2.3 level for a custom value; any other is kept."""
+    if threshold < 0.5:
+        return threshold
+    nearest = min(PREVIOUS_LEVELS, key=lambda t: abs(t - threshold))
+    return LEVELS[PREVIOUS_LEVELS[nearest]].threshold
 
 
 def short_threshold(threshold: float) -> float:
@@ -94,8 +109,9 @@ BATCH = 1  # windows per request to llama-server: one at a time is the fastest h
 MIN_CHARS = 40  # shorter tool results ("ok", an exit code) carry no instructions worth scoring
 INFO = f"""The prompt-injection check uses Prompt Injection Guard Small (v2.3) by Horizon Labs,
 licensed {LICENCE}: https://huggingface.co/{SOURCE}
-keepmum downloads its own conversion, which runs in llama.cpp and which Horizon Labs does not
-endorse: {sum(size for _, size in FILES.values()) / 1e6:.0f} MB from huggingface.co/{REPO}, checked against pinned SHA-256s."""
+keepmum downloads its own fine-tune of it on coding-agent tool output ({RELEASE}), which runs in
+llama.cpp and which Horizon Labs does not endorse: {sum(size for _, size in FILES.values()) / 1e6:.0f} MB from
+huggingface.co/{REPO}, checked against pinned SHA-256s."""
 
 # The model's tokenizer normalizer (its tokenizer.json), which llama.cpp does not run: text smuggled
 # in Unicode tag characters or variation selectors decoded to ASCII, NFKC, then invisible and
@@ -125,6 +141,11 @@ def installed() -> bool:
     """Every pinned file is in place at its size."""
     d = model_dir()
     return all((d / p).is_file() and (d / p).stat().st_size == size for p, (_, size) in FILES.items())
+
+
+def outdated() -> bool:
+    """A model an earlier keepmum version downloaded is here, and this one is not: setup replaces it."""
+    return not installed() and any((data_dir() / "guard" / old).is_dir() for old in LEGACY)
 
 
 def _sha256(path: Path) -> str:

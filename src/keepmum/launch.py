@@ -96,6 +96,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     harm = Guard(lambda: observe.config.guard_harm, harm_model, threshold=harm_model.threshold, name="harm",
                  min_chars=8)
     harm_model.guard = harm
+    if mode == "serve" and cfg.guard_injection != "off":
+        _update_injection_model(audit)
     history = History()
     from .local import servers_for, skills_for
 
@@ -114,6 +116,31 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     proxy.destinations = cfg.destinations
     switch = ModelSwitch(pipeline, proxy._scan_lock)
     return proxy
+
+
+def _update_injection_model(audit) -> threading.Thread | None:
+    """The injection check is on and its model is from an earlier keepmum: download this one in the
+    background (pinned, SHA-256 checked, the earlier one removed), as `keepmum guard setup injection`
+    would. Until it is in place the check cannot score, as before setup; a failed download is retried
+    at the next start, and doctor says why."""
+    from . import guard
+
+    if not guard.outdated():
+        return None
+
+    def update() -> None:
+        try:
+            guard.download()
+        except Exception as e:  # offline, or a mismatch: the next start tries again
+            logging.getLogger("keepmum").warning("injection model update to %s failed: %s", guard.RELEASE, e)
+            return
+        audit.append("guard-model", action="updated", model=f"{guard.REPO}@{guard.REVISION}", licence=guard.LICENCE,
+                     by="keepmum serve")
+        logging.getLogger("keepmum").info("injection model updated to %s", guard.RELEASE)
+
+    t = threading.Thread(target=update, name="injection-model-update", daemon=True)
+    t.start()
+    return t
 
 
 def bypass_risks(cwd: Path, port: int | None = None) -> list[str]:

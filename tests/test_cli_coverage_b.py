@@ -207,10 +207,10 @@ def test_handback_says_when_it_cannot_write_the_setting(home, no_writes):
 def test_sensitivity_says_when_it_cannot_write_the_setting(home, no_writes):
     r = run("guard", "sensitivity", "harm", "low")
     assert r.exit_code == 1 and "keepmum guard sensitivity: disk full" in r.stderr
-    r = run("guard", "sensitivity", "injection", "0.9")
+    r = run("guard", "sensitivity", "injection", "0.3")
     assert r.exit_code == 1 and "keepmum guard sensitivity: disk full" in r.stderr
     cfg = load(home)
-    assert cfg.guard_harm_sensitivity == "medium" and cfg.guard_injection_threshold == 0.8
+    assert cfg.guard_harm_sensitivity == "medium" and cfg.guard_injection_threshold == 0.222
 
 
 def test_the_commands_check_needs_no_model_and_takes_no_local_mode(home):

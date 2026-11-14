@@ -184,10 +184,12 @@ def _guard_checks(r, cfg) -> None:
 
     gb = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True).stdout or 0) / 2**30
     if cfg.guard_injection != "off":
-        why = ("model not set up (`keepmum guard setup injection`)" if not guard.installed()
+        why = (f"model from an earlier keepmum; keepmum downloads {guard.RELEASE} when it starts "
+               "(or `keepmum guard setup injection`)" if guard.outdated()
+               else "model not set up (`keepmum guard setup injection`)" if not guard.installed()
                else "llama-server not found (brew install llama.cpp)" if find_server() is None else None)
         _check(r, FAIL if why else OK, f"injection check {cfg.guard_injection}: " + (why or
-               f"Prompt Injection Guard Small, Apache-2.0; {GUARD_MEMORY['injection']} while in use"))
+               f"Prompt Injection Guard Small {guard.RELEASE}, Apache-2.0; {GUARD_MEMORY['injection']} while in use"))
     if "local" in (cfg.guard_injection, cfg.guard_harm):
         from .local import kind, missing, models, servers_for
 

@@ -190,8 +190,9 @@ def test_the_oldest_flagged_text_is_forgotten_past_keep():
 
 
 def test_short_results_need_the_short_threshold():
-    g = guard.Guard("warn", Scored(0.9), threshold=0.8, min_chars=1, short_chars=guard.SHORT_CHARS)
-    assert g.threshold_for(10) == guard.LEVELS["medium"].short and g.threshold_for(guard.SHORT_CHARS) == 0.8
+    low = guard.LEVELS["low"]
+    g = guard.Guard("warn", Scored(0.3), threshold=low.threshold, min_chars=1, short_chars=guard.SHORT_CHARS)
+    assert g.threshold_for(10) == low.short and g.threshold_for(guard.SHORT_CHARS) == low.threshold
     assert g.check([("Read", "short text", True)]) == []
     assert len(g.check([("Read", "x" * guard.SHORT_CHARS, True)])) == 1
 
@@ -204,9 +205,9 @@ def test_a_text_flagged_under_a_lower_threshold_is_no_longer_a_hit():
 
 
 def test_short_threshold_never_falls_below_the_threshold():
-    assert guard.short_threshold(0.5) == guard.LEVELS["high"].short  # below High: High's
-    assert guard.short_threshold(0.9) == guard.LEVELS["low"].short
-    assert guard.short_threshold(0.9995) == 0.9995
+    assert guard.short_threshold(0.1) == guard.LEVELS["high"].short  # below High: High's
+    assert guard.short_threshold(0.25) == guard.LEVELS["low"].short
+    assert guard.short_threshold(0.44) == 0.44
 
 
 def test_unknown_modes_are_off():

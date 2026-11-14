@@ -26,6 +26,7 @@ llama-server exactly as keepmum runs it, is also reported at its sensitivity lev
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import random
 import statistics
@@ -266,23 +267,24 @@ class KeepmumDetector:
 
     device = "metal"
 
-    def __init__(self):
+    def __init__(self, model: Path | None = None):
         sys.path.insert(0, str(ROOT / "src"))
         from keepmum import guard
 
-        self.model = guard.InjectionModel()
+        self.model = guard.InjectionModel(model)
 
     def score(self, text: str) -> tuple[float, int]:
         return self.model.score(text), 0
 
 
 def worker(name: str, device: str, out: Path) -> None:
-    import os
     import resource
 
     os.environ["HF_HUB_OFFLINE"] = "1"
     t0 = time.perf_counter()
-    det = KeepmumDetector() if name == "keepmum" else make(name, device)
+    # keepmum-ft: a candidate GGUF (KEEPMUM_GGUF) in keepmum's runtime, before it is pinned
+    det = (KeepmumDetector() if name == "keepmum" else
+           KeepmumDetector(Path(os.environ["KEEPMUM_GGUF"])) if name == "keepmum-ft" else make(name, device))
     load_s = time.perf_counter() - t0
     det.score("warm up the kernels with a short sentence")
     scores = {}

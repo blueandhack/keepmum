@@ -187,13 +187,13 @@ Personal data is off by default: only secrets and your own rules are masked unti
 ### Optional checks: prompt injection and harmful requests
 
 ```sh
-keepmum guard setup injection        # downloads Prompt Injection Guard Small (164 MB)
+keepmum guard setup injection        # downloads Prompt Injection Guard Small, keepmum's fine-tune (164 MB)
 keepmum guard setup harm             # downloads Content Safety Guard Small (164 MB); --model 0.6b or 4b for Qwen3Guard (805 MB, 4.7 GB)
 keepmum guard injection warn         # check what tools return; log a possible injection and send the request
 keepmum guard harm block             # check what you type; refuse a request the model flags
 keepmum guard harm warn --model 4b   # switch the harm check to Qwen3Guard 4B, the most accurate
 keepmum guard commands block         # check the shell commands in the model's replies; no download
-keepmum guard sensitivity injection low          # fewer false alarms: high, medium (0.8, the default), low, lowest, or a number
+keepmum guard sensitivity injection low          # fewer false alarms: high, medium (0.222, the default), low, lowest, or a number
 keepmum guard sensitivity harm low               # the harm check: high, medium (the default), low or lowest
 keepmum guard local pull                             # downloads keepmum's pick to Ollama and uses it for local mode
 keepmum guard local picks                            # the tested models, with their download and memory
@@ -261,16 +261,16 @@ keepmum asks for a summary or rewrite with thinking off (`reasoning_effort: "non
 
 **Warn** sends the request at once and runs the check afterwards, so it adds no delay. A hit is logged, counted in the stats feed and audited once, with the check, the tool (for injection), the score, the length and, for harm, the model's categories (Violent, Jailbreak, …), never the text. With `[log] context` on, the Mac app's Logs page also shows, in memory only, what was flagged and what the user had typed, every masked value in them shown as its type. **Block** runs the check first. The agent gets an error that names the tool or the categories, and every retry that still carries the flagged text is refused too: rewind or `/clear` to drop it. If a check fails, block mode refuses the request and warn mode sends it.
 
-**Sensitivity.** The injection check flags a tool result scoring 0.8 or more, and one under 200 characters only at 0.995 or more: in real coding-agent sessions, short results (a grep line, an error, the agent's own notices) raised most of the false alarms, and few attacks are that short. If it flags too much, typically when you work on security code or read pages written for agents, raise the threshold (`keepmum guard sensitivity injection low|lowest|<number>`, or Settings › Checks › Sensitivity). Two benchmarks: keepmum's test set (`bench/results/GUARD.md`: 144 injected, 115 ordinary and 101 security documents), and 2,000 tool results from real Claude Code and Codex sessions in [SWE-chat](https://huggingface.co/datasets/SALT-NLP/SWE-chat) with attacks from AgentDojo and four other public sets (`bench/results/guard-public-*.md`):
+**Sensitivity.** The injection check flags a tool result scoring 0.222 or more (Medium). At Low and Lowest, one under 200 characters needs 0.354: short results (a grep line, an error, the agent's own notices) raise most false alarms in real sessions, and few attacks are that short. If it flags too much, typically when you work on security code or read pages written for agents, raise the threshold (`keepmum guard sensitivity injection low|lowest|<number>`, 0.05–0.45, or Settings › Checks › Sensitivity). Each level flags as many real tool results as the same level did with the unmodified model, and a threshold saved for that model (0.65–0.98) becomes the level of the same name. Two benchmarks: keepmum's test set (`bench/results/GUARD.md`: 144 injected, 129 ordinary and 151 security documents), and 2,000 tool results from real Claude Code and Codex sessions in [SWE-chat](https://huggingface.co/datasets/SALT-NLP/SWE-chat) with attacks from AgentDojo and four other public sets (`bench/results/guard-public-*.md`):
 
 | Level | Threshold (under 200 characters) | Injections caught | Ordinary documents flagged | Security documents flagged | Real tool results flagged | AgentDojo attacks caught |
 |---|---|---|---|---|---|---|
-| High | 0.65 (0.99) | 99% | 2% | 7% | 3.1% | 89% |
-| Medium (default) | 0.80 (0.995) | 97% | 0% | 5% | 1.7% | 85% |
-| Low | 0.90 (0.998) | 94% | 0% | 4% | 0.9% | 78% |
-| Lowest | 0.98 (0.999) | 88% | 0% | 1% | 0.4% | 64% |
+| High | 0.185 | 97% | 2% | 4% | 2.6% | 92% |
+| Medium (default) | 0.222 | 97% | 2% | 3% | 1.5% | 91% |
+| Low | 0.241 (0.354) | 97% | 2% | 3% | 0.9% | 91% |
+| Lowest | 0.298 (0.354) | 97% | 2% | 3% | 0.4% | 91% |
 
-No level catches every attack: on the public sets, half or more of those hidden in code files and repository docs get through even at High. The check is a warning, not a guarantee.
+AgentDojo is counted on its travel and workspace suites, which the model was not trained on. No level catches every attack: on the public sets, about half of those hidden in code files and repository docs get through. The check is a warning, not a guarantee.
 
 The harm check has the same four levels (`keepmum guard sensitivity harm …`, `[guard] harm_sensitivity`), with Medium as its default. Its models score on different scales, so it takes a level, not a number: each level flags about the same share of safe prompts on every model, and carries over when you change the model. On keepmum's harm test set (`bench/results/HARM.md`: 862 harmful and 994 safe prompts, 44 of them coding prompts that only sound harmful), harmful prompts caught / safe prompts flagged:
 
@@ -287,7 +287,7 @@ A text flagged under a lower threshold stops counting once its score is under th
 
 | Check | Model | Licence | Benchmark | Memory while in use | Time |
 | --- | --- | --- | --- | --- | --- |
-| injection | [Prompt Injection Guard Small](https://huggingface.co/Horizon-Labs/prompt-injection-guard-small) v2.3 (Horizon Labs), as a [GGUF](https://huggingface.co/keepmum/prompt-injection-guard-small-gguf) in llama.cpp on Metal | Apache-2.0 | every injected document caught, 3% of ordinary ones flagged ([GUARD.md](bench/results/GUARD.md)) | 0.4 GB | about 40 ms for a 6,000-character tool result |
+| injection | [Prompt Injection Guard Small](https://huggingface.co/Horizon-Labs/prompt-injection-guard-small) v2.3 (Horizon Labs), fine-tuned by keepmum on coding-agent tool output (v2.3-km1), as a [GGUF](https://huggingface.co/keepmum/prompt-injection-guard-small-ft-gguf) in llama.cpp on Metal | Apache-2.0 | at Medium, against the unmodified model: 91% of AgentDojo attacks caught (81%), 50% of prodnull's (25%), InjecAgent 75% (same), CodeIPI 40% (49%) ([GUARD.md](bench/results/GUARD.md)) | 0.4 GB | about 40 ms for a 6,000-character tool result |
 | harm | Small (default): [Content Safety Guard Small](https://huggingface.co/Horizon-Labs/content-safety-guard-small) v1.2 (Horizon Labs), as a [GGUF](https://huggingface.co/keepmum/content-safety-guard-small-gguf); or [Qwen3Guard-Gen](https://huggingface.co/Qwen/Qwen3Guard-Gen-0.6B) 0.6B or 4B, Q8 GGUFs; in llama.cpp on Metal | Apache-2.0 | Small: 66% of harmful prompts caught, 5% of safe ones flagged; 0.6B: 76% and 4%; 4B: 82% and 4%; of 44 ordinary coding prompts, Small flags 3, the 0.6B 1, the 4B none ([HARM.md](bench/results/HARM.md)) | 0.4 GB (Small), 1.1 GB (0.6B), 4.9 GB (4B) | 8 ms (Small), 30 ms (0.6B), 150 ms (4B) |
 
 The models load on the first check and unload after 10 minutes unused, so they take memory only while agents are working; the privacy filter's 1.7 GB comes first. With both checks on and the Small harm model, keepmum needs about 2.5 GB while busy (3.2 GB with the 0.6B); `keepmum doctor` warns if the 4B is too much for the Mac.
@@ -440,7 +440,7 @@ local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
 | The Logs page: per masked value its type, rule and length, and the first and last character of values of 8 or more characters | Process memory only (the last 2,000), cleared on exit; `[log] previews = false` keeps types and rules only |
 | The Logs page's context: up to 80 characters each side of a masked value, with every masked value and placeholder in it shown as its type (`‹SECRET›`), as the provider received it | Process memory only, with the findings; `[log] context = false` turns it off and forgets what was kept |
 
-keepmum makes no network calls except the request it forwards, `keepmum setup`'s one model download, and `keepmum guard setup`'s downloads if you run them. There is no telemetry. The Mac app can check for updates; it asks on its first launch and checks only if you say yes (Settings › General › Updates). Each check downloads the update feed from keepmum.app (served through Cloudflare), which sees your IP address and keepmum's version; checks and updates are counted per day and version, and no addresses are kept (`worker/`). Settings › General › Updates › Count this Mac turns the counting off; [keepmum.app/privacy](https://keepmum.app/privacy) has the details.
+keepmum makes no network calls except the request it forwards, `keepmum setup`'s one model download, and `keepmum guard setup`'s downloads if you run them. One more: with the injection check on and its model from an earlier keepmum version, the background service downloads the current one (164 MB, from the same Hugging Face org, pinned and checked) when it starts. There is no telemetry. The Mac app can check for updates; it asks on its first launch and checks only if you say yes (Settings › General › Updates). Each check downloads the update feed from keepmum.app (served through Cloudflare), which sees your IP address and keepmum's version; checks and updates are counted per day and version, and no addresses are kept (`worker/`). Settings › General › Updates › Count this Mac turns the counting off; [keepmum.app/privacy](https://keepmum.app/privacy) has the details.
 
 ## Mac app
 

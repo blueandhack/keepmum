@@ -541,7 +541,7 @@ def _guard_status() -> dict:
     cfg = _config()
     server = str(find_server() or "") or None  # both checks run in llama-server
     return {
-        "injection": {"mode": cfg.guard_injection, "installed": guard.installed(),
+        "injection": {"mode": cfg.guard_injection, "installed": guard.installed(), "outdated": guard.outdated(),
                       "server": server, "model": f"{guard.REPO}@{guard.REVISION}", "source": f"{guard.SOURCE}@{guard.RELEASE}",
                       "licence": guard.LICENCE, "threshold": cfg.guard_injection_threshold, "default_threshold": guard.THRESHOLD,
                       "short_chars": guard.SHORT_CHARS, "short_threshold": guard.short_threshold(cfg.guard_injection_threshold),
@@ -568,6 +568,8 @@ def _missing(check: str, size: str | None = None) -> str | None:
 
     if check == "commands":  # rules, no model
         return None
+    if check == "injection" and guard.outdated():
+        return f"its model is from an earlier keepmum: run `keepmum guard setup injection` for {guard.RELEASE}"
     if check == "injection" and not guard.installed():
         return "its model is not set up: run `keepmum guard setup injection` first"
     if check == "harm" and not harm.installed(size):
@@ -595,7 +597,8 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
     if inj["installed"]:
         typer.echo(f"  model: {guard.ATTRIBUTION}")
     else:
-        typer.echo("  model: not set up (`keepmum guard setup injection`)")
+        typer.echo(f"  model: an earlier one; `keepmum guard setup injection` replaces it with {guard.RELEASE}"
+                   if inj.get("outdated") else "  model: not set up (`keepmum guard setup injection`)")
     typer.echo(f"harm: {_MODE_TEXT[hm['mode']]}")
     have = [size for size, ok in hm["installed"].items() if ok]
     typer.echo(f"  model: {harm.NAMES[hm['model']]} (Apache-2.0)"
@@ -1703,7 +1706,7 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
 
 @guard_app.command("sensitivity")
 def guard_sensitivity(check: str = typer.Argument(..., help="injection or harm"),
-                      value: str = typer.Argument(None, help="high, medium, low, lowest or default; for injection also a number 0.5-0.999.")) -> None:
+                      value: str = typer.Argument(None, help="high, medium, low, lowest or default; for injection also a number 0.05-0.45.")) -> None:
     """How readily a check flags. Lower: fewer false alarms, and fewer real ones caught. No value: show the levels."""
     from . import guard, harm
     from .config import ConfigError
@@ -1755,8 +1758,9 @@ def guard_sensitivity(check: str = typer.Argument(..., help="injection or harm")
         except ValueError:
             typer.echo(f"keepmum guard sensitivity: {value!r}: use {', '.join(guard.LEVELS)}, default, or a number", err=True)
             raise typer.Exit(2)
-    if not 0.5 <= number <= 0.999:
-        typer.echo(f"keepmum guard sensitivity: the threshold must be 0.5-0.999 ({guard.THRESHOLD} is the default)", err=True)
+    if not guard.RANGE[0] <= number <= guard.RANGE[1]:
+        typer.echo(f"keepmum guard sensitivity: the threshold must be {guard.RANGE[0]}-{guard.RANGE[1]} "
+                   f"({guard.THRESHOLD} is the default)", err=True)
         raise typer.Exit(2)
     try:
         _update_config(cfg.path, "guard", "injection_threshold", None if number == guard.THRESHOLD else number,

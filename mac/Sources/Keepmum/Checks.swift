@@ -48,7 +48,9 @@ struct ChecksSection: View {
 
     @ViewBuilder private func injection(_ c: Engine.Checks.Injection) -> some View {
         FormRow(title: "Prompt injection",
-                detail: c.installed ? injectionDetail(c.mode) : "Checks what tools return (web pages, files, MCP replies) for instructions planted for the agent",
+                detail: c.installed ? injectionDetail(c.mode) :
+                    c.outdated == true ? "An updated model is ready: keepmum downloads it when its service starts, or download it now" :
+                    "Checks what tools return (web pages, files, MCP replies) for instructions planted for the agent",
                 detailTone: c.mode == "off" ? Theme.textSecondary : Theme.text) {
             if c.installed {
                 modePicker(c.mode, options: modesWithLocal) { await engine.setCheck("injection", mode: $0) }
@@ -65,7 +67,7 @@ struct ChecksSection: View {
             sensitivity(c, levels: levels, threshold: threshold)
         }
         if c.installed {
-            modelLine("Prompt Injection Guard Small by Horizon Labs · Apache-2.0 · 0.4 GB while in use", remove: "injection")
+            modelLine("Prompt Injection Guard Small by Horizon Labs, fine-tuned by keepmum · Apache-2.0 · 0.4 GB while in use", remove: "injection")
         }
     }
 
@@ -77,7 +79,7 @@ struct ChecksSection: View {
                                           threshold: Double) -> some View {
         let current = levels.first { abs($0.value.threshold - threshold) < 0.0005 }?.key
         let options = Self.levelOrder + (current == nil ? [("custom", "Custom")] : [])
-        let isDefault = abs(threshold - (c.defaultThreshold ?? 0.65)) < 0.0005
+        let isDefault = abs(threshold - (c.defaultThreshold ?? 0.222)) < 0.0005
         FormRow(title: "Sensitivity", detail: sensitivitySummary(c, levels: levels, current: current, threshold: threshold, isDefault: isDefault),
                 help: sensitivityDetail(c, levels: levels, current: current, threshold: threshold, isDefault: isDefault)) {
             modePicker(current ?? "custom", options: options) { level in
@@ -110,7 +112,7 @@ struct ChecksSection: View {
         let catches = "On keepmum's test set: catches \(pct(l.caught)) of injections, and flags \(pct(l.ordinary)) of ordinary pages and \(pct(l.security)) of security code and writing."
         let sessions = l.sessions.map { " On real Claude Code and Codex sessions: flags \(pct($0)) of tool results." } ?? ""
         let advice = current == "high" ? " More false alarms than Medium, for a few more catches." :
-                     current == "lowest" ? " Misses more injections: subtle ones score lower." : ""
+                     current == "lowest" ? " The fewest false alarms; may miss a few subtle injections." : ""
         return "\(which): flags a tool result scoring \(score) or more\(short). \(catches)\(sessions)\(advice)"
     }
 

@@ -239,6 +239,55 @@ def test_setup_removes_shield_small_from_earlier_versions(tmp_path, monkeypatch)
     assert (guard.model_dir() / "LICENSE").read_bytes() == b"ok" and not old.exists()
 
 
+def test_the_unchanged_horizon_model_is_outdated_and_setup_replaces_it(tmp_path, monkeypatch):
+    import hashlib
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    old = guard.model_dir().parent / "prompt-injection-guard-small-v2.3"
+    old.mkdir(parents=True)
+    (old / "prompt-injection-guard-small-v2.3.Q8_0.gguf").write_bytes(b"old")
+    assert guard.outdated() and not guard.installed()
+    from keepmum import cli
+
+    assert "earlier keepmum" in cli._missing("injection") and guard.RELEASE in cli._missing("injection")
+    monkeypatch.setattr(guard, "FILES", {"LICENSE": (hashlib.sha256(b"ok").hexdigest(), 2)})
+    monkeypatch.setattr(httpx, "stream", lambda method, url, **kw: httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"ok"))).stream(method, url))
+    guard.download()
+    assert not old.exists() and guard.installed() and not guard.outdated()
+
+
+def test_the_service_updates_an_outdated_model_in_the_background(tmp_path, monkeypatch):
+    from keepmum import launch
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    class Audit:
+        def __init__(self):
+            self.events = []
+
+        def append(self, event, **fields):
+            self.events.append((event, fields))
+
+    audit = Audit()
+    assert launch._update_injection_model(audit) is None  # nothing earlier: nothing to update
+    (guard.model_dir().parent / "prompt-injection-guard-small-v2.3").mkdir(parents=True)
+    fail = [True]
+
+    def download(progress=None):
+        if fail[0]:
+            raise guard.GuardError("offline")
+        return guard.model_dir()
+
+    monkeypatch.setattr(guard, "download", download)
+    launch._update_injection_model(audit).join(5)
+    assert audit.events == []  # failed: tried again at the next start
+    fail[0] = False
+    launch._update_injection_model(audit).join(5)
+    assert audit.events[0][0] == "guard-model" and audit.events[0][1]["action"] == "updated"
+    assert audit.events[0][1]["model"] == f"{guard.REPO}@{guard.REVISION}"
+
+
 def test_remove_also_deletes_shield_small(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     old = guard.model_dir().parent / "shield-small-s15e"
@@ -680,7 +729,7 @@ def test_status_json_has_the_checks():
 
     out = json.loads(CliRunner().invoke(app, ["status", "--json"]).stdout)
     assert out["guard"]["injection"]["mode"] == "off" and out["guard"]["harm"]["model"] == "small"
-    assert "server" in out["guard"]["injection"] and out["guard"]["injection"]["model"].startswith("keepmum/prompt-injection-guard-small-gguf@")
+    assert "server" in out["guard"]["injection"] and out["guard"]["injection"]["model"].startswith("keepmum/prompt-injection-guard-small-ft-gguf@")
     assert set(out["guard"]["harm"]["installed"]) == {"small", "0.6b", "4b"}
 
 
@@ -707,26 +756,38 @@ def test_a_raised_threshold_flags_less_and_drops_what_it_no_longer_would():
 
 
 def test_short_results_need_a_higher_score():
-    g = guard.Guard("block", Scores(), name="injection", short_chars=guard.SHORT_CHARS)  # as launch.py makes it
-    short, long = "short, score 0.99 " + "x" * 40, "long, score 0.99 " + "x" * 200
-    assert len(short) < guard.SHORT_CHARS <= len(long)
+    low = guard.LEVELS["low"]  # Low and Lowest hold short results to a higher score; High and Medium do not
+    g = guard.Guard("block", Scores(), threshold=low.threshold, name="injection", short_chars=guard.SHORT_CHARS)
+    short, long = "short, score 0.3 " + "x" * 40, "long, score 0.3 " + "x" * 200
+    assert len(short) < guard.SHORT_CHARS <= len(long) and low.threshold < 0.3 < low.short
     assert [h["source"] for h in g.check([("Bash", short, True), ("WebFetch", long, True)])] == ["WebFetch"]
-    assert g.check([("Grep", "short, score 0.996 " + "x" * 40, True)])[0]["source"] == "Grep"
-    g.threshold = guard.LEVELS["high"].threshold  # High's short bar is 0.99
-    assert g.check([("Bash", "again, score 0.99 " + "x" * 40, True)])[0]["chars"] < guard.SHORT_CHARS
-    g.threshold = guard.LEVELS["low"].threshold  # flagged earlier at High, but not at Low's 0.998
-    assert [h["source"] for h in g.check([("Bash", "again, score 0.99 " + "x" * 40, False)])] == []
+    assert g.check([("Grep", "short, score 0.36 " + "x" * 40, True)])[0]["source"] == "Grep"
+    g.threshold = guard.LEVELS["high"].threshold  # High's short bar is its threshold
+    assert g.check([("Bash", "again, score 0.3 " + "x" * 40, True)])[0]["chars"] < guard.SHORT_CHARS
+    g.threshold = low.threshold  # flagged earlier at High, but not at Low's short bar
+    assert [h["source"] for h in g.check([("Bash", "again, score 0.3 " + "x" * 40, False)])] == []
     assert guard.Guard("block", Scores(), name="harm").check([("Bash", short, True)])  # other checks: one threshold
 
 
 def test_the_short_threshold_follows_the_level():
     assert {k: guard.short_threshold(v.threshold) for k, v in guard.LEVELS.items()} == \
         {k: v.short for k, v in guard.LEVELS.items()}
-    assert guard.short_threshold(0.5) == guard.LEVELS["high"].short  # custom numbers: the level at or below
-    assert guard.short_threshold(0.85) == guard.LEVELS["medium"].short
-    assert guard.short_threshold(0.9995) == 0.9995  # never below the threshold itself
+    assert guard.short_threshold(0.1) == guard.LEVELS["high"].short  # custom numbers: the level at or below
+    assert guard.short_threshold(0.23) == 0.23  # Medium's short bar is its threshold, so the number itself
+    assert guard.short_threshold(0.25) == guard.LEVELS["low"].short
+    assert guard.short_threshold(0.44) == 0.44  # never below the threshold itself
     assert guard.LEVELS["medium"].threshold == guard.THRESHOLD
-    assert all(v.short > v.threshold for v in guard.LEVELS.values())
+    assert all(v.short >= v.threshold for v in guard.LEVELS.values()) and guard.LEVELS["low"].short > guard.LEVELS["low"].threshold
+    assert all(guard.RANGE[0] <= v.threshold <= v.short <= guard.RANGE[1] for v in guard.LEVELS.values())
+
+
+def test_an_earlier_models_threshold_becomes_its_level_on_this_one():
+    for old, level in guard.PREVIOUS_LEVELS.items():
+        assert guard.from_previous(old) == guard.LEVELS[level].threshold
+    assert guard.from_previous(0.87) == guard.LEVELS["low"].threshold  # custom: the nearest earlier level
+    assert guard.from_previous(0.999) == guard.LEVELS["lowest"].threshold
+    assert guard.from_previous(0.3) == 0.3  # this model's scale: kept
+    assert not set(guard.PREVIOUS_LEVELS) & {v.threshold for v in guard.LEVELS.values()}
 
 
 def test_the_threshold_is_read_checked_written_and_audited(tmp_path, monkeypatch):
@@ -739,24 +800,26 @@ def test_the_threshold_is_read_checked_written_and_audited(tmp_path, monkeypatch
     monkeypatch.setenv("HOME", str(tmp_path))
     path = tmp_path / ".config" / "keepmum" / "config.toml"
     path.parent.mkdir(parents=True)
-    path.write_text("[guard]\ninjection_threshold = 0.9\n")
-    assert load(path).guard_injection_threshold == 0.9
-    for bad in ("0.3", "1", "true", '"high"'):
+    path.write_text("[guard]\ninjection_threshold = 0.3\n")
+    assert load(path).guard_injection_threshold == 0.3
+    path.write_text("[guard]\ninjection_threshold = 0.9\n")  # an earlier model's Low
+    assert load(path).guard_injection_threshold == guard.LEVELS["low"].threshold
+    for bad in ("0.01", "0.47", "1", "true", '"high"'):
         path.write_text(f"[guard]\ninjection_threshold = {bad}\n")
         with pytest.raises(ConfigError):
             load(path)
     path.write_text("")
     cli = CliRunner()
     assert cli.invoke(app, ["guard", "sensitivity", "injection", "low"]).exit_code == 0
-    assert load(path).guard_injection_threshold == 0.9 and "injection_threshold = 0.9" in path.read_text()
-    assert cli.invoke(app, ["guard", "sensitivity", "injection", "0.875"]).exit_code == 0
-    assert load(path).guard_injection_threshold == 0.875
+    assert load(path).guard_injection_threshold == 0.241 and "injection_threshold = 0.241" in path.read_text()
+    assert cli.invoke(app, ["guard", "sensitivity", "injection", "0.275"]).exit_code == 0
+    assert load(path).guard_injection_threshold == 0.275
     assert cli.invoke(app, ["guard", "sensitivity", "injection", "default"]).exit_code == 0
     assert "injection_threshold" not in path.read_text() and load(path).guard_injection_threshold == guard.THRESHOLD
-    for bad in (["injection", "0.2"], ["injection", "loud"], ["harm", "0.9"]):
+    for bad in (["injection", "0.02"], ["injection", "0.6"], ["injection", "loud"], ["harm", "0.9"]):
         assert cli.invoke(app, ["guard", "sensitivity", *bad]).exit_code == 2, bad
     shown = cli.invoke(app, ["guard", "sensitivity", "injection"]).stdout
-    assert "0.8 (medium), 0.995 under 200 characters" in shown and "lowest" in shown
+    assert "0.222 (medium), 0.222 under 200 characters" in shown and "lowest" in shown
     up, down = config_changes({"injection_threshold": 0.65}, {"injection_threshold": 0.9}), \
         config_changes({"injection_threshold": 0.9}, {"injection_threshold": 0.8})
     assert up[0]["weakens"] is True and down[0]["weakens"] is False

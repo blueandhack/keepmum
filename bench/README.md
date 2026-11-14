@@ -61,6 +61,12 @@ uv run --group torch --group onnx python bench/shield_parity.py SRC OUT/shield-s
 uv run --no-project --python 3.12 --with "numpy~=2.2.6" --with safetensors --with "torch==2.11.0" \
     --with "transformers==4.57.6" --with "sentencepiece<0.3" --with "protobuf<5" python bench/horizon_gguf.py SRC MMBERT OUT --type q8_0
 uv run --group torch python bench/horizon_parity.py SRC OUT/prompt-injection-guard-small-v2.3.F32.gguf OUT/prompt-injection-guard-small-v2.3.Q8_0.gguf
+# Fine-tune it on coding-agent tool output (the injection check's model since v2.3-km1), on this Mac's GPU
+uv run --group torch python bench/ft_data.py                 # bench/data/ft/{train,val}.jsonl, kept out of git
+uv run --group torch python bench/ft_train.py                # bench/data/ft/model-<stamp>/, about 45 minutes
+# ... then convert it (horizon_gguf.py --model injection-ft) and compare on held-out data only:
+uv run --group torch python bench/guard_public.py run --heldout --detectors horizon-small-ft
+uv run --group torch python bench/guard_levels.py OLD.json NEW.json   # sensitivity levels that flag as the old ones did
 ```
 
 - The models must be in the Hugging Face cache first (`snapshot_download` of each repo in `DETECTORS`).

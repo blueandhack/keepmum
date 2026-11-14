@@ -36,8 +36,8 @@
     injection = "off"      # tool results, for planted instructions (guard.py): "warn" logs and sends; "block" refuses
     harm = "off"           # what the user typed, for harmful requests (harm.py): "warn" or "block"
     harm_model = "small"   # "small" (Content Safety Guard, 0.4 GB while in use), or Qwen3Guard "0.6b" (1.1 GB) or "4b" (4.9 GB)
-    injection_threshold = 0.8  # the injection check's score to flag (0.5-0.999): higher, fewer false alarms and fewer catches
-                           # (a result under 200 characters needs more: 0.995 at 0.8)
+    injection_threshold = 0.222  # the injection check's score to flag (0.05-0.45): higher, fewer false alarms and fewer catches
+                           # (`keepmum guard sensitivity injection` lists the levels; 0.5 or more is read as an older model's level)
     harm_sensitivity = "medium"  # "high", "medium", "low" or "lowest": lower, fewer false alarms and fewer catches
     commands = "off"       # shell commands in the model's replies, against a few rules (commands.py): "warn" or "block"
     # injection or harm = "local": a flagged request is answered by a model on this Mac (local.py),
@@ -144,7 +144,7 @@ class Config:
     log_context: bool = True
     audit_keep_days: int = 90
     guard_injection: str = "off"
-    guard_injection_threshold: float = 0.8
+    guard_injection_threshold: float = 0.222  # guard.THRESHOLD
     guard_harm: str = "off"
     guard_harm_sensitivity: str = "medium"
     guard_harm_model: str = "small"
@@ -290,9 +290,14 @@ def load(path: Path | None = None) -> Config:
     for key, value in (("injection", cfg.guard_injection), ("harm", cfg.guard_harm)):
         if value not in ("off", "warn", "block", "local"):
             raise ConfigError(f"{path}: guard.{key} must be \"off\", \"warn\", \"block\" or \"local\"")
+    from .guard import RANGE, THRESHOLD, from_previous
+
     cfg.guard_injection_threshold = guard.get("injection_threshold", cfg.guard_injection_threshold)
-    if not 0.5 <= cfg.guard_injection_threshold <= 0.999:
-        raise ConfigError(f"{path}: guard.injection_threshold must be 0.5-0.999 (0.8 is the default)")
+    if not RANGE[0] <= cfg.guard_injection_threshold <= 0.999:
+        raise ConfigError(f"{path}: guard.injection_threshold must be {RANGE[0]}-{RANGE[1]} ({THRESHOLD} is the default)")
+    cfg.guard_injection_threshold = from_previous(cfg.guard_injection_threshold)  # an older model's scale
+    if cfg.guard_injection_threshold > RANGE[1]:
+        raise ConfigError(f"{path}: guard.injection_threshold must be {RANGE[0]}-{RANGE[1]} ({THRESHOLD} is the default)")
     cfg.guard_harm_sensitivity = guard.get("harm_sensitivity", cfg.guard_harm_sensitivity)
     if cfg.guard_harm_sensitivity not in ("high", "medium", "low", "lowest"):
         raise ConfigError(f"{path}: guard.harm_sensitivity must be \"high\", \"medium\", \"low\" or \"lowest\"")

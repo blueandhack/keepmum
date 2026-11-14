@@ -82,6 +82,9 @@ final class Engine {
         struct Injection: Decodable, Equatable {
             var mode: String
             var installed: Bool
+            /// A model from an earlier keepmum is here instead (nil from older engines): the service
+            /// downloads the current one when it starts.
+            var outdated: Bool? = nil
             /// llama-server's path (both checks run in it); nil when it is not found.
             var server: String?
             var licence: String
@@ -1149,11 +1152,11 @@ final class Engine {
                           destinations: ["gitlab-token": ["gitlab.corp.example"]], previews: true, context: true, keepDays: 90,
                           guard: .init(injection: .init(mode: localOff ? "warn" : "local", installed: true,
                                                         server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0",
-                                                        threshold: 0.8, defaultThreshold: 0.8, shortChars: 200, shortThreshold: 0.995,
-                                                        levels: ["high": .init(threshold: 0.65, caught: 0.993, ordinary: 0.017, security: 0.069, short: 0.99, sessions: 0.031),
-                                                                 "medium": .init(threshold: 0.8, caught: 0.972, ordinary: 0, security: 0.05, short: 0.995, sessions: 0.017),
-                                                                 "low": .init(threshold: 0.9, caught: 0.938, ordinary: 0, security: 0.04, short: 0.998, sessions: 0.009),
-                                                                 "lowest": .init(threshold: 0.98, caught: 0.882, ordinary: 0, security: 0.01, short: 0.999, sessions: 0.004)]),
+                                                        threshold: 0.222, defaultThreshold: 0.222, shortChars: 200, shortThreshold: 0.222,
+                                                        levels: ["high": .init(threshold: 0.185, caught: 0.972, ordinary: 0.023, security: 0.04, short: 0.185, sessions: 0.026),
+                                                                 "medium": .init(threshold: 0.222, caught: 0.972, ordinary: 0.023, security: 0.033, short: 0.222, sessions: 0.015),
+                                                                 "low": .init(threshold: 0.241, caught: 0.972, ordinary: 0.023, security: 0.033, short: 0.354, sessions: 0.009),
+                                                                 "lowest": .init(threshold: 0.298, caught: 0.972, ordinary: 0.016, security: 0.026, short: 0.354, sessions: 0.004)]),
                                        harm: .init(mode: "block", model: "small", installed: ["small": true, "0.6b": false, "4b": false],
                                                    server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0",
                                                    sensitivity: "medium",
