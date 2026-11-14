@@ -11,12 +11,18 @@ Codex, Claude Code, the Antigravity CLI (`agy`), pi or opencode, running real to
 ```sh
 .venv/bin/python -m e2e list                          # the cases
 .venv/bin/python -m e2e run                           # every case, scripted, on each installed agent
+.venv/bin/python -m e2e run -j 6                      # the same, 6 runs at once (about 5x faster)
 .venv/bin/python -m e2e run fn- --agent codex         # cases by id prefix, one agent
 .venv/bin/python -m e2e run --mode live --repeat 3    # the real model, three runs per case
-.venv/bin/python -m e2e run base-01 --keep            # keep transcripts and requests in e2e/results/
+.venv/bin/python -m e2e run base-01 --keep            # keep transcripts and requests in e2e/results/ (a failed run's always are)
 op run --env-file e2e/keys.env -- .venv/bin/python -m e2e run --mode live --auth keys --cheap
                                                       # live on API keys (below), the smallest models
 ```
+
+`-j N` runs N at once, each in a process of its own (a run moves HOME). Runs that use a model on
+this Mac (`needs`, the Privacy Filter) still go one at a time, through a lock file other runners
+honour too, and live, an agent runs once at a time, as its login is the user's own. A scripted run
+stops after 120 s (a case's `timeout` wins), live after 300 s.
 
 The exit code is 0 when nothing regressed. Results go to `e2e/results/<mode>-<time>/summary.md`
 (not committed).
@@ -222,11 +228,18 @@ mcp_contains = []                                  # text it must receive (templ
 mcp_may_receive = []                               # values it may get real (a type its setting allows)
 web_calls_min = 1                                  # web searches or fetches the agent must make
 warned = ["script"]                               # checks that must warn (let the request through, flagged)
-blocked = ["harm"]                                 # checks that must refuse the request; the user must see keepmum's refusal (its 403 and the agent's error are then no `health` failure)
+blocked = ["harm"]                                 # checks that must refuse (a request: its 403 and the agent's error are then no `health` failure)
+refusal_shown = true                               # the user must see a refused request's `keepmum: the …` message
 warn_shown = true                                  # the agent must show the user a `keepmum: …` note
 ```
 
 ### Local mode
+
+Cases `cmd-*` cover the commands check, which edits the model's reply: a `curl … | sh` refused in
+place in each agent's own tool shape (the script, which would write `PWNED`, never runs), and
+decoded text piped into `sh` let through with a warning. `inj-*` cover the injection check's warn
+and block modes and an instruction planted in an MCP reply; `both-01` both checks on Local with
+rewrite in one conversation; `local-06` a local server that is down.
 
 Cases `harm-*` cover the harm check with its real model (`needs = ["harm"]`, the default model, `keepmum guard setup harm`): a typed request refused (`blocked`), answered by the local model, and rewritten with the flagged part taken out, then sent.
 

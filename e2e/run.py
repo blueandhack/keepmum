@@ -26,6 +26,7 @@ PROVIDERS = {"anthropic": "https://api.anthropic.com", "openai": "https://api.op
 LOCAL_URL = os.environ.get("KEEPMUM_E2E_LOCAL_URL", "http://localhost:11434").rstrip("/")
 LOCAL_MODEL = os.environ.get("KEEPMUM_E2E_LOCAL_MODEL", "qwen3:0.6b")
 GUARD_DIR = Path(REAL_HOME) / ".local" / "share" / "keepmum" / "guard"
+SCRIPTED_TIMEOUT = 120  # seconds; a case's own `timeout` wins
 
 
 def _environment() -> None:
@@ -76,7 +77,10 @@ def missing_needs(case) -> str | None:
     return None
 
 
-def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str], keep: Path | None) -> dict:
+def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str], keep: Path | None,
+            keep_all: bool = True) -> dict:
+    """keep: where to write the run's transcripts and requests; with keep_all False, only a run that
+    failed is written (a failure that does not come back is otherwise lost)."""
     from keepmum import launch
     from keepmum.config import load
 
@@ -141,6 +145,8 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
     servers = [tap_server]
     out = scratch / "out"
     out.mkdir()
+    if mode == "scripted" and "timeout" not in case.raw:
+        case.timeout = SCRIPTED_TIMEOUT  # a scripted run takes seconds: a hang should not cost five minutes
     started = time.monotonic()
     os.environ["HOME"] = str(khome)  # keepmum's own: salt, config, audit log
     proxy = None
@@ -173,14 +179,20 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
             code = None
             stdout = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
             stderr = (e.stderr or b"").decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+        # Warn mode checks after the request was sent: let those finish before reading what was found.
+        deadline = time.monotonic() + 60
+        while proxy._background and time.monotonic() < deadline:
+            time.sleep(0.1)
         vault = proxy.redactor.vault
         masked = {ph: (ph.split("_")[1], value) for ph, value in vault._values.items()}
         events = list(proxy.stats.events)
         keepmum = {"unresolved": proxy.stats.unresolved,
                    "warned": sorted({h.get("check") for h in proxy.stats.snapshot()["guard"]["hits"]
                                      if h.get("action") == "warned"}),
+                   # Refused: blocked, or meant for a local model that did not answer (sent nowhere).
                    "blocked": sorted({h.get("check") for h in proxy.stats.snapshot()["guard"]["hits"]
-                                      if h.get("action") == "blocked"}),
+                                      if h.get("action") == "blocked"
+                                      or (h.get("action") == "local" and h.get("local_error"))}),
                    "errors": [{"path": e.get("path"), "status": e.get("status"), "outcome": e.get("outcome")}
                               for e in events if (e.get("status") or 0) >= 400],
                    # Hits local mode acted on: whether a local model answered, and what was handed back.
@@ -220,7 +232,7 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         "code_mode": next((s.get("code_mode") for s in (scripted.served if scripted else []) if "code_mode" in s), None),
         "usage": cost.of(provider).as_dict() if mode == "live" else None,
     }
-    if keep is not None:
+    if keep is not None and (keep_all or result["status"] in ("fail", "gap-passed")):
         d = keep / f"{case.id}.{agent.name}.{mode}.{rep}"
         d.mkdir(parents=True, exist_ok=True)
         (d / "stdout.jsonl").write_text(case.shown(stdout))
@@ -257,6 +269,73 @@ def _line(r: dict) -> str:
     return "\n".join(lines)
 
 
+def uses_models(case) -> bool:
+    """Whether a run uses a model on this Mac (a check's, the local model's or the Privacy Filter):
+    such runs go one at a time, in this runner and across runners (a lock file)."""
+    return bool({"injection", "harm", "local"} & set(case.needs)) or bool(case.model)
+
+
+@contextlib.contextmanager
+def _models_lock(case):
+    if not uses_models(case):
+        yield
+        return
+    import fcntl
+
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    with open(RESULTS / ".models.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def _run(case, agent, mode: str, rep: int, model, extra, keep, keep_all: bool = True) -> dict:
+    """One run, its harness errors turned into a finding rather than a crash of the whole run."""
+    try:
+        with _models_lock(case):
+            return run_one(case, agent, mode, rep, model, extra, keep, keep_all)
+    except Exception as e:
+        return {"case": case.id, "agent": agent.name, "mode": mode, "rep": rep, "status": "fail", "findings": [
+            {"cls": "health", "what": f"harness error: {type(e).__name__}: {e}", "where": "e2e"}]}
+
+
+def _job(case_id: str, agent_name: str, mode: str, rep: int, model, extra, keep, keep_all: bool, auth: dict) -> dict:
+    """A run in a worker process of its own (`--jobs`): run_one moves HOME, which is process-wide."""
+    from . import agents as agents_mod
+    from .case import all_cases
+
+    _environment()
+    agents_mod.AUTH.update(auth)
+    case = next(c for c in all_cases([case_id]) if c.id == case_id)
+    return _run(case, agents_mod.AGENTS[agent_name], mode, rep, model, extra, keep, keep_all)
+
+
+def _parallel(jobs: list, args, keep, auth: dict, report) -> None:
+    """Runs jobs in `args.jobs` worker processes. Runs that use a model go one at a time. Live, an
+    agent runs once at a time: its login (a token it refreshes, a session list) is the user's own."""
+    import multiprocessing
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+
+    pending, running = list(jobs), {}
+    with ProcessPoolExecutor(max_workers=args.jobs, mp_context=multiprocessing.get_context("spawn")) as pool:
+        while pending or running:
+            agents_busy = {j[1].name for j in running.values()}
+            models_busy = any(uses_models(j[0]) for j in running.values())
+            for job in list(pending):
+                if len(running) >= args.jobs:
+                    break
+                case, agent, rep = job
+                if (args.mode == "live" and agent.name in agents_busy) or (uses_models(case) and models_busy):
+                    continue
+                pending.remove(job)
+                agents_busy.add(agent.name)
+                models_busy = models_busy or uses_models(case)
+                running[pool.submit(_job, case.id, agent.name, args.mode, rep, args.model, args.agent_arg, keep,
+                                    args.keep, auth)] = job
+            done, _ = wait(running, return_when=FIRST_COMPLETED)
+            for f in done:
+                report(running.pop(f), f.result())
+
+
 def main(argv: list[str] | None = None) -> int:
     from .agents import AGENTS
     from .case import all_cases
@@ -279,6 +358,9 @@ def main(argv: list[str] | None = None) -> int:
                         "agents that speak the Messages API (Claude Code, pi, opencode)")
     r.add_argument("--agent-arg", action="append", default=[], help="extra argument for the agent, repeatable")
     r.add_argument("--keep", action="store_true", help="keep transcripts and requests (values shown as {{v:name}})")
+    r.add_argument("-j", "--jobs", type=int, default=1,
+                   help="runs at once, each in a process of its own; runs that use a model on this Mac still go one "
+                        "at a time, and live, each agent runs once at a time (default 1)")
     r.add_argument("--check-tools", action="store_true",
                    help="fail on a tool an agent offers that e2e/tools.toml does not list (scripted mode)")
     args = p.parse_args(argv)
@@ -291,13 +373,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = RESULTS / f"{args.mode}-{stamp}"
-    keep = out if args.keep else None
+    keep = out  # every run with --keep; without it, the runs that failed
     agents = [AGENTS[a] for a in (args.agent or AGENTS)]
     if args.cmd == "run" and args.mode == "live":
         from . import agents as agents_mod
         agents_mod.AUTH.update(mode=args.auth, cheap=args.cheap, provider=args.provider)
     model_ok = None
-    results = []
+    results, jobs = [], []
     how = (f" ({'API keys' + (', DeepSeek' if args.provider else '') + (', cheapest models' if args.cheap else '')})"
            if args.mode == "live" and args.auth == "keys" else "")
     print(f"keepmum e2e, {args.mode}{how}: " + ", ".join(f"{a.name} {a.version()}" for a in agents if a.available()))
@@ -327,14 +409,21 @@ def main(argv: list[str] | None = None) -> int:
                 results.append({**base, "status": "skip", "reason": reason})
                 print(_line(results[-1]), flush=True)
                 continue
-            for rep in range(1, args.repeat + 1):
-                try:
-                    res = run_one(case, agent, args.mode, rep, args.model, args.agent_arg, keep)
-                except Exception as e:  # the harness itself failed: a finding, not a crash of the whole run
-                    res = {**base, "rep": rep, "status": "fail", "findings": [
-                        {"cls": "health", "what": f"harness error: {type(e).__name__}: {e}", "where": "e2e"}]}
-                results.append(res)
-                print(_line(res), flush=True)
+            jobs.extend((case, agent, rep) for rep in range(1, args.repeat + 1))
+    order = {(c.id, a.name, rep): i for i, (c, a, rep) in enumerate(jobs)}
+
+    def report(job, res: dict) -> None:
+        results.append({**res, "_order": order[(job[0].id, job[1].name, job[2])]})
+        print(_line(res), flush=True)
+
+    if args.jobs > 1:
+        from . import agents as agents_mod
+        _parallel(jobs, args, keep, dict(agents_mod.AUTH), report)
+    else:
+        for job in jobs:
+            report(job, _run(*job[:2], args.mode, job[2], args.model, args.agent_arg, keep, args.keep))
+    # Skips first, as before; then the runs in case order, however they finished.
+    results.sort(key=lambda r: r.pop("_order", -1))
     tools_report = check_tools(results) if args.check_tools else None
     out.mkdir(parents=True, exist_ok=True)
     (out / "results.json").write_text(json.dumps(results, indent=1, ensure_ascii=False))

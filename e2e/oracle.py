@@ -269,16 +269,18 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
         if e["path"].endswith("/api/hello") and e["outcome"] == "forwarded":
             continue
         out.append(Finding("health", f"keepmum answered {e['status']} ({e['outcome']}) for {e['path']}", "keepmum"))
-    if served is not None and case.script and not kept_local:
+    # A refused request ends the agent's turn (refusal_shown): the script cannot go on past it.
+    if served is not None and case.script and not kept_local and not case.expect.get("refusal_shown"):
         last = max((s["turn"] for s in served), default=-1)
         if last < len(case.script) - 1:
             out.append(Finding("health", f"the script stopped at turn {last + 1} of {len(case.script)}: "
                                          "the agent ended early or a tool call failed", "script"))
     errors = transcript.errors
     if case.expect.get("blocked"):
-        # keepmum's refusal reaches the user as the agent's error: that is the block working.
+        # A refused request reaches the user as the agent's error: that is the block working.
         refusals = [e for e in errors if "keepmum: the " in e]
-        if not refusals and not any("keepmum: the " in t for t in [*transcript.shown, transcript.final]):
+        if case.expect.get("refusal_shown") and not refusals and \
+                not any("keepmum: the " in t for t in [*transcript.shown, transcript.final]):
             out.append(Finding("task", "the agent never showed keepmum's refusal", "transcript"))
         errors = [e for e in errors if e not in refusals]
     for err in errors[:3]:
