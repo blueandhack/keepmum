@@ -364,7 +364,18 @@ struct SampleRun {
                 story = "Block: the injection check read the page before the request left, flagged it and refused the request. Nothing reached \(providerName)."
             case "local":
                 let local = then(toCard, l.injectionLocal)
-                if s.handback == "stay" {
+                if s.handback == "answer" {
+                    var p = local
+                    p.addLine(to: CGPoint(x: l.gateX, y: 346))
+                    p.addPath(answer.path)
+                    let next = l.handback.line(l.maskX + 60, 133).line(l.maskRight, 133).flow(l.providerX, py)
+                    var whole = p
+                    whole.addPath(next.path)
+                    route = whole
+                    dots = [MapDot(path: p, duration: 4, colors: [(0, grey), (0.5, Theme.restored)]),
+                            MapDot(path: next.path, delay: 4.2, duration: 2.4, colors: [(0, Theme.restored)])]
+                    story = "Local answer, then the cloud: the check flagged the page before it left, and your local model answered that turn on this Mac. The next turn goes to \(providerName) with the page withheld and the local answer in its place."
+                } else if s.handback == "stay" {
                     var p = local
                     p.addLine(to: CGPoint(x: l.gateX, y: 346))
                     p.addPath(answer.path)
@@ -377,8 +388,7 @@ struct SampleRun {
                     p.addPath(l.handback.line(l.maskX + 60, 133).line(l.maskRight, 133).flow(l.providerX, py).path)
                     route = p
                     dots = [MapDot(path: p, duration: 4.4, colors: [(0, grey), (0.42, Theme.restored)])]
-                    let what = ["answer": "answered that turn, and the next one went to \(providerName) with that answer in the result's place",
-                                "summary": "summarised the page, and the summary went to \(providerName) in its place",
+                    let what = ["summary": "summarised the page, and the summary went to \(providerName) in its place",
                                 "rewrite": "took out what the page said to the agent, and the rest went to \(providerName)",
                                 "withhold": "was not asked: a notice took the page's place, and the turn went to \(providerName)"][s.handback] ?? ""
                     story = "Local, then the cloud: the check flagged the page before it left. Your local model \(what). The page itself never left this Mac."
@@ -704,13 +714,29 @@ struct MapDiagram: View {
         // The hand-back is for the injection check's hits: drawn faint while that check is not Local.
         line(layout.handback, inj == "local" ? Theme.restored : Theme.textTertiary, 2, dotted: true, on: s.handback != "stay")
         line(layout.answer(to: layout.agentsBack.first.map { $0.rect.midY } ?? 459), Theme.restored, 2,
-             on: (inj == "local" && s.handback == "stay") || s.harm == "local")
+             on: answersLocally)
         line(layout.commands(to: MapLayout.cmdLogY), Theme.warning, 2, dashed: true, on: s.commands == "warn")
         line(layout.commands(to: MapLayout.cmdReplaceY), Theme.blocked, 2, on: s.commands == "block")
         terminal(MapLayout.logY, Theme.warning, on: inj == "warn" || s.harm == "warn")
         terminal(MapLayout.refuseY, Theme.blocked, on: inj == "block" || s.harm == "block")
         terminal(MapLayout.cmdLogY, Theme.warning, on: s.commands == "warn", hidden: true)
         terminal(MapLayout.cmdReplaceY, Theme.blocked, on: s.commands == "block", hidden: true)
+    }
+
+    /// Your local model answers the agent itself: a harm hit in Local mode, or an injection hit that
+    /// stays local or is answered before the hand-back ("Local answer, then cloud"). A summary, a
+    /// rewrite or a notice goes to the cloud, which answers instead.
+    private var answersLocally: Bool {
+        (s.injectionActs == "local" && ["stay", "answer"].contains(s.handback)) || s.harm == "local"
+    }
+
+    private var answerHelp: String {
+        let injection = s.injectionActs == "local" && ["stay", "answer"].contains(s.handback)
+        switch (injection, s.harm == "local") {
+        case (true, true): return "Your local model answers flagged requests and flagged tool results itself, back to the agent."
+        case (true, false): return "Your local model answers a turn with a flagged tool result itself, back to the agent."
+        default: return "Your local model answers a flagged request itself, back to the agent: a harm hit always stays on this Mac."
+        }
     }
 
     private func line(_ r: Route, _ color: Color, _ width: CGFloat, dashed: Bool = false, dotted: Bool = false, on: Bool) -> some View {
@@ -842,9 +868,10 @@ struct MapDiagram: View {
         .opacity(s.handback != "stay" ? 1 : 0)
         .help(inj == "local" ? "After a local turn of the injection check, this goes to the cloud in the flagged result's place"
               : "The hand-back follows a local turn of the injection check, which is not set to Local. A harm hit always stays on this Mac.")
-        Text("answer back to the agent").font(.km(.caption)).foregroundStyle(Theme.restored).multilineTextAlignment(.trailing)
+        Text("local answer back to the agent").font(.km(.caption)).foregroundStyle(Theme.restored).multilineTextAlignment(.trailing)
             .frame(width: 100, alignment: .trailing).offset(x: layout.gateX - 110, y: 312)
-            .opacity((inj == "local" && s.handback == "stay") || s.harm == "local" ? 1 : 0)
+            .opacity(answersLocally ? 1 : 0)
+            .help(answerHelp)
     }
 
     private func eyebrow(_ text: String, _ x: CGFloat, _ y: CGFloat, width: CGFloat? = nil, align: Alignment = .leading) -> some View {
