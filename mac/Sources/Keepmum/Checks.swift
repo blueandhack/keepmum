@@ -1039,7 +1039,7 @@ struct LocalHandbackSection: View {
     private var strategySection: some View {
         FormSection(title: "After a local turn",
                     footer: "The cloud model never gets what a check flagged, only what takes its place.",
-                    details: "Tool results: what takes the flagged result's place is masked like the rest of the request and checked first; if the injection check flags what the local model wrote, that turn stays local. What you typed: the local model only takes the flagged part out, without rewording, softening or disguising it, and the harm check reads what it wrote; if the check still flags it, or nothing is left, the turn stays on this Mac and is not asked for again. So the provider never gets what was flagged, in any wording.") {
+                    details: "Tool results: what takes the flagged result's place is masked like the rest of the request and checked first; if the injection check flags what the local model wrote, that turn stays local. What you typed: the local model only takes the flagged part out, without rewording, softening or disguising it. What it kept must be in what you typed, word for word, and the harm check reads it whole and sentence by sentence; if anything was reworded, the check still flags it, or nothing is left, the turn stays on this Mac and is not asked for again. So the provider never gets what was flagged, in any wording.") {
             FormRow(title: "Tool results", detail: choice.detail) { strategyMenu }
             if current == "summary" || current == "rewrite" {
                 Hairline()
