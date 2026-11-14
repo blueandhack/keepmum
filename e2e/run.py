@@ -57,6 +57,14 @@ def missing_needs(case) -> str | None:
             return "needs the injection check's model (keepmum guard setup injection)"
         if find_server() is None:
             return "needs llama-server (brew install llama.cpp)"
+    if "harm" in case.needs:
+        from keepmum import harm
+        from keepmum.llamacpp import find_server
+
+        if not harm.installed(harm.DEFAULT):  # HOME is still this Mac's own here
+            return f"needs the harm check's model (keepmum guard setup harm --model {harm.DEFAULT})"
+        if find_server() is None:
+            return "needs llama-server (brew install llama.cpp)"
     if "local" in case.needs:
         from keepmum.local import models
 
@@ -85,7 +93,7 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
     os.chmod(cfg_dir / "salt", 0o600)
     ws = scratch / "w" / case.resolve(case.workspace_dir, salt)
     ws.mkdir(parents=True)
-    if "injection" in case.needs and GUARD_DIR.exists():  # the models, read only, from this Mac's own folder
+    if {"injection", "harm"} & set(case.needs) and GUARD_DIR.exists():  # the models, read only, from this Mac's own folder
         data = khome / ".local" / "share" / "keepmum"
         data.mkdir(parents=True)
         (data / "guard").symlink_to(GUARD_DIR)
@@ -171,6 +179,8 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         keepmum = {"unresolved": proxy.stats.unresolved,
                    "warned": sorted({h.get("check") for h in proxy.stats.snapshot()["guard"]["hits"]
                                      if h.get("action") == "warned"}),
+                   "blocked": sorted({h.get("check") for h in proxy.stats.snapshot()["guard"]["hits"]
+                                      if h.get("action") == "blocked"}),
                    "errors": [{"path": e.get("path"), "status": e.get("status"), "outcome": e.get("outcome")}
                               for e in events if (e.get("status") or 0) >= 400],
                    # Hits local mode acted on: whether a local model answered, and what was handed back.

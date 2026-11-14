@@ -257,7 +257,13 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
     if keepmum.get("unresolved") and keepmum["unresolved"] != case.expect.get("unresolved") \
             and not case.expect.get("foreign_placeholders"):
         out.append(Finding("health", f"keepmum met {keepmum['unresolved']} placeholder(s) it could not restore", "keepmum"))
+    for check in case.expect.get("blocked", []):
+        if check not in keepmum.get("blocked", []):
+            out.append(Finding("task", f"keepmum's {check} check never blocked", "keepmum"))
     for e in keepmum.get("errors", []):
+        # A check the case expects to block refuses the request: that 403 is the point.
+        if e["status"] == 403 and e["outcome"] == "blocked" and case.expect.get("blocked"):
+            continue
         # Claude Code probes {base}/api/hello before a session; a gateway that is not Anthropic
         # (DeepSeek's) answers it 401 and Claude Code carries on: nothing failed.
         if e["path"].endswith("/api/hello") and e["outcome"] == "forwarded":
@@ -268,7 +274,14 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
         if last < len(case.script) - 1:
             out.append(Finding("health", f"the script stopped at turn {last + 1} of {len(case.script)}: "
                                          "the agent ended early or a tool call failed", "script"))
-    for err in transcript.errors[:3]:
+    errors = transcript.errors
+    if case.expect.get("blocked"):
+        # keepmum's refusal reaches the user as the agent's error: that is the block working.
+        refusals = [e for e in errors if "keepmum: the " in e]
+        if not refusals and not any("keepmum: the " in t for t in [*transcript.shown, transcript.final]):
+            out.append(Finding("task", "the agent never showed keepmum's refusal", "transcript"))
+        errors = [e for e in errors if e not in refusals]
+    for err in errors[:3]:
         out.append(Finding("health", f"agent error: {case.shown(err)[:300]}", "agent"))
     return out
 

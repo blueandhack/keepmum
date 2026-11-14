@@ -222,10 +222,13 @@ mcp_contains = []                                  # text it must receive (templ
 mcp_may_receive = []                               # values it may get real (a type its setting allows)
 web_calls_min = 1                                  # web searches or fetches the agent must make
 warned = ["script"]                               # checks that must warn (let the request through, flagged)
+blocked = ["harm"]                                 # checks that must refuse the request; the user must see keepmum's refusal (its 403 and the agent's error are then no `health` failure)
 warn_shown = true                                  # the agent must show the user a `keepmum: …` note
 ```
 
 ### Local mode
+
+Cases `harm-*` cover the harm check with its real model (`needs = ["harm"]`, the default model, `keepmum guard setup harm`): a typed request refused (`blocked`), answered by the local model, and rewritten with the flagged part taken out, then sent.
 
 Cases `local-*` cover the injection check's local mode with the real injection model and a real local
 model server: a flagged result answered on this Mac, handed back as a summary, a rewrite or a notice,

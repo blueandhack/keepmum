@@ -10,4 +10,6 @@ _pf_serve = _real / ".local" / "share" / "keepmum" / "bin" / "pf-serve"
 if _pf_serve.exists():
     os.environ.setdefault("KEEPMUM_PF_SERVE", str(_pf_serve))
 os.environ.setdefault("HF_HOME", str(_real / ".cache" / "huggingface"))
+# The checks' models, for the end-to-end tests that run them (read only, linked into their HOME).
+os.environ.setdefault("KEEPMUM_TEST_GUARD_DIR", str(_real / ".local" / "share" / "keepmum" / "guard"))
 os.environ["HOME"] = tempfile.mkdtemp(prefix="keepmum-tests-")

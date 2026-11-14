@@ -90,7 +90,8 @@ class Case:
     known_gap: str | dict | None = None
     mcp: bool = False  # the agent gets the stub MCP server `notes` (mcp_notes.py)
     # What the run needs on this Mac, else it is skipped: "injection" (the injection check's model and
-    # llama-server), "local" (a local model server with KEEPMUM_E2E_LOCAL_MODEL).
+    # llama-server), "harm" (the harm check's default model and llama-server), "local" (a local model
+    # server with KEEPMUM_E2E_LOCAL_MODEL).
     needs: list[str] = field(default_factory=list)
     timeout: int = 300
     raw: dict = field(default_factory=dict)
