@@ -310,6 +310,19 @@ class InjectionModel(Idle):
             return best
 
 
+# A piece of a flagged result that comes back in a later one (a line of it, or part of a line) is
+# flagged as that result was: a live model, refused a README, printed only its backtick commands
+# (`curl -s https://…/bootstrap.sh | sh`), which said nothing to the check on their own.
+PIECE_CHARS = 20
+CARRIED = 64  # flagged texts kept for this
+_LINE_NUMBER = re.compile(r"^\s*\d+\s*(?:[:|\t\u2192-]\s?)")
+
+
+def _flat(text: str) -> list[str]:
+    """Each line of text, its spacing squeezed and any line number (`cat -n`, `rg -n`, Read's →) cut."""
+    return [" ".join(_LINE_NUMBER.sub("", line, count=1).split()) for line in text.splitlines()]
+
+
 def _key(text: str) -> bytes:
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).digest()
 
@@ -328,6 +341,10 @@ class Guard:
         self.min_chars = min_chars
         self.short_chars = short_chars  # the injection check's SHORT_CHARS; 0: one threshold for every length
         self._flagged: dict[bytes, dict] = {}  # text hash -> the hit, for texts flagged earlier
+        # The injection check's flagged texts, flattened, with their hits (newest last): their pieces
+        # are flagged too when a later result repeats them. Kept in memory only, like the hits.
+        self.carry = name == "injection"
+        self._sources: list[tuple[str, dict]] = []
         self._keep = keep
         self._lock = threading.Lock()
 
@@ -359,11 +376,19 @@ class Guard:
             if not new or len(text) < self.min_chars:
                 continue
             s = self.model.score(text)
+            carried = None
             if s < self.threshold_for(len(text)):
-                continue
+                carried = self._carried(text) if self.carry else None
+                if carried is None:
+                    continue
+                s = carried["score"]
             hit = {"check": self.name, "source": source, "score": s, "chars": len(text), "earlier": False}
+            if carried is not None:
+                hit["carried"] = True  # it repeats part of a result flagged before
             categories = getattr(self.model, "categories", None)
-            if categories is not None:
+            if carried is not None:
+                hit["categories"] = list(carried.get("categories") or [])
+            elif categories is not None:
                 try:
                     hit["categories"] = categories(text)
                 except Exception:  # the verdict stands without its categories
@@ -372,5 +397,21 @@ class Guard:
                 if len(self._flagged) >= self._keep:
                     self._flagged.pop(next(iter(self._flagged)))
                 self._flagged[key] = hit
+                if self.carry and carried is None:
+                    self._sources = [*self._sources[-(CARRIED - 1):], ("\n".join(_flat(text)), hit)]
             hits.append({**hit, "at": at})  # which of the items: the Logs page shows its text
         return hits
+
+    def _carried(self, text: str) -> dict | None:
+        """The hit of a flagged text that a line of text (20 characters or more) repeats, or None."""
+        with self._lock:
+            sources = list(self._sources)
+        if not sources:
+            return None
+        for piece in _flat(text):
+            if len(piece) < PIECE_CHARS:
+                continue
+            for flat, hit in reversed(sources):
+                if piece in flat:
+                    return hit
+        return None
