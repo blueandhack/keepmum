@@ -125,6 +125,8 @@ def _text(raw: bytes) -> str | None:
 
 def _b64(s: str) -> bytes | None:
     s = s.rstrip("=")
+    if ("-" in s or "_" in s) and ("+" in s or "/" in s):
+        return None  # both alphabets: not base64 (Python would drop the + and / with a warning)
     try:
         if "-" in s or "_" in s:
             return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))

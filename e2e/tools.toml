@@ -75,6 +75,7 @@
 "call_mcp_tool" = "calls an MCP server's tool (ServerName, ToolName, Arguments): decided as mcp__<server>__<tool> (tools.call_name), its result credited to that server"
 "list_resources" = "lists an MCP server's resources (ServerName): decided as that server's tool"
 "read_resource" = "reads a resource from the MCP server its ServerName names: decided as that server's tool"
+"run_workflow" = "runs a Python workflow script on this Mac (Script, or a file at ScriptPath, with Args) that fans out agy's agents and tool calls; the agents' own requests go through keepmum, as invoke_subagent's do: restored. The script is Python, which keepmum does not read as commands: like a script written with write_file and then run, a value restored into it goes where the script sends it, and a tool call the script makes itself is not in a model reply for the commands check (offered from Nov 14, 2026, without a new agy release)"
 
 [pi]
 "bash" = "runs a shell command: destinations and commands checks, values quoted for the shell"
