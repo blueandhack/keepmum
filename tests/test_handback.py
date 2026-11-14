@@ -709,3 +709,21 @@ def test_harm_pieces_on_their_own():
     assert not only_removed(typed, "Please fix the test in app.py. [removed by keepmum]")  # added
     assert harm_pieces("One. Two!\nThree") == ["One. Two!\nThree", "One.", "Two!", "Three"]
     assert harm_pieces("Only one.") == ["Only one."]
+
+
+def test_a_result_too_long_for_the_local_model_says_so_and_is_asked_once(caplog):
+    # Found live (Nov 14, 2026): a 237,646-character Codex result, Splash at 64k context: "HTTP 400" only.
+    calls = []
+
+    def refuses(request, body):
+        if request.url.path == "/v1/chat/completions":
+            calls.append(body)
+            return httpx.Response(400, json={"error": {"message": "prompt exceeds the context window",
+                                                       "code": "context_length_exceeded"}})
+        return answer(body, body["model"])
+
+    with caplog.at_level("WARNING", logger="keepmum"):
+        rs, seen, _ = run("local", [conversation(ATTACK)], handback=("rewrite", ""), local={11434: refuses})
+    assert rs[0].json()["id"] == "local" and seen["upstream"] == []  # kept on this Mac, as before
+    assert len(calls) == 1  # not asked again without the thinking fields: the length is the problem
+    assert "prompt exceeds the context window" in caplog.text and "more than its context holds" in caplog.text

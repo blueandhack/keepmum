@@ -205,6 +205,13 @@ def wants_stream(t: Target, body, query: str) -> bool:
     return isinstance(body, dict) and bool(body.get("stream")) and t.path != "/v1/messages/count_tokens"
 
 
+def too_long(raw: bytes) -> bool:
+    """A local server's error saying the request is longer than its model's context."""
+    text = raw[:2000].decode("utf-8", "replace").lower()
+    return any(k in text for k in ("context_length", "context window", "context length", "exceeds the context",
+                                   "maximum context", "too many tokens", "n_ctx"))
+
+
 def _error_text(raw: bytes, limit: int = 160) -> str:
     """A local server's error, short: its message if it sent one in JSON, else the start of the body."""
     try:
@@ -821,14 +828,19 @@ class Proxy:
                                  else handback_messages(strategy, text, source, prompt, instructions, skills)), **NO_THINKING}
             try:
                 resp = await self.client.post(server.url + LOCAL_CHAT_PATH, json=data)
-                if resp.status_code in (400, 422):  # a server that refuses the fields that turn thinking off
+                # A server that refuses the fields that turn thinking off: ask again without them. Not
+                # when the text is too long for it: that answer would be the same.
+                if resp.status_code in (400, 422) and not too_long(resp.content):
                     resp = await self.client.post(server.url + LOCAL_CHAT_PATH,
                                                   json={k: v for k, v in data.items() if k not in NO_THINKING})
             except httpx.HTTPError as e:
                 failures.append(f"{server.url} did not answer ({type(e).__name__})")
                 continue
             if not 200 <= resp.status_code < 300:
-                failures.append(f"{server.model} at {server.url}: HTTP {resp.status_code}")
+                detail = _error_text(resp.content)
+                failures.append(f"{server.model} at {server.url}: HTTP {resp.status_code}" + (f" ({detail})" if detail else "")
+                                + (f"; the flagged result is {len(text):,} characters, more than its context holds"
+                                   if too_long(resp.content) else ""))
                 continue
             try:
                 out = handback_written(resp.json())
