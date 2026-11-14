@@ -26,5 +26,10 @@
     if (document.referrer) via = new URL(document.referrer).hostname.replace(/^www\./, "") || "direct";
   } catch (e) {}
   var links = document.querySelectorAll('a[href="/download"]');
-  for (var i = 0; i < links.length; i++) links[i].setAttribute("href", "/download?via=" + encodeURIComponent(via));
+  for (var i = 0; i < links.length; i++) {
+    links[i].setAttribute("href", "/download?via=" + encodeURIComponent(via));
+    links[i].addEventListener("click", function () {
+      window.gtag("event", "download_click", { via: via });
+    });
+  }
 })();
