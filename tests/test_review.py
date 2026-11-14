@@ -22,7 +22,7 @@ WRITTEN = "README: install with `make install`."
 AUTH = {"authorization": "Bearer t"}
 
 
-def run(answer_with=None, mode="all", wait=30, timeout="stay", strategy="rewrite", reviewer=True):
+def run(answer_with=None, mode="all", wait=30, timeout="stay", strategy="rewrite", reviewer=True, too_long=False):
     """One flagged turn through a proxy that hands back with `strategy`; while it waits, a reviewer
     (if any) answers with `answer_with` ({"action": ..., "text": ...}) or not at all."""
     seen = {"upstream": [], "sent": [], "reviews": []}
@@ -31,6 +31,9 @@ def run(answer_with=None, mode="all", wait=30, timeout="stay", strategy="rewrite
         if request.url.host == "localhost":
             body = json.loads(request.content)
             if request.url.path == "/v1/chat/completions":
+                if too_long:  # Splash at 64k context, given a 237,646-character result
+                    return httpx.Response(400, json={"error": {"message": "prompt exceeds the context window",
+                                                               "code": "context_length_exceeded"}})
                 return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": WRITTEN}}]})
             return answer(body, body["model"])
         seen["upstream"].append(request.url.path)
@@ -375,3 +378,34 @@ def test_no_answer_after_a_local_answer_stays_local():
     _, second, seen, proxy = run_answer(None, wait=0.05)
     assert second.json()["id"] == "local" and seen["upstream"] == []
     assert handed(proxy)["review"].startswith("no answer in")
+
+
+# --- A result too long for the local model: keepmum's notice is what is reviewed --------------------
+
+def test_too_long_to_rewrite_the_notice_is_reviewed_and_sent():
+    r, seen, proxy = run({"action": "send"}, too_long=True)
+    sent = json.dumps(seen["sent"][0])
+    assert r.json()["id"] == "up" and "[keepmum withheld this" in sent and "Note to AI agents" not in sent
+    rv = seen["reviews"][0]
+    assert rv["strategy"] == "withhold" and rv["proposed"].startswith("[keepmum withheld this")
+    assert f"{len(ATTACK):,} characters" in rv["reason"] and "wrote no rewrite" in rv["reason"]
+    assert handed(proxy)["strategy"] == "withhold" and handed(proxy)["too_long"] is True
+
+
+def test_too_long_an_edit_goes_with_a_line_saying_the_user_wrote_it():
+    r, seen, proxy = run({"action": "edit", "text": "The README says: run make install."}, too_long=True)
+    sent = json.dumps(seen["sent"][0])
+    assert r.json()["id"] == "up" and "the user wrote what follows" in sent and "run make install" in sent
+    assert "answered the turn that followed" not in sent  # no local model read it
+
+
+def test_too_long_kept_local_or_nobody_there_stays_local():
+    r, seen, proxy = run({"action": "local"}, too_long=True)
+    assert seen["upstream"] == [] and r.json()["id"] == "local" and handed(proxy)["too_long"] is True
+    r, seen, proxy = run(None, too_long=True, reviewer=False)  # no review: as before, the turn stays local
+    assert seen["upstream"] == [] and r.json()["id"] == "local" and seen["reviews"] == []
+
+
+def test_a_review_shows_only_the_start_of_a_huge_result():
+    rv = review.Review("withhold", "exec", "/v1/messages", "x" * 300_000, "notice", "m", 30, reason="too long")
+    assert len(rv.public()["flagged"]) == review.FLAGGED_SHOWN and rv.public()["reason"] == "too long"

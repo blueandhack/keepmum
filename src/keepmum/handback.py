@@ -117,11 +117,12 @@ def notice(strategy: str, source: str | None) -> str:
             f"for the agent.{then} The user can read it on keepmum's Logs page.]")
 
 
-def edited(source: str | None, text: str) -> str:
-    """The user's own text in a withheld result's place, from a review of an answer's hand-back."""
+def edited(source: str | None, text: str, read: bool = True) -> str:
+    """The user's own text in a withheld result's place, from a review (of an answer's hand-back, or of
+    the notice for a result too long for the local model: `read` False)."""
+    then = " A model on the user's Mac read it, without tools, and answered the turn that followed." if read else ""
     return (f"[keepmum withheld this {_what(source)}: its injection check found likely instructions planted for "
-            f"the agent. A model on the user's Mac read it, without tools, and answered the turn that followed. "
-            f"In its place, the user wrote what follows.]\n\n{text}")
+            f"the agent.{then} In its place, the user wrote what follows.]\n\n{text}")
 
 
 def wrap(strategy: str, source: str | None, written: str, custom: bool = False) -> str:

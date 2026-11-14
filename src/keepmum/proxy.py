@@ -717,10 +717,38 @@ class Proxy:
         skills = self.local_skills("handback") if callable(self.local_skills) else []
         skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
         prompt = (texts.get("harm") or [(None, None, None)])[-1][1]
-        done, server, reviews = [], None, []
+        done, server, reviews, withheld = [], None, [], False
         guard = next((g for g in self.guards if g.name == "injection"), None)
         for text, source in flagged.items():
-            got = await self._write_locally(strategy, text, source, prompt, instructions, skills, path)
+            why: dict = {}
+            got = await self._write_locally(strategy, text, source, prompt, instructions, skills, path, why=why)
+            if got is None and why.get("too_long"):
+                # Too long for the local model: no summary or rewrite. Under review, the user decides on
+                # keepmum's notice instead; without, the turn stays local, as when the model fails.
+                mode, wait, timeout = self._review()
+                if not (review_applies(mode, strategy) and self.reviews.present()):
+                    return None
+                note = handback_notice("withhold", source)
+                reason = (f"It is {len(text):,} characters, more than the local model ({why['too_long']}) can read "
+                          f"at once, so it wrote no {strategy}.")
+                log.info("%s: the flagged result is too long to %s; holding keepmum's notice for review (up to %d s)",
+                         path, "summarise" if strategy == "summary" else strategy, wait)
+                decision = await self.reviews.ask(Review("withhold", source, path, text, note, why["too_long"], wait,
+                                                         reason=reason), timeout)
+                reviews.append(_reviewed(decision, wait))
+                if decision.action == "local":
+                    for t in flagged:
+                        self.handbacks.keep_local(t)
+                    return {"strategy": strategy, "model": why["too_long"], "review": reviews[-1], "too_long": True,
+                            "kept": "you kept it on this Mac" if not decision.timed_out else f"no answer in {wait} s"}
+                if decision.action == "edit":
+                    if await self._edit_flagged(guard, decision.text):
+                        reviews[-1] = "edited; the check flagged the edit, sent as you approved it"
+                    done.append((text, handback_edited(source, decision.text, read=False)))
+                else:  # send, withhold: the notice
+                    done.append((text, note))
+                withheld = True
+                continue
             if got is None:
                 return None
             out, server = got
@@ -756,9 +784,13 @@ class Proxy:
             done.append((text, handback_wrap(strategy, source, out, custom=bool(instructions))))
         for text, replacement in done:
             self.handbacks.add(text, replacement, strategy)
+        if server is None:  # every result was too long: what went is the notice, or the user's text
+            log.info("%s: the flagged result was too long for the local model; it went on as reviewed", path)
+            return {"strategy": "withhold", "too_long": True, **({"review": "; ".join(reviews)} if reviews else {})}
         log.info("%s: the local model %s at %s wrote a %s of the flagged result; checking it", path, server.model,
                  server.url, strategy)
-        return {"strategy": strategy, "model": server.model, "url": server.url, **({"review": "; ".join(reviews)} if reviews else {})}
+        return {"strategy": strategy, "model": server.model, "url": server.url,
+                **({"too_long": True} if withheld else {}), **({"review": "; ".join(reviews)} if reviews else {})}
 
     async def _hand_back_harm(self, route: LocalRoute, texts: dict, path: str) -> dict | None:
         """[guard] local_handback_harm "rewrite" (handback.py): what the user typed, with what the harm
@@ -816,7 +848,8 @@ class Proxy:
                 if isinstance(h.get("at"), int) and 0 <= h["at"] < len(items)}
 
     async def _write_locally(self, strategy: str, text: str, source: str | None, prompt: str | None,
-                             instructions: str, skills: str, path: str, check: str = "injection") -> tuple[str, object] | None:
+                             instructions: str, skills: str, path: str, check: str = "injection",
+                             why: dict | None = None) -> tuple[str, object] | None:
         """A summary or rewrite of a flagged result (or, for the harm check, of what was typed) from the
         check's local servers, the first that writes one, in Chat Completions (every local server speaks
         it), with no tools."""
@@ -838,9 +871,11 @@ class Proxy:
                 continue
             if not 200 <= resp.status_code < 300:
                 detail = _error_text(resp.content)
+                long = too_long(resp.content)
                 failures.append(f"{server.model} at {server.url}: HTTP {resp.status_code}" + (f" ({detail})" if detail else "")
-                                + (f"; the flagged result is {len(text):,} characters, more than its context holds"
-                                   if too_long(resp.content) else ""))
+                                + (f"; the flagged result is {len(text):,} characters, more than its context holds" if long else ""))
+                if long and why is not None:
+                    why.setdefault("too_long", server.model)
                 continue
             try:
                 out = handback_written(resp.json())

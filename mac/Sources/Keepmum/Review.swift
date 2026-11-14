@@ -13,13 +13,18 @@ struct PendingReview: Decodable, Identifiable, Equatable {
     var proposed: String
     /// "answer": the local model's answer, which the cloud model sees as that turn's reply.
     var answer: String?
+    /// "withhold": why the local model wrote nothing (the result is too long for it); nil from older engines.
+    var reason: String?
     var model: String
     var created: Double
     var deadline: Double
 
     var isAnswer: Bool { strategy == "answer" }
+    /// The result was too long for the local model: what is reviewed is keepmum's notice in its place.
+    var isWithheld: Bool { strategy == "withhold" }
     var what: String {
         isAnswer ? "answer to what \(source ?? "a tool") returned, before the next turn goes to the cloud"
+            : isWithheld ? "notice in place of what \(source ?? "a tool") returned, too long for the local model"
             : "\(strategy == "rewrite" ? "rewrite" : "summary") of what \(source ?? "a tool") returned"
     }
     func secondsLeft(at now: Date = Date()) -> Int { max(0, Int((deadline - now.timeIntervalSince1970).rounded(.up))) }
@@ -228,7 +233,7 @@ struct ReviewCard: View {
             header
             VStack(alignment: .leading, spacing: Space.xs) {
                 HStack {
-                    Text(review.isAnswer ? "In the result's place" : "It would send").eyebrow()
+                    Text(review.isAnswer || review.isWithheld ? "In the result's place" : "It would send").eyebrow()
                     Spacer()
                     if edited {
                         Button("Undo my edit") { draft = nil }.buttonStyle(.link).font(.km(.caption))
@@ -248,7 +253,7 @@ struct ReviewCard: View {
                 } label: {
                     HStack(spacing: Space.xs) {
                         Image(systemName: showFlagged ? "chevron.down" : "chevron.right").font(.km(.caption))
-                        Text(review.isAnswer ? "The flagged result" : "In place of the flagged result").eyebrow()
+                        Text(review.isAnswer || review.isWithheld ? "The flagged result" : "In place of the flagged result").eyebrow()
                         if review.strategy == "rewrite" {
                             Text("· struck through: not in the rewrite").font(.km(.caption)).foregroundStyle(Theme.textTertiary)
                         }
@@ -274,6 +279,10 @@ struct ReviewCard: View {
                 Text("Before it goes to the cloud").font(.km(.headline)).foregroundStyle(Theme.text)
                 Text(review.isAnswer
                      ? "The injection check flagged what \(review.source ?? "a tool") returned, and the local model (\(review.model)) answered that turn on this Mac. The next turn waits here before it goes to the cloud."
+                     : review.isWithheld
+                     ? "The injection check flagged what \(review.source ?? "a tool") returned. "
+                       + "\(review.reason ?? "It is too long for the local model.") "
+                       + "Send keepmum's notice in its place, or your own text, or keep the turn on this Mac."
                      : "The injection check flagged what \(review.source ?? "a tool") returned. The local model (\(review.model)) wrote a \(review.strategy) to send in its place.")
                     .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
             }
@@ -339,7 +348,7 @@ struct ReviewCard: View {
 
     private var buttons: some View {
         HStack(spacing: Space.s) {
-            if !review.isAnswer {  // after an answer the result is withheld anyway: Send sends the notice
+            if !review.isAnswer && !review.isWithheld {  // withheld already: Send sends the notice
                 PillButton(title: "Withhold", icon: "eye.slash") { answer("withhold") }
                     .help("Send a notice that the result was withheld, and nothing of it")
             }
@@ -355,7 +364,7 @@ struct ReviewCard: View {
             } else {
                 PillButton(title: "Send", prominent: true) { answer("send") }
                     .keyboardShortcut(.return, modifiers: .command)
-                    .help(review.isAnswer ? "Hand the conversation back with keepmum's notice in the result's place (⌘↩)"
+                    .help(review.isAnswer || review.isWithheld ? "Send keepmum's notice in the result's place (⌘↩)"
                                           : "Send what the local model wrote in the result's place (⌘↩)")
             }
         }
@@ -464,5 +473,12 @@ extension PendingReview {
         id: "d4e5f6", strategy: "answer", source: "WebFetch", path: "/v1/messages", flagged: sample.flagged,
         proposed: "[keepmum withheld this result of WebFetch: its injection check found likely instructions planted for the agent. A model on the user's Mac read it, without tools, and answered the turn that followed. The user can read it on keepmum's Logs page.]",
         answer: "fastgrep installs with `make install` or `brew install fastgrep`. Part of the README was addressed to AI agents; I ignored it.",
+        model: "qwen3.6-35b-a3b", created: Date().timeIntervalSince1970, deadline: Date().timeIntervalSince1970 + 42)
+
+    /// A result too long for the local model: keepmum's notice is what waits.
+    static let sampleTooLong = PendingReview(
+        id: "g7h8i9", strategy: "withhold", source: "exec", path: "/chatgpt/backend-api/codex/responses", flagged: sample.flagged,
+        proposed: "[keepmum withheld this result of exec: its injection check found likely instructions planted for the agent. The user can read it on keepmum's Logs page.]",
+        reason: "It is 237,646 characters, more than the local model (qwen3.6-35b-a3b) can read at once, so it wrote no rewrite.",
         model: "qwen3.6-35b-a3b", created: Date().timeIntervalSince1970, deadline: Date().timeIntervalSince1970 + 42)
 }

@@ -12,6 +12,10 @@ that follows: the next request, carrying the flagged result, waits for it. Sendi
 notice in the result's place, an edit puts the user's text there, and keeping it local keeps every
 turn that carries the result on this Mac.
 
+A result too long for the local model (its context) gets no summary or rewrite. Under review, keepmum
+asks about its notice instead (strategy "withhold", with the reason): send the notice, send the
+user's own text, or keep the turn local. Without review, the turn stays local, as before.
+
 Someone has to be there to answer: the Mac app (or `keepmum review --watch`) asks for pending
 reviews every second or so, and keepmum holds a request only while someone asked within PRESENT_S.
 With nobody there, a hand-back goes as it would without review.
@@ -31,6 +35,7 @@ DEFAULT_WAIT = 60
 MIN_WAIT, MAX_WAIT = 10, 600
 ACTIONS = ("send", "edit", "withhold", "local")
 PRESENT_S = 15.0  # someone asked for reviews this recently: they are there to answer
+FLAGGED_SHOWN = 60_000  # characters of the flagged result a review shows
 
 
 def parse(mode, wait, timeout, where: str = "guard") -> tuple[str, int, str]:
@@ -64,6 +69,7 @@ class Review:
     model: str
     wait: int
     answer: str | None = None  # "answer": the local model's answer, which the cloud model sees as that turn's reply
+    reason: str | None = None  # "withhold": why the local model wrote nothing (the result is too long for it)
     id: str = field(default_factory=lambda: secrets.token_hex(6))
     created: float = field(default_factory=time.time)
     decision: Decision | None = None
@@ -71,7 +77,9 @@ class Review:
 
     def public(self) -> dict:
         return {"id": self.id, "strategy": self.strategy, "source": self.source, "path": self.path,
-                "flagged": self.flagged, "proposed": self.proposed, "answer": self.answer, "model": self.model,
+                # The app shows the first few hundred lines: a 237,646-character result need not go every second.
+                "flagged": self.flagged[:FLAGGED_SHOWN], "proposed": self.proposed, "answer": self.answer,
+                "model": self.model, "reason": self.reason,
                 "created": self.created,
                 "deadline": self.created + self.wait, "seconds_left": max(0, round(self.created + self.wait - time.time()))}
 
