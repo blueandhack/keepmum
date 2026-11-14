@@ -88,16 +88,18 @@ enum Theme {
     /// Each coding agent's color in the flow diagram: its own brand's hue where it has one.
     /// Color-blind safe: Okabe–Ito's hues, the nearest to each brand's.
     static func client(_ id: String) -> Color {
-        let safe = Palette.current == .colorBlind
-        return switch id {
-        case "claude-code": safe ? Color(light: 0xB84A00, dark: 0xF08A3C) : Color(light: 0xC8775A, dark: 0xD98B6E)
-        case "codex": Color(light: 0x5B6270, dark: 0x9AA1AE)
-        case "pi": safe ? Color(light: 0x0072B2, dark: 0x56B4E9) : Color(light: 0x6E78E0, dark: 0x8F98F0)
-        case "opencode": safe ? Color(light: 0xB89300, dark: 0xF0E442) : Color(light: 0xB7791F, dark: 0xE0A458)
+        // (color-blind safe, brand): a pair, not `safe ? a : b` in each case, which SwiftLint reads
+        // as calling Void functions in a ternary.
+        let (safe, brand): (Color, Color) = switch id {
+        case "claude-code": (Color(light: 0xB84A00, dark: 0xF08A3C), Color(light: 0xC8775A, dark: 0xD98B6E))
+        case "codex": (Color(light: 0x5B6270, dark: 0x9AA1AE), Color(light: 0x5B6270, dark: 0x9AA1AE))
+        case "pi": (Color(light: 0x0072B2, dark: 0x56B4E9), Color(light: 0x6E78E0, dark: 0x8F98F0))
+        case "opencode": (Color(light: 0xB89300, dark: 0xF0E442), Color(light: 0xB7791F, dark: 0xE0A458))
         // The purple of Gemini's spark.
-        case "gemini": safe ? Color(light: 0xB4528A, dark: 0xE6A3C8) : Color(light: 0x7E64B8, dark: 0x9F8AD6)
-        default: safe ? Color(light: 0x008A65, dark: 0x2FD3A0) : Color(light: 0x2A9D8F, dark: 0x4FC3B5)
+        case "gemini": (Color(light: 0xB4528A, dark: 0xE6A3C8), Color(light: 0x7E64B8, dark: 0x9F8AD6))
+        default: (Color(light: 0x008A65, dark: 0x2FD3A0), Color(light: 0x2A9D8F, dark: 0x4FC3B5))
         }
+        return Palette.current == .colorBlind ? safe : brand
     }
 
     // A categorical series, for charts that compare things rather than signal outcomes.
