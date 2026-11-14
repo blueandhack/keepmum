@@ -137,7 +137,7 @@ def test_without_a_model_or_a_server_it_is_refused_not_sent():
     rs, seen, _ = run("local", [conversation(ATTACK)], model="")
     assert rs[0].status_code == 403 and "keepmum guard local add --model" in rs[0].json()["error"]["message"]
     rs, seen, proxy = run("local", [conversation(ATTACK)], local_up=False)
-    assert rs[0].status_code == 502 and "not sent anywhere else" in rs[0].json()["error"]["message"]
+    assert rs[0].status_code == 403 and "not sent anywhere else" in rs[0].json()["error"]["message"]
     assert "http://localhost:11434 did not answer (ConnectError)" in rs[0].json()["error"]["message"]
     assert seen["upstream"] == [] and proxy.stats.events[-1]["outcome"] == "blocked"
 
@@ -232,7 +232,7 @@ def test_when_no_server_answers_it_is_refused_with_each_reason():
     rs, seen, proxy = run("local", [conversation(ATTACK)], servers=servers,
                           local={1111: refused, 2222: lambda r, b: httpx.Response(400, json={"error": {"message": "context too long"}})})
     message = rs[0].json()["error"]["message"]
-    assert rs[0].status_code == 502 and seen["upstream"] == []
+    assert rs[0].status_code == 403 and seen["upstream"] == []
     assert "http://localhost:1111 did not answer" in message and "b at http://localhost:2222: HTTP 400 (context too long)" in message
     assert proxy.stats.events[-1]["outcome"] == "blocked"
 

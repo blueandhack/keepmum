@@ -1011,9 +1011,12 @@ class Proxy:
                 return await self._local_answer(resp, content, path, server, way, t.api, local_origin, route, after, shape)
         log.error("%s: no local server answered (%s); not sent anywhere else", path, "; ".join(failures))
         self.stats.note_guard(route.entries, local_error="no local server answered: " + "; ".join(failures))
-        self._record(path, "blocked", 502, origin=origin, guard=refused)
-        return api_error(502, "api_error", f"the {route.check} check sent this request to a local model, and none "
-                         f"answered: {'; '.join(failures)}. It was not sent anywhere else.")
+        # 403, not 502: agents retry a 5xx (Claude Code and agy for minutes), and no retry helps until
+        # the user starts the local model. It is a refusal: keepmum sends this request nowhere else.
+        self._record(path, "blocked", 403, origin=origin, guard=refused)
+        return api_error(403, "permission_error", f"the {route.check} check sent this request to a local model, and none "
+                         f"answered: {'; '.join(failures)}. It was not sent anywhere else. Start the local model "
+                         "(keepmum guard local), then try again.")
 
     async def _local_answer(self, resp: httpx.Response, content: bytes | None, path: str, server, way: str, api: str,
                             origin, route: LocalRoute, after=None, shape: dict | None = None) -> Response:

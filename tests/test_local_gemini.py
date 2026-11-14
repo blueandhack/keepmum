@@ -115,7 +115,7 @@ def test_the_real_values_go_to_the_local_model_and_nowhere_else():
 
 def test_when_no_local_server_answers_agy_gets_an_error_and_nothing_is_sent():
     rs, seen, _ = run("local", [agy(ATTACK, wrapped=True)], path=SIGNED_IN, servers=SERVERS, local_up=False)
-    assert rs[0].status_code == 502 and "not sent anywhere else" in rs[0].json()["error"]["message"]
+    assert rs[0].status_code == 403 and "not sent anywhere else" in rs[0].json()["error"]["message"]
     assert seen["upstream"] == []
 
 
