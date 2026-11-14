@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; media-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self' https://*.google-analytics.com https://*.googletagmanager.com; media-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://*.googletagmanager.com; connect-src https://cloudflareinsights.com https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>keepmum: keep secrets on your Mac while you use coding agents</title>
 <meta name="description" content="A local proxy for Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi and opencode. It masks API keys, tokens, passwords and personal data before a request leaves your Mac, and restores them in the answer.">
@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preload" href="fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
-<!-- Cloudflare Web Analytics, no cookies; not loaded with Global Privacy Control or Do Not Track -->
+<!-- Cloudflare Web Analytics and Google Analytics; not loaded with Global Privacy Control or Do Not Track -->
 <script src="analytics.js" defer></script>
 <!-- The newest release's build time in the visitor's time zone -->
 <script src="release.js" defer></script>
@@ -265,7 +265,7 @@ keepmum claude</code></pre>
       <a class="btn" href="/download">Download for Mac</a>
     </div>
     <footer>
-      <p>keepmum is an independent open-source project, not affiliated with or endorsed by Anthropic, OpenAI or Google. Apache 2.0. This page counts visits with Cloudflare Web Analytics, which sets no cookies; downloads, updates and the app’s update checks are counted per hour, with no addresses kept. Global Privacy Control or Do Not Track opts you out.</p>
+      <p>keepmum is an independent open-source project, not affiliated with or endorsed by Anthropic, OpenAI or Google. Apache 2.0. This page counts visits with Cloudflare Web Analytics and Google Analytics, which sets a cookie; downloads, updates and the app’s update checks are counted per hour, with no addresses kept. Global Privacy Control or Do Not Track opts you out.</p>
       <nav aria-label="Footer">
         <a href="/privacy">Privacy</a>
         <a href="https://github.com/blueandhack/keepmum">GitHub</a>

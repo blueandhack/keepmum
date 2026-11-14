@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self' https://*.google-analytics.com https://*.googletagmanager.com; script-src 'self' https://static.cloudflareinsights.com https://*.googletagmanager.com; connect-src https://cloudflareinsights.com https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Privacy · keepmum</title>
 <meta name="description" content="What keepmum and keepmum.app collect: your code and secrets stay on your Mac; keepmum.app counts downloads, update checks and updates per hour, with no addresses, and you can opt out.">
@@ -37,7 +37,7 @@
     <p class="updated">Last updated November 10, 2026</p>
 
     <h2>The short version</h2>
-    <p>keepmum runs on your Mac. Your prompts, code, files and secrets never reach the keepmum project. The project keeps counts (how many downloads, update checks and updates there are each hour) and nothing about who: no IP addresses, no accounts, no identifiers. You can opt out of even the counts.</p>
+    <p>keepmum runs on your Mac. Your prompts, code, files and secrets never reach the keepmum project. The project keeps counts (how many downloads, update checks and updates there are each hour) and nothing about who: no IP addresses, no accounts, no identifiers. The website also uses Google Analytics, which sets a cookie (see below). You can opt out of all of it.</p>
 
     <h2>On your Mac</h2>
     <p>The keepmum proxy and the Mac app work locally. The values keepmum masks, its logs, its history and the Mac app’s pages stay on your Mac; the app talks only to the proxy on <code>127.0.0.1</code>, apart from update checks and the model downloads you start. Nothing is sent when the app opens or while you use it: no usage data, no crash reports, no analytics. To notice what other apps add to your coding agents, keepmum reads their settings on your Mac and remembers names and hashes, never the settings themselves.</p>
@@ -47,7 +47,7 @@
 
     <h2>What keepmum.app counts</h2>
     <ul>
-      <li><strong>Website visits.</strong> Cloudflare Web Analytics counts page views on keepmum.app. It sets no cookies and does not fingerprint your browser.</li>
+      <li><strong>Website visits.</strong> Cloudflare Web Analytics and Google Analytics count page views on keepmum.app. Cloudflare sets no cookies and does not fingerprint your browser. Google Analytics sets a cookie with a random ID, so it can tell a returning visitor from a new one, and reports pages viewed, the referring site, rough location and device type; Google signals and ad personalisation are off.</li>
       <li><strong>Downloads.</strong> Each click on a Download button is counted, with the domain of the site that sent you to keepmum.app (such as <code>github.com</code>), or “direct”. Only the domain: never the page, a search term or anything after it. A browser that asks not to be tracked sends none of it.</li>
       <li><strong>Update checks.</strong> With automatic checks on, the Mac app asks keepmum.app once a day whether there is a new version. Each check is counted, with the app’s version and whether it is your Mac’s first check of the day, week or month, or its first ever. Your Mac keeps track of that itself and sends only those words, never an identifier, so keepmum can count each Mac once without telling one from another. The day’s first check also says your Mac’s macOS major version and chip (such as macOS 15, Apple silicon), so keepmum knows which systems to support; it is counted as a number per version, like the rest.</li>
       <li><strong>Updates.</strong> Each update the app downloads is counted, with the version it updates to and the version it updates from (which the app’s update library names in every request).</li>
@@ -65,6 +65,7 @@
     <p>These services see your IP address when your Mac or browser reaches them, under their own privacy policies. keepmum’s counts never include it.</p>
     <ul>
       <li><strong>Cloudflare</strong> serves keepmum.app, the update list and the counts.</li>
+      <li><strong>Google</strong> runs Google Analytics for keepmum.app’s pages, unless your browser opts out.</li>
       <li><strong>GitHub</strong> hosts the source code and the releases; downloads and updates come from GitHub Releases.</li>
       <li><strong>Hugging Face</strong> hosts the models <code>keepmum setup</code> and the optional checks download, each checked against a pinned SHA-256.</li>
       <li><strong>Apple</strong> notarizes the app; macOS may check that notarization when you first open it, as it does for any app.</li>
