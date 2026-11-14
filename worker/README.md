@@ -71,6 +71,29 @@ cd worker && npx wrangler r2 object put "keepmum-media/keepmum-flow-$H.mp4" --re
 
 Then point `site/index.html` at `/video/keepmum-flow-$H.mp4`, and refresh the poster (`site/img/flow-poster.webp`, a still from `swift docs/video/flow.swift --frames`). R2's free tier covers 10 GB stored and charges nothing for what is downloaded.
 
+## If the Worker goes away
+
+Discontinued, over the free plan's daily limit, or broken: updates and the website's Download button
+keep working, and only the counting stops.
+
+| What | The Worker's part | Without it |
+|---|---|---|
+| The app's update check | serves `keepmum.app/appcast.xml` | apps from 0.1.0a8 retry against the same signed feed on GitHub (`raw.githubusercontent.com/…/mac/appcast.xml`) and stay there for three days, sending none of the counting words; older apps reach GitHub Pages' copy at the same address (below) |
+| An update's DMG | redirects `keepmum.app/update/…` to GitHub Releases | apps from 0.1.0a8 fetch it from GitHub Releases themselves while on GitHub's feed; Pages' copy of the feed links GitHub Releases directly |
+| The Download button | redirects `/download` to the newest DMG | GitHub Pages' 404 page (`site/404.html`, `site/fallback.js`) sends `/download` and `/update/…` to GitHub Releases |
+| The flow video | serves `/video/` from R2 | the poster stays; the video does not play |
+
+GitHub Pages' copy is `mac/appcast-github.xml`, the feed with its downloads straight from GitHub,
+which `mac/appcast.py` writes and `mac/release.sh` signs with the feed; `.github/workflows/site.yml`
+publishes it as `site/appcast.xml` once it is signed. While the Worker runs, its route takes that
+path and Pages' copy is never served.
+
+Pages' copy only answers when requests reach Pages: with the Worker's routes removed, or with each
+route's **Request limit failure mode** set to **Fail open** (Cloudflare dashboard › Workers & Pages ›
+keepmum-counts › Settings › Domains & Routes), so a day over the free limit skips the Worker rather
+than answering error 1027. Fail closed shows Cloudflare's error page instead, and older apps get no
+feed until the next day.
+
 ## Read the counts without the dashboard
 
 ```sh

@@ -129,8 +129,11 @@ if [ -n "$UPDATES" ]; then
     ${RELEASE_NOTES:+--notes "$RELEASE_NOTES"}
   "$SPARKLE/sign_update" appcast.xml
   "$SPARKLE/sign_update" --verify appcast.xml
+  # The copy the website serves as keepmum.app/appcast.xml if the Worker is gone (appcast.py).
+  "$SPARKLE/sign_update" appcast-github.xml
+  "$SPARKLE/sign_update" --verify appcast-github.xml
 fi
 
 echo "next: git tag -s v$VERSION -m \"keepmum $VERSION\" && git push origin v$VERSION, then gh release create (see mac/README.md),"
-echo "      then commit and push mac/appcast.xml: installed apps see the update, and keepmum.app/download"
+echo "      then commit and push mac/appcast.xml and mac/appcast-github.xml: installed apps see the update, and keepmum.app/download"
 echo "      (the website's download buttons) leads to the new DMG, once it is on main"

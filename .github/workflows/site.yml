@@ -6,7 +6,7 @@ name: Site
 on:
   push:
     branches: [main]
-    paths: ["site/**", "mac/appcast.xml", ".github/scripts/site_release.py", ".github/workflows/site.yml"]
+    paths: ["site/**", "mac/appcast.xml", "mac/appcast-github.xml", ".github/scripts/site_release.py", ".github/workflows/site.yml"]
   workflow_dispatch:
 
 permissions:
@@ -28,6 +28,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 .github/scripts/site_release.py
+      # keepmum.app/appcast.xml for installed apps when the Worker is gone or skips them: the signed
+      # copy of the feed whose downloads come straight from GitHub (mac/appcast.py). While the Worker
+      # runs, it answers that path and this file is never served. Unsigned, it would be refused.
+      - name: The update feed, for when the Worker is gone
+        run: |
+          if grep -q "sparkle-signatures:" mac/appcast-github.xml 2>/dev/null; then
+            cp mac/appcast-github.xml site/appcast.xml
+            echo "site/appcast.xml: the signed feed, downloads from GitHub"
+          else
+            echo "::warning::mac/appcast-github.xml is not signed (sign_update, or the next release.sh), so keepmum.app has no feed of its own if the Worker goes"
+          fi
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
