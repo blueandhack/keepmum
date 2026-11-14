@@ -1028,11 +1028,19 @@ struct LocalHandbackSection: View {
         }
     }
 
+    static let harmChoices: [(id: String, label: String, detail: String)] = [
+        ("stay", "Stay local", "The local model answers what you typed, and the conversation stays on it."),
+        ("rewrite", "Local rewrite, then cloud",
+         "The local model takes the flagged part out of what you typed and keeps the rest; that goes to the cloud model. Still flagged, or nothing left: it stays local."),
+    ]
+
+    private var harmCurrent: String { engine.localHandback?.harm ?? engine.status?.guard?.local?.handbackHarm ?? "stay" }
+
     private var strategySection: some View {
         FormSection(title: "After a local turn",
-                    footer: "For the injection check. The cloud model never gets the flagged result, only what takes its place.",
-                    details: "For the injection check. The cloud model never gets the flagged result itself. What takes its place is masked like the rest of the request and checked first: if the check flags what the local model wrote, that turn stays local. A harm hit always stays local: it is what you typed, and handing it back would send it to the provider the check kept it from.") {
-            FormRow(title: "Then", detail: choice.detail) { strategyMenu }
+                    footer: "The cloud model never gets what a check flagged, only what takes its place.",
+                    details: "Tool results: what takes the flagged result's place is masked like the rest of the request and checked first; if the injection check flags what the local model wrote, that turn stays local. What you typed: the local model only takes the flagged part out, without rewording, softening or disguising it, and the harm check reads what it wrote; if the check still flags it, or nothing is left, the turn stays on this Mac and is not asked for again. So the provider never gets what was flagged, in any wording.") {
+            FormRow(title: "Tool results", detail: choice.detail) { strategyMenu }
             if current == "summary" || current == "rewrite" {
                 Hairline()
                 FormRow(title: "Instructions",
@@ -1045,6 +1053,12 @@ struct LocalHandbackSection: View {
                             .disabled(!engine.isBundled || engine.busy)
                     }
                 }
+            }
+            Hairline()
+            let harm = Self.harmChoices.first { $0.id == harmCurrent } ?? Self.harmChoices[0]
+            FormRow(title: "What you typed", detail: harm.detail) {
+                ChoiceMenu(engine: engine, label: harm.label,
+                           items: Self.harmChoices.map { c in (c.label, { await engine.setLocalHandbackHarm(c.id) }) })
             }
         }
     }

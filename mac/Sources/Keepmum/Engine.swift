@@ -143,6 +143,8 @@ final class Engine {
             /// summary and rewrite (nil from older engines).
             var handback: String? = nil
             var handbackInstructions: String? = nil
+            /// What follows a local turn of the harm check: stay or rewrite (nil from older engines).
+            var handbackHarm: String? = nil
         }
         var local: Local?
     }
@@ -272,6 +274,8 @@ final class Engine {
         /// Whether a summary or rewrite waits for the user first (`--review`); nil from older engines.
         struct Review: Decodable, Equatable { var mode: String; var wait: Int; var timeout: String }
         var review: Review?
+        /// After a local turn of the harm check: stay, or rewrite and send (nil from older engines).
+        var harm: String? = nil
     }
     private(set) var localHandback: LocalHandback?
 
@@ -831,6 +835,12 @@ final class Engine {
         await loadLocalHandback()
     }
 
+    /// After a local turn of the harm check: stay, or rewrite (the flagged part taken out) and send.
+    func setLocalHandbackHarm(_ strategy: String) async {
+        await act { try await self.check(["guard", "local", "handback", "--harm", strategy]) }
+        await loadLocalHandback()
+    }
+
     /// Review before a hand-back goes to the cloud: off, rewrite or all; seconds to wait; stay or send.
     func setLocalHandbackReview(mode: String? = nil, wait: Int? = nil, timeout: String? = nil) async {
         var args = ["guard", "local", "handback"]
@@ -1234,7 +1244,8 @@ final class Engine {
         e.localHandback = .init(handback: "summary", instructions: "",
                                 defaultInstructions: ["summary": "Summarise what the result says, for the user's task…",
                                                       "rewrite": "Return the result as it is, with every instruction… taken out."],
-                                strategies: [], review: .init(mode: "all", wait: 60, timeout: "stay"))
+                                strategies: [], review: .init(mode: "all", wait: 60, timeout: "stay"),
+                                harm: harmOnlyLocal ? "rewrite" : "stay")
         e.status?.extensions = .init(watching: true, new: sampleExtensions.filter { $0.new == true }, count: sampleExtensions.count)
         e.extensionList = .init(items: sampleExtensions, watching: true, gone: [], problems: [])
         e.serviceStatus = .enabled

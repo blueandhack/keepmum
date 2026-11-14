@@ -32,14 +32,18 @@ enum MapPart: String, CaseIterable {
 
 /// A made-up request sent along the map, routed by the settings as they are. Nothing is sent.
 enum MapSample: String, CaseIterable, Identifiable {
-    case injection, harm, secret, command
+    case injection, mcp, harm, secret, email, command, wipe, keys
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .injection: "Planted instruction"
+        case .injection: "Planted in a web page"
+        case .mcp: "Planted in an MCP reply"
         case .harm: "Harmful request"
         case .secret: "API key in a prompt"
+        case .email: "Emails in a pasted log"
         case .command: "curl | sh in a reply"
+        case .wipe: "rm -rf ~ in a reply"
+        case .keys: "~/.ssh sent by curl"
         }
     }
 }
@@ -54,6 +58,10 @@ struct MapSettings {
     var outdated = false
     var observe = false
     var handback = "stay"
+    /// After a local turn of the harm check: stay, or rewrite (the flagged part taken out) and send.
+    var harmHandback = "stay"
+    /// Personal data (names, emails, phones, addresses) masked too.
+    var pii = true
     var injectionLevel: String?
     /// The share of real tool results the injection check flags at its level.
     var injectionRate: Double?
@@ -67,6 +75,7 @@ struct MapSettings {
 
     @MainActor init(engine: Engine, store: StatsStore) {
         observe = store.snapshot.observe == true
+        pii = engine.status?.pii ?? true
         guard let g = engine.status?.guard else { return }
         let inj = g.injection
         injection = inj.mode
@@ -86,12 +95,16 @@ struct MapSettings {
         }
         commands = g.commands?.mode ?? "off"
         handback = engine.localHandback?.handback ?? g.local?.handback ?? "stay"
+        harmHandback = engine.localHandback?.harm ?? g.local?.handbackHarm ?? "stay"
         localServers = engine.localServers?.servers.count ?? g.local?.servers.count ?? 0
     }
 
     /// The injection check's mode as it acts: paused checks nothing.
     var injectionActs: String { paused ? "off" : injection }
     var localUsed: Bool { injectionActs == "local" || harm == "local" }
+    /// A hand-back to the cloud that applies now: the injection check's, or the harm check's rewrite.
+    var injectionHandsBack: Bool { injectionActs == "local" && handback != "stay" }
+    var harmHandsBack: Bool { harm == "local" && harmHandback == "rewrite" }
 }
 
 /// Where everything sits, and the bands' split from the traffic.
@@ -153,7 +166,7 @@ struct MapLayout {
     var injectionCard: CGRect { CGRect(x: gateX, y: 58, width: 184, height: 84) }
     var harmCard: CGRect { CGRect(x: gateX, y: 162, width: 184, height: 84) }
     var maskCard: CGRect { CGRect(x: maskX, y: 92, width: 122, height: 108) }
-    var localCard: CGRect { CGRect(x: gateX, y: 310, width: 184, height: 74) }
+    var localCard: CGRect { CGRect(x: gateX, y: 304, width: 184, height: 82) }
     var restoreCard: CGRect { CGRect(x: gateX + 46, y: 428, width: 96, height: 100) }
     var commandsCard: CGRect { CGRect(x: edge - 200, y: 428, width: 180, height: 100) }
     var commandsX: CGFloat { commandsCard.minX + 90 }
@@ -253,7 +266,7 @@ struct MapLayout {
         return out
     }
     func harm(to y: CGFloat) -> Route { Route(harmX, 246).downRight(y, to: terminalX - 4) }
-    var harmLocal: Route { Route(harmX, 246).line(harmX, 310) }
+    var harmLocal: Route { Route(harmX, 246).line(harmX, 304) }
     var handback: Route { Route(gateRight, 364).curve(maskX + 60, 202, gateRight + 50, 364, maskX + 60, 300) }
     func answer(to y: CGFloat) -> Route { Route(gateX, 346).curve(118, y, gateX - 56, 346, gateX - 66, y) }
     func commands(to y: CGFloat) -> Route { Route(commandsX, 528).downRight(y, to: terminalX - 4) }
@@ -332,124 +345,176 @@ struct SampleRun {
     var story: String
     var length: Double { dots.map { $0.delay + $0.duration }.max() ?? 0 }
 
-    // swiftlint:disable:next cyclomatic_complexity function_body_length
-    init(_ sample: MapSample, _ s: MapSettings, _ layout: MapLayout) {
-        let agent = layout.agentsOut.first, provider = layout.providersOut.first
-        let ay = agent.map { $0.rect.midY } ?? 112, py = provider.map { $0.rect.midY } ?? 114
-        let backY = layout.agentsBack.first.map { $0.rect.midY } ?? 459
-        let providerBackY = layout.providersBack.first.map { $0.rect.midY } ?? 449
-        let agentName = agent?.name ?? "Your agent", providerName = provider?.name ?? "the provider"
-        let grey = Theme.textSecondary
-        let l = layout
-        let toolIn = Route(118, ay).flow(199, 141).flow(l.gateX, 100).line(l.gateX + 144, 100)
-        let toolOn = toolIn.line(l.gateRight, 100).flow(l.maskX, 133).line(l.maskRight, 133).flow(l.providerX, py)
-        let typedIn = Route(118, ay + 6).flow(199, 186).flow(l.gateX, 204).line(l.harmX, 204)
-        let typedOn = typedIn.line(l.gateRight, 204).flow(l.maskX, 178).line(l.maskRight, 178).flow(l.providerX, py)
-        let answer = l.answer(to: backY)
-        func then(_ a: Route, _ b: Route) -> Path { var p = a.path; p.addPath(b.path); return p }
+    /// The places a sample's routes are drawn from: the first agent and provider, and the lanes.
+    struct Places {
+        var l: MapLayout
+        var ay: CGFloat, py: CGFloat, backY: CGFloat, providerBackY: CGFloat
+        var agent: String, provider: String
 
+        init(_ l: MapLayout) {
+            self.l = l
+            ay = l.agentsOut.first.map { $0.rect.midY } ?? 112
+            py = l.providersOut.first.map { $0.rect.midY } ?? 114
+            backY = l.agentsBack.first.map { $0.rect.midY } ?? 459
+            providerBackY = l.providersBack.first.map { $0.rect.midY } ?? 449
+            agent = l.agentsOut.first?.name ?? "Your agent"
+            provider = l.providersOut.first?.name ?? "the provider"
+        }
+
+        var toolIn: Route { Route(118, ay).flow(199, 141).flow(l.gateX, 100).line(l.gateX + 144, 100) }
+        var toolOn: Route { toolIn.line(l.gateRight, 100).flow(l.maskX, 133).line(l.maskRight, 133).flow(l.providerX, py) }
+        var typedIn: Route { Route(118, ay + 6).flow(199, 186).flow(l.gateX, 204).line(l.harmX, 204) }
+        var typedOn: Route { typedIn.line(l.gateRight, 204).flow(l.maskX, 178).line(l.maskRight, 178).flow(l.providerX, py) }
+        /// From the local model back into masking, and on to the cloud.
+        var handedBack: Route { l.handback.line(l.maskX + 60, 133).line(l.maskRight, 133).flow(l.providerX, py) }
+        var answer: Route { l.answer(to: backY) }
+        var replyIn: Route { Route(l.providerX, providerBackY).flow(l.commandsCard.maxX, 465).line(l.commandsX, 465) }
+    }
+
+    init(route: Path, dots: [MapDot], title: String, story: String) {
+        self.route = route
+        self.dots = dots
+        self.title = title
+        self.story = story
+    }
+
+    init(_ sample: MapSample, _ s: MapSettings, _ layout: MapLayout) {
+        let p = Places(layout)
         switch sample {
         case .injection:
-            title = "\(agentName) fetched a page with an instruction planted for the agent"
-            let toCard = toolIn.line(l.gateRight, 128)
-            switch s.injectionActs {
-            case "warn":
-                route = toolOn.path
-                dots = [MapDot(path: toolOn.path, colors: [(0, grey)]),
-                        MapDot(path: l.injection(to: MapLayout.logY).path, delay: 2.4, duration: 1.4, colors: [(0, Theme.warning)])]
-                story = "Warn: the request went to \(providerName) at once. The injection check read it afterwards, flagged the page, and logged the hit in Logs."
-            case "block":
-                route = then(toCard, l.injection(to: MapLayout.refuseY))
-                dots = [MapDot(path: route, colors: [(0, grey), (0.48, Theme.blocked)])]
-                story = "Block: the injection check read the page before the request left, flagged it and refused the request. Nothing reached \(providerName)."
-            case "local":
-                let local = then(toCard, l.injectionLocal)
-                if s.handback == "answer" {
-                    var p = local
-                    p.addLine(to: CGPoint(x: l.gateX, y: 346))
-                    p.addPath(answer.path)
-                    let next = l.handback.line(l.maskX + 60, 133).line(l.maskRight, 133).flow(l.providerX, py)
-                    var whole = p
-                    whole.addPath(next.path)
-                    route = whole
-                    dots = [MapDot(path: p, duration: 4, colors: [(0, grey), (0.5, Theme.restored)]),
-                            MapDot(path: next.path, delay: 4.2, duration: 2.4, colors: [(0, Theme.restored)])]
-                    story = "Local answer, then the cloud: the check flagged the page before it left, and your local model answered that turn on this Mac. The next turn goes to \(providerName) with the page withheld and the local answer in its place."
-                } else if s.handback == "stay" {
-                    var p = local
-                    p.addLine(to: CGPoint(x: l.gateX, y: 346))
-                    p.addPath(answer.path)
-                    route = p
-                    dots = [MapDot(path: p, duration: 4, colors: [(0, grey), (0.5, Theme.restored)])]
-                    story = "Local: the check flagged the page before it left. Your local model answered that turn on this Mac, and the conversation stays local."
-                } else {
-                    var p = local
-                    p.addLine(to: CGPoint(x: l.gateRight, y: 364))
-                    p.addPath(l.handback.line(l.maskX + 60, 133).line(l.maskRight, 133).flow(l.providerX, py).path)
-                    route = p
-                    dots = [MapDot(path: p, duration: 4.4, colors: [(0, grey), (0.42, Theme.restored)])]
-                    let what = ["summary": "summarised the page, and the summary went to \(providerName) in its place",
-                                "rewrite": "took out what the page said to the agent, and the rest went to \(providerName)",
-                                "withhold": "was not asked: a notice took the page's place, and the turn went to \(providerName)"][s.handback] ?? ""
-                    story = "Local, then the cloud: the check flagged the page before it left. Your local model \(what). The page itself never left this Mac."
-                }
-            default:
-                route = toolOn.path
-                dots = [MapDot(path: toolOn.path, colors: [(0, grey)])]
-                story = s.paused ? "The injection check is paused until its model is updated, so the page went to \(providerName) unchecked."
-                    : "The injection check is off, so the page went to \(providerName) unchecked. Masking still ran."
-            }
-        case .harm:
-            title = "You asked for something a policy may not allow"
-            switch s.harm {
-            case "warn":
-                route = typedOn.path
-                dots = [MapDot(path: typedOn.path, colors: [(0, grey)]),
-                        MapDot(path: l.harm(to: MapLayout.logY).path, delay: 2.4, duration: 1.3, colors: [(0, Theme.warning)])]
-                story = "Warn: your request went to \(providerName) at once. The harm check read it afterwards and logged the hit, with its categories."
-            case "block":
-                route = then(typedIn, l.harm(to: MapLayout.refuseY))
-                dots = [MapDot(path: route, colors: [(0, grey), (0.45, Theme.blocked)])]
-                story = "Block: the harm check read what you typed before it left and refused it, with the model's categories. Nothing reached \(providerName)."
-            case "local":
-                var p = then(typedIn, l.harmLocal.line(l.harmX, 346).line(l.gateX, 346))
-                p.addPath(answer.path)
-                route = p
-                dots = [MapDot(path: p, duration: 4, colors: [(0, grey), (0.45, Theme.restored)])]
-                story = "Local: your local model answered on this Mac. A harm hit always stays local: handing it back would send it to the provider the check kept it from."
-            default:
-                route = typedOn.path
-                dots = [MapDot(path: typedOn.path, colors: [(0, grey)])]
-                story = "The harm check is off, so your request went to \(providerName) as you typed it."
-            }
+            self = Self.injection(p, s, title: "\(p.agent) fetched a page with an instruction planted for the agent", what: "the page")
+        case .mcp:
+            self = Self.injection(p, s, title: "An MCP server returned an issue with an instruction planted for the agent", what: "the reply")
+        case .harm: self = Self.harm(p, s)
         case .secret:
-            title = "You pasted an API key into your prompt"
-            route = typedOn.path
-            let back = Route(l.providerX, providerBackY).flow(l.commandsCard.maxX, 444).line(l.restoreCard.minX, 444).flow(118, backY - 8)
-            let found = s.observe ? Theme.warning : Theme.masked
-            dots = [MapDot(path: typedOn.path, colors: [(0, grey), (0.6, found)]),
-                    MapDot(path: back.path, delay: 3.5, duration: 2.8, colors: [(0, found), (s.observe ? 2 : 0.62, Theme.restored)])]
-            story = s.observe ? "Observe only: masking found the key and logged it, but the request went to \(providerName) with the real key in it."
-                : "Masking swapped the key for a placeholder before the request left. The reply used the placeholder, and Restore put the real key back before \(agentName) saw it."
+            self = Self.masked(p, s, title: "You pasted an API key into your prompt", what: "the key", personal: false)
+        case .email:
+            self = Self.masked(p, s, title: "You pasted a log with customers' emails in it", what: "each email", personal: true)
         case .command:
-            title = "A reply asked the agent to run curl \u{2026} | sh"
-            let arrive = Route(l.providerX, providerBackY).flow(l.commandsCard.maxX, 465).line(l.commandsX, 465)
-            switch s.commands {
-            case "block":
-                route = then(arrive, l.commands(to: MapLayout.cmdReplaceY))
-                dots = [MapDot(path: route, duration: 3, colors: [(0, grey), (0.4, Theme.blocked)]),
-                        MapDot(path: Route(l.commandsCard.minX, 488).line(l.restoreCard.minX, 488).flow(118, backY + 10).path, delay: 1.5, duration: 2, colors: [(0, Theme.blocked)], size: 8)]
-                story = "Block: the commands check replaced it with a command that tells the agent why it was stopped, and fails. Nothing ran."
+            self = Self.command(p, s, title: "A reply asked the agent to run curl \u{2026} | sh", rule: "a download run as a script")
+        case .wipe:
+            self = Self.command(p, s, title: "A reply asked the agent to run rm -rf ~", rule: "deleting your home folder")
+        case .keys:
+            self = Self.command(p, s, title: "A reply asked the agent to send ~/.ssh with curl", rule: "credential files sent over the network")
+        }
+    }
+
+    private static func then(_ a: Route, _ b: Route) -> Path { var p = a.path; p.addPath(b.path); return p }
+    private static let grey = Theme.textSecondary
+
+    private static func injection(_ p: Places, _ s: MapSettings, title: String, what: String) -> SampleRun {
+        let l = p.l, provider = p.provider
+        let toCard = p.toolIn.line(l.gateRight, 128)
+        switch s.injectionActs {
+        case "warn":
+            return SampleRun(route: p.toolOn.path,
+                             dots: [MapDot(path: p.toolOn.path, colors: [(0, grey)]),
+                                    MapDot(path: l.injection(to: MapLayout.logY).path, delay: 2.4, duration: 1.4, colors: [(0, Theme.warning)])],
+                             title: title, story: "Warn: the request went to \(provider) at once. The injection check read it afterwards, flagged \(what), and logged the hit in Logs.")
+        case "block":
+            let route = then(toCard, l.injection(to: MapLayout.refuseY))
+            return SampleRun(route: route, dots: [MapDot(path: route, colors: [(0, grey), (0.48, Theme.blocked)])],
+                             title: title, story: "Block: the injection check read \(what) before the request left, flagged it and refused the request. Nothing reached \(provider).")
+        case "local":
+            let local = then(toCard, l.injectionLocal)
+            switch s.handback {
+            case "stay":
+                var route = local
+                route.addLine(to: CGPoint(x: l.gateX, y: 346))
+                route.addPath(p.answer.path)
+                return SampleRun(route: route, dots: [MapDot(path: route, duration: 4, colors: [(0, grey), (0.5, Theme.restored)])],
+                                 title: title, story: "Local: the check flagged \(what) before it left. Your local model answered that turn on this Mac, and the conversation stays local.")
+            case "answer":
+                var answered = local
+                answered.addLine(to: CGPoint(x: l.gateX, y: 346))
+                answered.addPath(p.answer.path)
+                var route = answered
+                route.addPath(p.handedBack.path)
+                return SampleRun(route: route,
+                                 dots: [MapDot(path: answered, duration: 4, colors: [(0, grey), (0.5, Theme.restored)]),
+                                        MapDot(path: p.handedBack.path, delay: 4.2, duration: 2.4, colors: [(0, Theme.restored)])],
+                                 title: title, story: "Local answer, then the cloud: the check flagged \(what) before it left, and your local model answered that turn on this Mac. The next turn goes to \(provider) with \(what) withheld and the local answer in its place.")
             default:
-                let on = arrive.line(l.restoreCard.minX, 465).flow(118, backY)
-                route = on.path
-                dots = [MapDot(path: on.path, duration: 3, colors: [(0, grey)])]
-                if s.commands == "warn" {
-                    dots.append(MapDot(path: l.commands(to: MapLayout.cmdLogY).path, delay: 1.5, duration: 1.3, colors: [(0, Theme.warning)]))
-                }
-                story = s.commands == "warn" ? "Warn: the commands check logged it as it arrived, then handed it to the agent, which may still ask you before it runs."
-                    : "The commands check is off, so the agent got the command as written."
+                var route = local
+                route.addLine(to: CGPoint(x: l.gateRight, y: 364))
+                route.addPath(p.handedBack.path)
+                let did = ["summary": "summarised \(what), and the summary went to \(provider) in its place",
+                           "rewrite": "took out what \(what) said to the agent, and the rest went to \(provider)",
+                           "withhold": "was not asked: a notice took its place, and the turn went to \(provider)"][s.handback] ?? ""
+                return SampleRun(route: route, dots: [MapDot(path: route, duration: 4.4, colors: [(0, grey), (0.42, Theme.restored)])],
+                                 title: title, story: "Local, then the cloud: the check flagged \(what) before it left. Your local model \(did). \(what.prefix(1).uppercased() + what.dropFirst()) itself never left this Mac.")
             }
+        default:
+            return SampleRun(route: p.toolOn.path, dots: [MapDot(path: p.toolOn.path, colors: [(0, grey)])], title: title,
+                             story: s.paused ? "The injection check is paused until its model is updated, so \(what) went to \(provider) unchecked."
+                                 : "The injection check is off, so \(what) went to \(provider) unchecked. Masking still ran.")
+        }
+    }
+
+    private static func harm(_ p: Places, _ s: MapSettings) -> SampleRun {
+        let l = p.l, provider = p.provider
+        let title = "You asked for something a policy may not allow, beside your coding task"
+        switch s.harm {
+        case "warn":
+            return SampleRun(route: p.typedOn.path,
+                             dots: [MapDot(path: p.typedOn.path, colors: [(0, grey)]),
+                                    MapDot(path: l.harm(to: MapLayout.logY).path, delay: 2.4, duration: 1.3, colors: [(0, Theme.warning)])],
+                             title: title, story: "Warn: your request went to \(provider) at once. The harm check read it afterwards and logged the hit, with its categories.")
+        case "block":
+            let route = then(p.typedIn, l.harm(to: MapLayout.refuseY))
+            return SampleRun(route: route, dots: [MapDot(path: route, colors: [(0, grey), (0.45, Theme.blocked)])],
+                             title: title, story: "Block: the harm check read what you typed before it left and refused it, with the model's categories. Nothing reached \(provider).")
+        case "local":
+            var local = then(p.typedIn, l.harmLocal.line(l.harmX, 346))
+            if s.harmHandback == "rewrite" {
+                local.addLine(to: CGPoint(x: l.gateRight, y: 364))
+                local.addPath(p.handedBack.path)
+                return SampleRun(route: local, dots: [MapDot(path: local, duration: 4.4, colors: [(0, grey), (0.4, Theme.restored)])],
+                                 title: title, story: "Local rewrite, then the cloud: your local model took the flagged part out of what you typed, kept your coding task as written, and the harm check passed the rest, which went to \(provider). Had it still been flagged, or had nothing been left, the turn would have stayed on this Mac.")
+            }
+            local.addLine(to: CGPoint(x: l.gateX, y: 346))
+            local.addPath(p.answer.path)
+            return SampleRun(route: local, dots: [MapDot(path: local, duration: 4, colors: [(0, grey), (0.45, Theme.restored)])],
+                             title: title, story: "Local: your local model answered on this Mac, and the conversation stays there. With After a local turn › What you typed set to a rewrite, the rest of the request would go to the cloud instead.")
+        default:
+            return SampleRun(route: p.typedOn.path, dots: [MapDot(path: p.typedOn.path, colors: [(0, grey)])], title: title,
+                             story: "The harm check is off, so your request went to \(provider) as you typed it.")
+        }
+    }
+
+    private static func masked(_ p: Places, _ s: MapSettings, title: String, what: String, personal: Bool) -> SampleRun {
+        let l = p.l
+        let back = Route(l.providerX, p.providerBackY).flow(l.commandsCard.maxX, 444).line(l.restoreCard.minX, 444).flow(118, p.backY - 8)
+        let skipped = personal && !s.pii
+        let found = s.observe || skipped ? Theme.warning : Theme.masked
+        let story = skipped ? "Personal data is off (Settings › Masking), so the emails went to \(p.provider) as they were. Secrets in the log were still masked."
+            : s.observe ? "Observe only: masking found \(what) and logged it, but the request went to \(p.provider) with the real value in it."
+            : "Masking swapped \(what) for a placeholder before the request left. The reply used the placeholder, and Restore put the real value back before \(p.agent) saw it."
+        return SampleRun(route: p.typedOn.path,
+                         dots: [MapDot(path: p.typedOn.path, colors: [(0, grey), (0.6, found)]),
+                                MapDot(path: back.path, delay: 3.5, duration: 2.8, colors: [(0, found), (s.observe || skipped ? 2 : 0.62, Theme.restored)])],
+                         title: title, story: story)
+    }
+
+    private static func command(_ p: Places, _ s: MapSettings, title: String, rule: String) -> SampleRun {
+        let l = p.l
+        switch s.commands {
+        case "block":
+            let route = then(p.replyIn, l.commands(to: MapLayout.cmdReplaceY))
+            let fails = Route(l.commandsCard.minX, 488).line(l.restoreCard.minX, 488).flow(118, p.backY + 10)
+            return SampleRun(route: route,
+                             dots: [MapDot(path: route, duration: 3, colors: [(0, grey), (0.4, Theme.blocked)]),
+                                    MapDot(path: fails.path, delay: 1.5, duration: 2, colors: [(0, Theme.blocked)], size: 8)],
+                             title: title, story: "Block: the commands check matched \(rule) and replaced the command with one that tells the agent why it was stopped, and fails. Nothing ran.")
+        default:
+            let on = p.replyIn.line(l.restoreCard.minX, 465).flow(118, p.backY)
+            var dots = [MapDot(path: on.path, duration: 3, colors: [(0, grey)])]
+            if s.commands == "warn" {
+                dots.append(MapDot(path: l.commands(to: MapLayout.cmdLogY).path, delay: 1.5, duration: 1.3, colors: [(0, Theme.warning)]))
+            }
+            return SampleRun(route: on.path, dots: dots, title: title,
+                             story: s.commands == "warn" ? "Warn: the commands check matched \(rule) and logged it as it arrived, then handed it to the agent, which may still ask you before it runs."
+                                 : "The commands check is off, so the agent got the command as written.")
         }
     }
 }
@@ -712,7 +777,8 @@ struct MapDiagram: View {
         line(layout.harm(to: MapLayout.refuseY), Theme.blocked, harmWidth, on: s.harm == "block")
         line(layout.harmLocal, Theme.restored, harmWidth, on: s.harm == "local")
         // The hand-back is for the injection check's hits: drawn faint while that check is not Local.
-        line(layout.handback, inj == "local" ? Theme.restored : Theme.textTertiary, 2, dotted: true, on: s.handback != "stay")
+        line(layout.handback, s.injectionHandsBack || s.harmHandsBack ? Theme.restored : Theme.textTertiary, 2, dotted: true,
+             on: s.handback != "stay" || s.harmHandback == "rewrite")
         line(layout.answer(to: layout.agentsBack.first.map { $0.rect.midY } ?? 459), Theme.restored, 2,
              on: answersLocally)
         line(layout.commands(to: MapLayout.cmdLogY), Theme.warning, 2, dashed: true, on: s.commands == "warn")
@@ -727,15 +793,15 @@ struct MapDiagram: View {
     /// stays local or is answered before the hand-back ("Local answer, then cloud"). A summary, a
     /// rewrite or a notice goes to the cloud, which answers instead.
     private var answersLocally: Bool {
-        (s.injectionActs == "local" && ["stay", "answer"].contains(s.handback)) || s.harm == "local"
+        (s.injectionActs == "local" && ["stay", "answer"].contains(s.handback)) || (s.harm == "local" && s.harmHandback == "stay")
     }
 
     private var answerHelp: String {
         let injection = s.injectionActs == "local" && ["stay", "answer"].contains(s.handback)
-        switch (injection, s.harm == "local") {
+        switch (injection, s.harm == "local" && s.harmHandback == "stay") {
         case (true, true): return "Your local model answers flagged requests and flagged tool results itself, back to the agent."
         case (true, false): return "Your local model answers a turn with a flagged tool result itself, back to the agent."
-        default: return "Your local model answers a flagged request itself, back to the agent: a harm hit always stays on this Mac."
+        default: return "Your local model answers a flagged request itself, back to the agent, and the conversation stays on this Mac."
         }
     }
 
@@ -858,16 +924,20 @@ struct MapDiagram: View {
         terminalLabel("Refused" + (refuseOn && refused > 0 ? " \(refused)" : ""), Theme.blocked, MapLayout.refuseY, on: refuseOn)
         terminalLabel("Logged", Theme.warning, MapLayout.cmdLogY, on: s.commands == "warn", hidden: true)
         terminalLabel("Replaced", Theme.blocked, MapLayout.cmdReplaceY, on: s.commands == "block", hidden: true)
-        let hb = ["answer": "local answer, then the cloud", "summary": "local summary to the cloud",
-                  "rewrite": "local rewrite to the cloud", "withhold": "a notice to the cloud"][s.handback] ?? ""
+        let hb = ["answer": "answer", "summary": "summary", "rewrite": "rewrite", "withhold": "notice"][s.handback] ?? ""
         VStack(alignment: .leading, spacing: 0) {
-            Text(hb).foregroundStyle(inj == "local" ? Theme.restored : Theme.textSecondary)
-            if inj != "local" { Text("injection hits only").foregroundStyle(Theme.textTertiary) }
+            if s.handback != "stay" || s.harmHandback == "rewrite" {
+                Text("to the cloud:").foregroundStyle(s.injectionHandsBack || s.harmHandsBack ? Theme.restored : Theme.textTertiary)
+            }
+            if s.handback != "stay" {
+                Text("tool result: " + hb).foregroundStyle(s.injectionHandsBack ? Theme.restored : Theme.textTertiary).lineLimit(1)
+            }
+            if s.harmHandback == "rewrite" {
+                Text("typed text: rewrite").foregroundStyle(s.harmHandsBack ? Theme.restored : Theme.textTertiary).lineLimit(1)
+            }
         }
-        .font(.km(.caption)).frame(width: 120, alignment: .leading).offset(x: layout.maskX + 70, y: 222)
-        .opacity(s.handback != "stay" ? 1 : 0)
-        .help(inj == "local" ? "After a local turn of the injection check, this goes to the cloud in the flagged result's place"
-              : "The hand-back follows a local turn of the injection check, which is not set to Local. A harm hit always stays on this Mac.")
+        .font(.km(.caption)).frame(width: 132, alignment: .leading).offset(x: layout.maskX + 66, y: 222)
+        .help("A local turn's hand-back to the cloud. Green while its check is set to Local: the injection check for a tool result, the harm check for what you typed.")
         Text("local answer back to the agent").font(.km(.caption)).foregroundStyle(Theme.restored).multilineTextAlignment(.trailing)
             .frame(width: 100, alignment: .trailing).offset(x: layout.gateX - 110, y: 312)
             .opacity(answersLocally ? 1 : 0)
@@ -1036,13 +1106,17 @@ struct MapDiagram: View {
         let servers = "\(s.localServers) server\(s.localServers == 1 ? "" : "s")"
         let detail = !s.localUsed ? "Not used: no check is Local"
             : s.localServers == 0 ? "No server yet: a hit is refused"
-            : s.harm == "local" && s.injectionActs != "local" ? "\(servers) · harm hits stay here"
             : servers + (answered > 0 ? " · \(answered) answered" : "")
         return VStack(alignment: .leading, spacing: Space.xxs) {
             title(.local, icon: "cpu")
             Text(detail).font(.km(.caption)).lineLimit(1)
                 .foregroundStyle(s.localUsed && s.localServers == 0 ? Theme.warning : Theme.textSecondary)
-            handbackMenu.padding(.top, Space.xxs)
+            handbackMenu(icon: "syringe", current: s.handback, choices: LocalHandbackSection.choices,
+                         short: Self.shortHandback, on: s.injectionActs == "local",
+                         heading: "After a local turn: a flagged tool result") { await engine.setLocalHandback($0) }
+            handbackMenu(icon: "exclamationmark.bubble", current: s.harmHandback, choices: LocalHandbackSection.harmChoices,
+                         short: Self.shortHandback, on: s.harm == "local",
+                         heading: "After a local turn: what you typed") { await engine.setLocalHandbackHarm($0) }
         }
         .padding(Space.s)
         .frame(width: rect.width, height: rect.height, alignment: .topLeading)
@@ -1051,36 +1125,6 @@ struct MapDiagram: View {
         .opacity(s.localUsed ? 1 : 0.6)
         .modifier(selectable(.local))
         .offset(x: rect.minX, y: rect.minY)
-    }
-
-    /// What follows a local turn of the injection check (stay, or back to the cloud), on the card.
-    @ViewBuilder private var handbackMenu: some View {
-        let current = LocalHandbackSection.choices.first { $0.id == s.handback } ?? LocalHandbackSection.choices[0]
-        let short = ["stay": "stay local", "answer": "answer, then cloud", "summary": "summary, then cloud",
-                     "rewrite": "rewrite, then cloud", "withhold": "withhold, then cloud"][current.id] ?? current.label
-        let label = HStack(spacing: Space.xxs) {
-            Text("Then:").foregroundStyle(Theme.textSecondary)
-            Text(short).foregroundStyle(Theme.text).lineLimit(1)
-            Image(systemName: "chevron.down").foregroundStyle(Theme.textSecondary)
-        }
-        .font(.km(.caption))
-        if isSnapshot {
-            label
-        } else {
-            Menu {
-                Section("After a local turn of the injection check") {
-                    ForEach(LocalHandbackSection.choices, id: \.id) { c in
-                        Button(c.label + (c.id == s.handback ? " \u{2713}" : "")) {
-                            selected = .local
-                            Task { await engine.setLocalHandback(c.id) }
-                        }
-                    }
-                }
-            } label: { label }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .disabled(!engine.isBundled || engine.busy)
-            .help(current.detail + " For the injection check: a harm hit always stays on this Mac.")
-        }
     }
 
     private var restoreCard: some View {
@@ -1101,6 +1145,39 @@ struct MapDiagram: View {
         .background(cardBackground())
         .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Theme.separator, lineWidth: 1))
         .offset(x: rect.minX, y: rect.minY)
+    }
+
+    private static let shortHandback = ["stay": "stay local", "answer": "answer, then cloud", "summary": "summary, then cloud",
+                                        "rewrite": "rewrite, then cloud", "withhold": "withhold, then cloud"]
+
+    /// What follows a local turn of one check, on the local model's card: its icon, and a menu that changes it.
+    @ViewBuilder private func handbackMenu(icon: String, current: String, choices: [(id: String, label: String, detail: String)],
+                                           short: [String: String], on: Bool, heading: String,
+                                           set: @escaping (String) async -> Void) -> some View {
+        let choice = choices.first { $0.id == current } ?? choices[0]
+        let label = HStack(spacing: Space.xs) {
+            Image(systemName: icon).foregroundStyle(Theme.textSecondary).frame(width: 12)
+            Text(short[choice.id] ?? choice.label).foregroundStyle(on ? Theme.text : Theme.textSecondary).lineLimit(1)
+            Image(systemName: "chevron.down").foregroundStyle(Theme.textSecondary)
+        }
+        .font(.km(.caption))
+        if isSnapshot {
+            label
+        } else {
+            Menu {
+                Section(heading) {
+                    ForEach(choices, id: \.id) { c in
+                        Button(c.label + (c.id == current ? " \u{2713}" : "")) {
+                            selected = .local
+                            Task { await set(c.id) }
+                        }
+                    }
+                }
+            } label: { label }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .disabled(!engine.isBundled || engine.busy)
+            .help(heading + ": " + choice.detail + (on ? "" : " Its check is not set to Local, so this waits."))
+        }
     }
 }
 

@@ -67,7 +67,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .checks: "Optional checks on what tools return, what you type, and the commands in replies"
         case .extensions: "The plugins, hooks and MCP servers in your coding agents' settings, and what other apps added"
         case .localModels: "The models on this Mac that answer what a check keeps local, and how fast they answer"
-        case .handback: "What the cloud model gets after a turn the injection check kept on this Mac, and whether you look first"
+        case .handback: "What the cloud model gets after a turn a check kept on this Mac, and whether you look first"
         case .skills: "Your own instructions for the local model on the turns keepmum keeps on this Mac"
         case .general: "Appearance, updates, and what the Logs page shows"
         case .doctor: "The same checks as keepmum doctor, and this app's connection to keepmum"
