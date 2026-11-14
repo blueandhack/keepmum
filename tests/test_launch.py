@@ -234,3 +234,23 @@ def test_wrapper_reports_a_missing_binary_cleanly(wrapper_env):
     w = wrapper_env
     r = subprocess.run([w["wrapper"], "/nonexistent/claude"], env=w["env"], cwd=w["home"], capture_output=True, text=True, timeout=60)
     assert r.returncode == 2 and r.stdout == "" and "cannot run /nonexistent/claude" in r.stderr and "Traceback" not in r.stderr
+
+
+def test_preload_imports_every_module_the_request_path_loads_lazily():
+    # A running engine's files can be swapped under it (an app update, a rebuild); a module first
+    # imported after that is missing, and every request is refused until a restart.
+    import sys
+
+    failed = launch.preload()
+    assert "keepmum.__main__" not in sys.modules or "keepmum.__main__" not in failed
+    for name in ("keepmum.decoded", "keepmum.guard", "keepmum.harm", "keepmum.codemode", "keepmum.destinations",
+                 "keepmum.commands", "keepmum.handback", "keepmum.encode"):
+        assert name in sys.modules and name not in failed
+
+
+def test_a_scan_failure_names_a_missing_module_and_nothing_else():
+    from keepmum.proxy import failure
+
+    assert failure(ModuleNotFoundError("No module named 'x'", name="keepmum.decoded")) == \
+        "ModuleNotFoundError: keepmum.decoded"
+    assert failure(KeyError("sk-ant-secret-from-the-request")) == "KeyError"

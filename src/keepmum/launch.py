@@ -28,9 +28,34 @@ BYPASS_KEYS = ("ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE
                "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL")
 
 
+def preload() -> list[str]:
+    """Import every keepmum module now, not on the request that first needs one. A running engine's
+    files can be replaced under it: an app update (Sparkle swaps the bundle while the background
+    service still runs from it) or a rebuild. A module first imported after that is missing or from
+    another version, and the scan fails, so the request is refused: on Nov 14, 2026, a rebuild under
+    a running engine refused 60 of Codex's requests in 28 s (ModuleNotFoundError). All of them load
+    in about 20 ms. Returns the modules that could not load (an optional dependency missing)."""
+    import importlib
+    import pkgutil
+
+    from . import __name__ as package, __path__ as path
+
+    failed = []
+    for m in pkgutil.walk_packages(path, package + "."):
+        if m.name == package + ".__main__":  # runs the command line when imported
+            continue
+        try:
+            importlib.import_module(m.name)
+        except Exception as e:  # an optional dependency (rich, mlx...): that module is not used by serve
+            failed.append(m.name)
+            logging.getLogger("keepmum").debug("preload: %s not loaded (%s)", m.name, type(e).__name__)
+    return failed
+
+
 def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, upstream: str | None = None,
                 mode: str = "serve", gateways: dict[str, str] | None = None) -> Proxy:
     """`gateways` (name -> URL) are added for this run to config [gateways], which can change."""
+    preload()
     from .config import LiveConfig
     from .detect.pipeline import default_pipeline
     from .redact import Redactor

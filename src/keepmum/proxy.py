@@ -126,6 +126,13 @@ def found_by(findings: list[dict]) -> Counter:
     return out
 
 
+def failure(e: Exception) -> str:
+    """An exception for the log: its type, and for a module that would not load, which one. Other
+    messages are left out: they can quote the request."""
+    name = getattr(e, "name", None) if isinstance(e, ImportError) else None
+    return f"{type(e).__name__}: {name}" if name else type(e).__name__
+
+
 def api_error(status: int, kind: str, message: str) -> JSONResponse:
     """An error in the Anthropic API's shape, so Claude Code shows it instead of crashing."""
     return JSONResponse({"type": "error", "error": {"type": kind, "message": f"keepmum: {message}"}}, status_code=status)
@@ -455,7 +462,7 @@ class Proxy:
             try:
                 masked, counts, new, found, texts = await anyio.to_thread.run_sync(self._redact, body, t.api, origin)
             except Exception as e:  # any detector or redaction failure: block, never send raw
-                log.error("blocked %s: scan failed (%s)", path, type(e).__name__)
+                log.error("blocked %s: scan failed (%s)", path, failure(e))
                 self._record(path, "blocked", 500, origin=origin)
                 return api_error(500, "api_error", "could not scan this request, so it was not sent")
             # keepmum's own replacements are not tool output: what the local model wrote in them was
