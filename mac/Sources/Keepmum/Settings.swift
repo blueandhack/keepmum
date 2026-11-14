@@ -250,6 +250,9 @@ private struct SettingsRail: View {
             return waiting.isEmpty ? nil : ("\(waiting.count)", waiting.contains { $0.paused } ? Theme.warning : Theme.accent)
         case .checks:
             guard let g = engine.status?.guard else { return nil }
+            // A check left on without its model checks nothing until it is downloaded.
+            if g.injection.mode != "off" && !g.injection.installed { return (g.injection.outdated == true ? "Update" : "To do", Theme.warning) }
+            if g.harm.mode != "off" && g.harm.installed[g.harm.model] != true { return ("To do", Theme.warning) }
             let on = [g.injection.mode, g.harm.mode, g.commands?.mode ?? "off"].filter { $0 != "off" }.count
             return on == 0 ? nil : ("\(on) on", Theme.textSecondary)
         case .extensions:

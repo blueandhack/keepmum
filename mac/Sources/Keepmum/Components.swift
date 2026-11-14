@@ -128,6 +128,19 @@ struct FormSection<Content: View>: View {
     }
 }
 
+/// When a row happened: its date and time, so rows kept across days read apart ("Nov 13 19:11:12").
+struct Stamp: View {
+    var date: Date
+    static let width: CGFloat = 128
+
+    var body: some View {
+        Text(verbatim: date.formatted(.dateTime.month(.abbreviated).day()) + " " + date.formatted(.dateTime.hour().minute().second()))
+            .font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+            .frame(width: Self.width, alignment: .leading)
+            .help(date.formatted(date: .complete, time: .standard))
+    }
+}
+
 /// One row of a FormSection: what it is on the left, its control on the right.
 struct FormRow<Control: View>: View {
     var title: String

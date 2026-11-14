@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// Settings › Checks: the optional checks (`keepmum guard`). Injection looks at what tools return for
-/// planted instructions; harm looks at what you type. Each model is downloaded only from here or
-/// `keepmum guard setup`, loads on first use and unloads after 10 idle minutes.
+/// Settings › Checks: the optional checks (`keepmum guard`), one section each. Injection looks at what
+/// tools return for planted instructions; harm looks at what you type; risky commands at the shell
+/// commands in replies. Each model is downloaded only from here or `keepmum guard setup`, loads on
+/// first use and unloads after 10 idle minutes.
 struct ChecksSection: View {
     var engine: Engine
     @State private var confirmingRemove: String?
@@ -17,19 +18,16 @@ struct ChecksSection: View {
     private var memoryGB: Double { Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824 }
 
     var body: some View {
-        FormSection(title: "Checks",
-                    footer: "Each check is off until you turn it on. Warn logs a hit, Block refuses it, and Local answers it on this Mac. None of them replaces masking.",
-                    details: "Optional, and off until you turn one on. Warn sends a request at once and checks it afterwards, so it adds no delay; Block checks first and refuses what it flags, and every retry of it. Local checks first, like Block, and sends what it flags to a model on this Mac instead of the cloud (Local servers). Risky commands reads the model's replies instead: Block hands the agent a refusal in place of the command. Logs shows each hit with what it flagged and what you had asked, masked values as their types, in memory only (with text around values on); the audit log keeps the check, the score and the length, never the text. None of them replaces masking.") {
+        VStack(alignment: .leading, spacing: Space.xl) {
             if let checks {
+                legend
                 injection(checks.injection)
-                Hairline()
                 harm(checks.harm)
-                if let commands = checks.commands {
-                    Hairline()
-                    self.commands(commands)
-                }
+                if let commands = checks.commands { self.commands(commands) }
             } else {
-                FormRow(title: "Not available", detail: engine.isBundled ? "This engine has no optional checks" : "Needs the bundled engine") { EmptyView() }
+                FormSection(title: "Checks") {
+                    FormRow(title: "Not available", detail: engine.isBundled ? "This engine has no optional checks" : "Needs the bundled engine") { EmptyView() }
+                }
             }
         }
         .alert(confirmingRemove == "harm" ? "Remove the harm check's models?" : "Remove the injection check's model?",
@@ -44,34 +42,81 @@ struct ChecksSection: View {
         }
     }
 
+    /// What the modes do, once for all three checks.
+    private var legend: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text("Each check is off until you turn it on. **Warn** sends a request at once and logs a hit afterwards. **Block** checks first and refuses a hit. **Local** checks first and answers a hit with a model on this Mac. None of them replaces masking.")
+                .font(.km(.callout)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, Space.xs)
+    }
+
     // MARK: Injection
 
     @ViewBuilder private func injection(_ c: Engine.Checks.Injection) -> some View {
-        FormRow(title: "Prompt injection",
-                detail: c.installed ? injectionDetail(c.mode) :
-                    c.outdated == true ? "An updated model is ready: keepmum downloads it when its service starts, or download it now" :
-                    "Checks what tools return (web pages, files, MCP replies) for instructions planted for the agent",
-                detailTone: c.mode == "off" ? Theme.textSecondary : Theme.text) {
-            if c.installed {
-                modePicker(c.mode, options: modesWithLocal) { await engine.setCheck("injection", mode: $0) }
-            } else if engine.checkDownload?.what == "injection" {
-                progress(engine.checkDownload?.progress ?? 0)
-            } else {
-                PillButton(title: "Download (164 MB)", icon: "arrow.down.circle") {
-                    Task { await engine.setUpCheck("injection") }
+        let downloading = engine.checkDownload?.what == "injection"
+        // A check left on with no model in place: the old model, or a deleted one. It checks nothing.
+        let stalled = !c.installed && c.mode != "off"
+        FormSection(title: "Prompt injection",
+                    footer: "Reads what tools return (web pages, files, MCP replies, command output) for instructions planted for the agent.",
+                    details: "Warn sends a request at once and checks its tool results afterwards, so it adds no delay. Block checks first and refuses a request carrying a likely injection, and every retry of it. Local checks first and sends it to a model on this Mac instead of the cloud (Local models). A tool result is read in windows of 2,048 tokens, and the most likely window counts; one under \(c.shortChars ?? 200) characters needs a higher score. Logs shows each hit with what it flagged and what you had asked, masked values as their types, in memory only (with text around values on); the audit log keeps the check, the score and the length, never the text.") {
+            if c.installed || stalled {
+                FormRow(title: "Mode", detail: stalled ? "Paused: no model to check with" : injectionDetail(c.mode),
+                        detailTone: stalled ? Theme.warning : c.mode == "off" ? Theme.textSecondary : Theme.text) {
+                    modePicker(c.mode, options: modesWithLocal) { await engine.setCheck("injection", mode: $0) }
                 }
-                .disabled(!engine.isBundled || engine.busy)
             }
-        }
-        if c.installed, let levels = c.levels, let threshold = c.threshold {
-            sensitivity(c, levels: levels, threshold: threshold)
-        }
-        if c.installed {
-            modelLine("Prompt Injection Guard Small by Horizon Labs, fine-tuned by keepmum · Apache-2.0 · 0.4 GB while in use", remove: "injection")
+            if !c.installed {
+                if stalled { Hairline() }
+                FormRow(title: c.outdated == true ? "Model update" : "Model",
+                        detail: injectionSetup(c, stalled: stalled),
+                        detailTone: stalled ? Theme.warning : Theme.textSecondary) {
+                    if downloading {
+                        progress(engine.checkDownload?.progress ?? 0)
+                    } else {
+                        PillButton(title: (c.outdated == true ? "Update" : "Download") + " (164 MB)",
+                                   icon: "arrow.down.circle", prominent: stalled) {
+                            Task { await engine.setUpCheck("injection") }
+                        }
+                        .disabled(!engine.isBundled || engine.busy)
+                    }
+                }
+            }
+            if c.installed, let levels = c.levels, let threshold = c.threshold {
+                Hairline()
+                sensitivity(c, levels: levels, threshold: threshold)
+            }
+            if c.installed {
+                Hairline()
+                modelLine("Prompt Injection Guard Small \(c.release ?? ""), by Horizon Labs, fine-tuned by keepmum for coding-agent tool output · \(c.licence) · 0.4 GB while in use",
+                          card: c.repo, remove: "injection")
+            }
+            if c.server == nil, c.installed { llamaServerMissing }
         }
     }
 
+    private func injectionSetup(_ c: Engine.Checks.Injection, stalled: Bool) -> String {
+        if c.outdated == true {
+            return stalled
+                ? "This keepmum checks with its own fine-tune, which catches more injections in agent tool output. Until it is downloaded the check is paused; the background service downloads it when it starts."
+                : "keepmum\u{2019}s fine-tune replaces the earlier model: it catches more injections in agent tool output. Download it to turn the check on."
+        }
+        return stalled ? "The check is on, but its model is missing: download it again."
+                       : "Prompt Injection Guard Small, fine-tuned by keepmum for coding-agent tool output. 0.4 GB while in use."
+    }
+
     private static let levelOrder = [("high", "High"), ("medium", "Medium"), ("low", "Low"), ("lowest", "Lowest")]
+
+    /// A share as people read it: one decimal under 10%, so 1.5% and 2.6% stay apart.
+    static func pct(_ x: Double) -> String {
+        x == 0 ? "none" : x < 0.001 ? "<0.1%" : x < 0.1 ? String(format: "%.1f%%", x * 100) : "\(Int((x * 100).rounded()))%"
+    }
+
+    /// "about 1 in 67", for a rate that small.
+    static func oneIn(_ x: Double) -> String? {
+        guard x > 0, x < 0.2 else { return nil }
+        return "about 1 in \(Int((1 / x).rounded()))"
+    }
 
     /// How readily the injection check flags: four levels from the benchmark, or a custom number
     /// set with `keepmum guard sensitivity injection`.
@@ -88,39 +133,46 @@ struct ChecksSection: View {
         }
     }
 
-    /// The level and its two numbers that matter; the rest is in the row's tooltip.
+    /// The levels differ in false alarms; when they all catch the same share, say so once.
     private func sensitivitySummary(_ c: Engine.Checks.Injection, levels: [String: Engine.Checks.Injection.Level],
                                     current: String?, threshold: Double, isDefault: Bool) -> String {
-        let pct = { (x: Double) in x == 0 ? "none" : x < 0.01 ? "<1%" : "\(Int((x * 100).rounded()))%" }
         guard let current, let l = levels[current] else {
-            return "Custom: flags a tool result scoring \(String(format: "%.2f", threshold)) or more. Lower is stricter."
+            return "Custom: flags a tool result scoring \(Self.score(threshold)) or more. Lower is stricter."
         }
         let which = current.capitalized + (isDefault ? " (the default)" : "")
-        let flags = l.sessions.map { "flags \(pct($0)) of real tool results" } ?? "flags \(pct(l.ordinary)) of ordinary pages"
-        return "\(which): catches \(pct(l.caught)) of injections in keepmum\u{2019}s tests, \(flags)"
+        let same = Set(levels.values.map { ($0.caught * 1000).rounded() }).count == 1
+        let flags = l.sessions.map { s in "flags \(Self.oneIn(s) ?? Self.pct(s)) real tool results (\(Self.pct(s)))" }
+            ?? "flags \(Self.pct(l.ordinary)) of ordinary pages"
+        return "\(which): \(flags). Catches \(Self.pct(l.caught)) of the injections in keepmum\u{2019}s tests" + (same ? ", as every level does." : ".")
     }
 
     private func sensitivityDetail(_ c: Engine.Checks.Injection, levels: [String: Engine.Checks.Injection.Level],
                                    current: String?, threshold: Double, isDefault: Bool) -> String {
-        let pct = { (x: Double) in x == 0 ? "none" : x < 0.01 ? "<1%" : "\(Int((x * 100).rounded()))%" }
-        let score = String(format: "%.2f", threshold)
-        let short = c.shortThreshold.flatMap { t in c.shortChars.map { " (\(String(format: "%.3g", t)) under \($0) characters)" } } ?? ""
+        let short = c.shortThreshold.flatMap { t in
+            c.shortChars.map { abs(t - threshold) < 0.0005 ? "" : " (\(Self.score(t)) under \($0) characters)" }
+        } ?? ""
         guard let current, let l = levels[current] else {
-            return "Custom: flags a tool result scoring \(score) or more\(short) (keepmum guard sensitivity injection). Lower is stricter."
+            return "Custom: flags a tool result scoring \(Self.score(threshold)) or more\(short) (keepmum guard sensitivity injection). Lower is stricter."
         }
         let which = current.capitalized + (isDefault ? " (the default)" : "")
-        let catches = "On keepmum's test set: catches \(pct(l.caught)) of injections, and flags \(pct(l.ordinary)) of ordinary pages and \(pct(l.security)) of security code and writing."
-        let sessions = l.sessions.map { " On real Claude Code and Codex sessions: flags \(pct($0)) of tool results." } ?? ""
-        let advice = current == "high" ? " More false alarms than Medium, for a few more catches." :
+        let catches = "On keepmum's test set: catches \(Self.pct(l.caught)) of injections, and flags \(Self.pct(l.ordinary)) of ordinary pages and \(Self.pct(l.security)) of security code and writing."
+        let sessions = l.sessions.map { " On real Claude Code, Codex and Gemini CLI sessions: flags \(Self.pct($0)) of tool results." } ?? ""
+        let advice = current == "high" ? " More false alarms than Medium, for a few more catches of subtle injections." :
                      current == "lowest" ? " The fewest false alarms; may miss a few subtle injections." : ""
-        return "\(which): flags a tool result scoring \(score) or more\(short). \(catches)\(sessions)\(advice)"
+        return "\(which): flags a tool result scoring \(Self.score(threshold)) or more\(short). \(catches)\(sessions)\(advice)"
+    }
+
+    /// A threshold as written in the config: three decimals where it has them.
+    static func score(_ t: Double) -> String {
+        let s = String(format: "%.3f", t)
+        return s.hasSuffix("0") ? String(format: "%.2f", t) : s
     }
 
     private func injectionDetail(_ mode: String) -> String {
         switch mode {
-        case "local": "Tool results are checked before each request is sent; one with a likely injection is answered by your local model instead"
-        case "warn": "Tool results are checked after each request is sent; a likely injection is logged"
-        case "block": "Requests carrying a likely injection in a tool result are refused"
+        case "local": "Checked before each request is sent; a likely injection is answered by your local model instead"
+        case "warn": "Checked after each request is sent; a likely injection is logged"
+        case "block": "Checked before each request is sent; one carrying a likely injection is refused"
         default: "Off: tool results are not checked"
         }
     }
@@ -130,106 +182,129 @@ struct ChecksSection: View {
     @ViewBuilder private func harm(_ c: Engine.Checks.Harm) -> some View {
         let have = c.installed[c.model] ?? false
         let downloading = engine.checkDownload?.what.hasPrefix("harm") == true
-        FormRow(title: "Harmful requests",
-                detail: have ? harmDetail(c.mode) : "Checks what you type, without what agents add to your turn, for requests a policy may not allow",
-                detailTone: c.mode == "off" ? Theme.textSecondary : Theme.text) {
-            if have {
-                modePicker(c.mode, options: modesWithLocal) { await engine.setCheck("harm", mode: $0) }
-            } else if downloading {
-                progress(engine.checkDownload?.progress ?? 0)
-            } else {
-                PillButton(title: "Download (\(Self.downloadSize[c.model] ?? ""))", icon: "arrow.down.circle") {
-                    Task { await engine.setUpCheck("harm", model: c.model) }
-                }
-                .disabled(!engine.isBundled || engine.busy)
-            }
-        }
-        Hairline()
-        FormRow(title: "Harm model", detail: sizeDetail(c), detailTone: c.model == "4b" && memoryGB < 32 ? Theme.warning : Theme.textSecondary) {
-            if isSnapshot {
-                Segmented(options: Self.sizes, selection: .constant(c.model))
-            } else {
-                Segmented(options: Self.sizes, selection: Binding(get: { c.model }, set: { size in
-                    guard size != c.model else { return }
-                    Task {
-                        if !(c.installed[size] ?? false) {
-                            await engine.setUpCheck("harm", model: size)
-                            guard engine.status?.guard?.harm.installed[size] == true else { return }
-                        }
-                        await engine.setCheck("harm", mode: engine.status?.guard?.harm.mode ?? c.mode, model: size)
+        FormSection(title: "Harmful requests",
+                    footer: "Reads what you type, without what agents add to your turn, for requests a policy may not allow.",
+                    details: "Warn sends a request at once and checks it afterwards, so it adds no delay. Block checks first and refuses a flagged request with the model's categories, and every retry of it. Local checks first and answers it with a model on this Mac; a harm hit always stays local, since handing it back would send it to the provider the check kept it from. Only what you typed is read: tool results, files and the agent's own text are not.") {
+            FormRow(title: "Mode",
+                    detail: have ? harmDetail(c.mode) : "Download the model below to turn it on",
+                    detailTone: have && c.mode != "off" ? Theme.text : Theme.textSecondary) {
+                if have {
+                    modePicker(c.mode, options: modesWithLocal) { await engine.setCheck("harm", mode: $0) }
+                } else if downloading {
+                    progress(engine.checkDownload?.progress ?? 0)
+                } else {
+                    PillButton(title: "Download (\(Self.harmModels[c.model]?.download ?? ""))", icon: "arrow.down.circle") {
+                        Task { await engine.setUpCheck("harm", model: c.model) }
                     }
-                }))
-                .disabled(!engine.isBundled || engine.busy || downloading)
+                    .disabled(!engine.isBundled || engine.busy)
+                }
             }
-        }
-        if have, let levels = c.levels, let level = c.sensitivity, levels[level] != nil {
             Hairline()
-            FormRow(title: "Sensitivity", detail: harmSensitivitySummary(levels, level, model: c.model),
-                    help: harmSensitivityDetail(levels, level, model: c.model)) {
-                modePicker(level, options: Self.levelOrder) { await engine.setHarmSensitivity($0) }
+            FormRow(title: "Model", detail: modelDetail(c), detailTone: c.model == "4b" && memoryGB < 32 ? Theme.warning : Theme.textSecondary,
+                    help: Self.harmComparison) {
+                if isSnapshot {
+                    Segmented(options: Self.sizes, selection: .constant(c.model))
+                } else {
+                    Segmented(options: Self.sizes, selection: Binding(get: { c.model }, set: { size in
+                        guard size != c.model else { return }
+                        Task {
+                            if !(c.installed[size] ?? false) {
+                                await engine.setUpCheck("harm", model: size)
+                                guard engine.status?.guard?.harm.installed[size] == true else { return }
+                            }
+                            await engine.setCheck("harm", mode: engine.status?.guard?.harm.mode ?? c.mode, model: size)
+                        }
+                    }))
+                    .disabled(!engine.isBundled || engine.busy || downloading)
+                }
             }
-        }
-        if c.installed.values.contains(true) {
-            modelLine("Content Safety Guard by Horizon Labs (Small), Qwen3Guard-Gen by the Qwen team (0.6B, 4B) · Apache-2.0 · downloaded: "
-                      + Self.sizes.filter { c.installed[$0.0] == true }.map(\.1).joined(separator: ", "), remove: "harm")
-        }
-        if c.server == nil {
-            modelLine("llama-server, which both checks run in, is not found: the app bundles it; on the command line, brew install llama.cpp", tone: Theme.warning)
-        }
-    }
-
-    // MARK: Commands
-
-    @ViewBuilder private func commands(_ c: Engine.Checks.Commands) -> some View {
-        FormRow(title: "Risky commands", detail: commandsDetail(c.mode), detailTone: c.mode == "off" ? Theme.textSecondary : Theme.text) {
-            modePicker(c.mode) { await engine.setCheck("commands", mode: $0) }
-        }
-        modelLine("Rules, no download: " + c.rules.joined(separator: " · "))
-    }
-
-    private func commandsDetail(_ mode: String) -> String {
-        switch mode {
-        case "warn": "Shell commands in the model's replies are checked as they arrive; a risky one is logged, then handed to the agent"
-        case "block": "A risky shell command in a reply is replaced by one that tells the agent why and fails"
-        default: "Checks the shell commands a model asks your agent to run: curl | sh, rm -rf ~, keys sent out"
+            if have, let levels = c.levels, let level = c.sensitivity, levels[level] != nil {
+                Hairline()
+                FormRow(title: "Sensitivity", detail: harmSensitivitySummary(levels, level, model: c.model),
+                        help: harmSensitivityDetail(levels, level, model: c.model)) {
+                    modePicker(level, options: Self.levelOrder) { await engine.setHarmSensitivity($0) }
+                }
+            }
+            if c.installed.values.contains(true) {
+                Hairline()
+                modelLine((Self.harmModels[c.model]?.name ?? c.model) + " · \(c.licence) · downloaded: "
+                          + Self.sizes.filter { c.installed[$0.0] == true }.map(\.1).joined(separator: ", "), remove: "harm")
+            }
+            if c.server == nil { llamaServerMissing }
         }
     }
 
     private func harmSensitivitySummary(_ levels: [String: Engine.Checks.Harm.Level], _ level: String, model: String) -> String {
         guard let l = levels[level] else { return "" }
-        let pct = { (x: Double) in x == 0 ? "none" : x < 0.01 ? "<1%" : "\(Int((x * 100).rounded()))%" }
         let which = level == "medium" ? "Medium (the default)" : level.capitalized
-        return "\(which): catches \(pct(l.caught)) of harmful prompts, flags \(pct(l.safe)) of safe ones"
+        return "\(which): catches \(Self.pct(l.caught)) of harmful prompts, flags \(Self.pct(l.safe)) of safe ones"
     }
 
     private func harmSensitivityDetail(_ levels: [String: Engine.Checks.Harm.Level], _ level: String, model: String) -> String {
         guard let l = levels[level] else { return "" }
-        let pct = { (x: Double) in x == 0 ? "none" : x < 0.01 ? "<1%" : "\(Int((x * 100).rounded()))%" }
         let name = Self.sizes.first { $0.0 == model }?.1 ?? model
         let which = level == "medium" ? "Medium (the default)" : level.capitalized
         let advice = level == "high" ? " Flags one safe prompt in ten." :
                      level == "lowest" || level == "low" ? " Misses more: about half of harmful prompts at Lowest." : ""
-        return "\(which) on \(name): on keepmum's test set, catches \(pct(l.caught)) of harmful prompts, and flags \(pct(l.safe)) of safe ones and \(pct(l.coding)) of coding prompts that only sound harmful.\(advice) The level carries over if you change the model."
+        return "\(which) on \(name): on keepmum's test set, catches \(Self.pct(l.caught)) of harmful prompts, and flags \(Self.pct(l.safe)) of safe ones and \(Self.pct(l.coding)) of coding prompts that only sound harmful.\(advice) The level carries over if you change the model."
     }
 
     private func harmDetail(_ mode: String) -> String {
         switch mode {
-        case "local": "What you type is checked before each request is sent; a flagged request is answered by your local model instead"
-        case "warn": "What you type is checked after each request is sent; a flagged request is logged"
-        case "block": "Requests whose typed text the model flags are refused, with its categories"
+        case "local": "Checked before each request is sent; a flagged request is answered by your local model instead"
+        case "warn": "Checked after each request is sent; a flagged request is logged"
+        case "block": "Checked before each request is sent; a flagged one is refused, with the model's categories"
         default: "Off: what you type is not checked"
         }
     }
 
     private static let sizes = [("small", "Small"), ("0.6b", "0.6B"), ("4b", "4B")]
-    private static let downloadSize = ["small": "164 MB", "0.6b": "805 MB", "4b": "4.7 GB"]
+    /// Each harm model: who made it, its download, and how it did at Medium on keepmum's benchmark.
+    private static let harmModels: [String: (name: String, download: String, caught: String, memory: String, note: String)] = [
+        "small": ("Content Safety Guard Small by Horizon Labs", "164 MB", "66%", "0.4 GB", "the fastest"),
+        "0.6b": ("Qwen3Guard-Gen 0.6B by the Qwen team", "805 MB", "76%", "1.1 GB", ""),
+        "4b": ("Qwen3Guard-Gen 4B by the Qwen team", "4.7 GB", "82%", "4.9 GB", "a little slower"),
+    ]
+    private static let harmComparison = "At Medium sensitivity on keepmum's test set. Small: 66% of harmful prompts caught, 0.4 GB while in use, the fastest. 0.6B: 76%, 1.1 GB. 4B: 82%, 4.9 GB, a little slower."
 
-    private func sizeDetail(_ c: Engine.Checks.Harm) -> String {
-        let note = "At Medium sensitivity, Small: 66% of harmful prompts caught, 0.4 GB while in use, the fastest · 0.6B: 76%, 1.1 GB · 4B: 82%, 4.9 GB, a little slower"
+    private func modelDetail(_ c: Engine.Checks.Harm) -> String {
+        guard let m = Self.harmModels[c.model], let name = Self.sizes.first(where: { $0.0 == c.model })?.1 else { return Self.harmComparison }
+        var parts = ["\(name): catches \(m.caught) of harmful prompts at Medium", "\(m.memory) while in use"]
+        if !m.note.isEmpty { parts.append(m.note) }
+        if c.installed[c.model] != true { parts.append("a \(m.download) download") }
+        let line = parts.joined(separator: " · ")
         if c.model == "4b" && memoryGB < 32 {
-            return "The 4B takes 4.9 GB while in use, a lot for this Mac's \(Int(memoryGB.rounded())) GB. " + note
+            return "The 4B takes 4.9 GB while in use, a lot for this Mac's \(Int(memoryGB.rounded())) GB. " + line
         }
-        return note
+        return line
+    }
+
+    // MARK: Commands
+
+    @ViewBuilder private func commands(_ c: Engine.Checks.Commands) -> some View {
+        FormSection(title: "Risky commands",
+                    footer: "Reads the shell commands a model asks your agent to run, as they arrive. Rules only: nothing to download.") {
+            FormRow(title: "Mode", detail: commandsDetail(c.mode), detailTone: c.mode == "off" ? Theme.textSecondary : Theme.text) {
+                modePicker(c.mode) { await engine.setCheck("commands", mode: $0) }
+            }
+            Hairline()
+            VStack(alignment: .leading, spacing: Space.s) {
+                Text("What it looks for").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                ChipFlow(spacing: Space.xs) {
+                    ForEach(c.rules, id: \.self) { Chip(text: $0) }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, Space.m)
+        }
+    }
+
+    private func commandsDetail(_ mode: String) -> String {
+        switch mode {
+        case "warn": "A risky command is logged, then handed to the agent"
+        case "block": "A risky command is replaced by one that tells the agent why and fails"
+        default: "Off: commands in replies are not checked"
+        }
     }
 
     // MARK: Pieces
@@ -256,17 +331,69 @@ struct ChecksSection: View {
         }
     }
 
-    private func modelLine(_ text: String, tone: Color = Theme.textSecondary, remove: String? = nil) -> some View {
-        HStack(spacing: Space.s) {
+    private var llamaServerMissing: some View {
+        modelLine("llama-server, which this check runs in, is not found: the app bundles it; on the command line, brew install llama.cpp", tone: Theme.warning)
+    }
+
+    /// The model's name and licence, a link to its card, and Remove.
+    private func modelLine(_ text: String, tone: Color = Theme.textSecondary, card: String? = nil, remove: String? = nil) -> some View {
+        HStack(spacing: Space.m) {
             Text(text).font(.km(.caption)).foregroundStyle(tone).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: Space.s)
+            if let card, let url = URL(string: "https://huggingface.co/\(card)") {
+                Button("Model card") { NSWorkspace.shared.open(url) }
+                    .buttonStyle(.plain).font(.km(.caption)).foregroundStyle(Theme.accent)
+                    .help(url.absoluteString)
+            }
             if let remove {
                 Button("Remove") { confirmingRemove = remove }
                     .buttonStyle(.plain).font(.km(.caption)).foregroundStyle(Theme.accent)
                     .disabled(!engine.isBundled || engine.busy)
             }
         }
-        .padding(.bottom, Space.s + Space.xxs)
+        .padding(.vertical, Space.s + Space.xxs)
+    }
+}
+
+/// Chips that wrap onto as many lines as they need.
+struct ChipFlow: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(subviews, width: proposal.width ?? .infinity)
+        let width = rows.map { $0.width }.max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: proposal.width ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for i in row.items {
+                let size = subviews[i].sizeThatFits(.unspecified)
+                subviews[i].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> [(items: [Int], width: CGFloat, height: CGFloat)] {
+        var rows: [(items: [Int], width: CGFloat, height: CGFloat)] = []
+        var cur: (items: [Int], width: CGFloat, height: CGFloat) = ([], 0, 0)
+        for i in subviews.indices {
+            let size = subviews[i].sizeThatFits(.unspecified)
+            let next = cur.items.isEmpty ? size.width : cur.width + spacing + size.width
+            if !cur.items.isEmpty && next > width {
+                rows.append(cur)
+                cur = ([i], size.width, size.height)
+            } else {
+                cur = (cur.items + [i], next, max(cur.height, size.height))
+            }
+        }
+        if !cur.items.isEmpty { rows.append(cur) }
+        return rows
     }
 }
 

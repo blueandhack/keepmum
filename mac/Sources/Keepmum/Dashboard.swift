@@ -349,7 +349,7 @@ struct ActivityTable: View {
     var body: some View {
         VStack(spacing: 0) {
             ColumnHeader {
-                Text("Time").frame(width: 70, alignment: .leading)
+                Text("Time").frame(width: Stamp.width, alignment: .leading)
                 Text("Outcome").frame(width: 90, alignment: .leading)
                 if !compact { Text("Endpoint").frame(width: 170, alignment: .leading) }
                 Text("Masked").frame(maxWidth: .infinity, alignment: .leading)
@@ -379,8 +379,7 @@ struct ActivityTable: View {
         let earlier = e.kind == .clean && !e.redacted.isEmpty
         let restored = e.restored.values.reduce(0, +)
         return TableRow {
-            Text(e.date, format: .dateTime.hour().minute().second())
-                .font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary).frame(width: 70, alignment: .leading)
+            Stamp(date: e.date)
             OutcomeLabel(kind: e.kind)
                 .help(earlier ? "Nothing new to mask; earlier turns, which Claude Code resends, still held masked values" : "")
                 .frame(width: 90, alignment: .leading)

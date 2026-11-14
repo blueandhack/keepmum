@@ -187,7 +187,7 @@ struct ChecksCard: View {
                  : "\(hits.count) flagged: \(r["blocked"] ?? 0) stopped, \(r["local"] ?? 0) answered on this Mac, \(r["warned"] ?? 0) sent with a warning. Click one for details.") {
             VStack(spacing: 0) {
                 ColumnHeader {
-                    Text("Time").frame(width: 70, alignment: .leading)
+                    Text("Time").frame(width: Stamp.width, alignment: .leading)
                     Text("Agent").frame(width: 92, alignment: .leading)
                     Text("Check").frame(width: 100, alignment: .leading)
                     Text("Flagged").frame(maxWidth: .infinity, alignment: .leading)
@@ -213,8 +213,7 @@ struct ChecksCard: View {
     private func row(_ h: Snapshot.GuardHit) -> some View {
         CheckRow(hit: h, texts: h.seq.flatMap { store.checkTexts[$0] }, contextOn: store.contextOn,
                  selected: Binding(get: { selected == h.id }, set: { selected = $0 ? h.id : nil })) {
-            Text(h.date, format: .dateTime.hour().minute().second())
-                .font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary).frame(width: 70, alignment: .leading)
+            Stamp(date: h.date)
             HStack(spacing: Space.s - Space.xxs) {
                 Circle().fill(clientColor(h.client ?? "claude-code")).frame(width: 7, height: 7)
                 Text(agentName(h.client)).lineLimit(1)
@@ -488,9 +487,11 @@ struct CheckDetail: View {
 
     private func score(_ h: Snapshot.GuardHit) -> String {
         if h.isRule { return "A rule matched" }
-        let s = String(format: "%.2f", h.score)
-        guard let t = h.threshold else { return s }
-        return "\(s), at or over the \(String(format: "%.2f", t)) threshold (1.00 is certain)"
+        guard let t = h.threshold else { return String(format: "%.2f", h.score) }
+        let threshold = ChecksSection.score(t)
+        // As many decimals as the threshold has, so a score just over it does not read as equal.
+        let s = String(format: threshold.count > 4 ? "%.3f" : "%.2f", h.score)
+        return "\(s), at or over the \(threshold) threshold (1.00 is certain)"
     }
 
     private func modeName(_ mode: String) -> String {
@@ -542,7 +543,7 @@ struct LogsPage: View {
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, Space.s)
                     }
                     ColumnHeader {
-                        Text("Time").frame(width: 70, alignment: .leading)
+                        Text("Time").frame(width: Stamp.width, alignment: .leading)
                         Text("Agent").frame(width: 92, alignment: .leading)
                         Text("Type").frame(width: 100, alignment: .leading)
                         Text("Value").frame(width: 168, alignment: .leading)
@@ -621,8 +622,7 @@ struct LogsPage: View {
     }
 
     @ViewBuilder private func cells(_ f: Finding) -> some View {
-            Text(f.date, format: .dateTime.hour().minute().second())
-                .font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary).frame(width: 70, alignment: .leading)
+            Stamp(date: f.date)
             HStack(spacing: Space.s - Space.xxs) {
                 Circle().fill(clientColor(f.client ?? "claude-code")).frame(width: 7, height: 7)
                 Text(f.clientName).lineLimit(1)
