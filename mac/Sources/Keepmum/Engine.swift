@@ -1142,7 +1142,8 @@ final class Engine {
     /// For snapshots: an engine that is set up and protecting Claude Code; with `starting`, one
     /// whose background service was just started and has yet to answer.
     /// With `around`, Claude Code was pointed back at the gateway keepmum was in front of.
-    static func preview(starting: Bool = false, around: Bool = false, localOff: Bool = false, outdated: Bool = false) -> Engine {
+    static func preview(starting: Bool = false, around: Bool = false, localOff: Bool = false, outdated: Bool = false,
+                        harmOnlyLocal: Bool = false) -> Engine {
         let e = Engine()
         e.previewing = true
         e.status = Status(model: "~/.local/share/keepmum/models/privacy-filter-q8.gguf", modelSize: 1_637_572_192,
@@ -1156,7 +1157,7 @@ final class Engine {
                           clients: ["codex": .init(installed: true, on: true, via: "http://127.0.0.1:3425/v1"),
                                     "pi": .init(installed: true, on: false, other: .many(["openai"]), otherUrl: "https://llm.corp.example/v1")],
                           destinations: ["gitlab-token": ["gitlab.corp.example"]], previews: true, context: true, keepDays: 90,
-                          guard: .init(injection: .init(mode: localOff ? "warn" : "local", installed: !outdated, outdated: outdated,
+                          guard: .init(injection: .init(mode: harmOnlyLocal ? "off" : localOff ? "warn" : "local", installed: !outdated, outdated: outdated,
                                                         server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0",
                                                         threshold: 0.222, defaultThreshold: 0.222, shortChars: 200, shortThreshold: 0.222,
                                                         levels: ["high": .init(threshold: 0.185, caught: 0.972, ordinary: 0.023, security: 0.04, short: 0.185, sessions: 0.026),
@@ -1165,7 +1166,7 @@ final class Engine {
                                                                  "lowest": .init(threshold: 0.298, caught: 0.972, ordinary: 0.016, security: 0.026, short: 0.354, sessions: 0.004)],
                                                         model: "keepmum/prompt-injection-guard-small-ft-gguf@5f2c815c67019db09de67f196cf30c9a0f74df87",
                                                         source: "Horizon-Labs/prompt-injection-guard-small@v2.3-km1"),
-                                       harm: .init(mode: "block", model: "small", installed: ["small": true, "0.6b": false, "4b": false],
+                                       harm: .init(mode: harmOnlyLocal ? "local" : "block", model: "small", installed: ["small": true, "0.6b": false, "4b": false],
                                                    server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0",
                                                    sensitivity: "medium",
                                                    levels: ["high": .init(threshold: 0.59, caught: 0.784, safe: 0.099, coding: 0.136),

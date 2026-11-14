@@ -472,6 +472,8 @@ enum Snapshotter {
         }
         render(mapPage(store, .preview(localOff: true), sample: .injection), to: "\(dir)/map-warn-light.png", dark: false)
         render(mapPage(store, .preview(outdated: true)), to: "\(dir)/map-outdated-light.png", dark: false)
+        // Only harm answers locally: the hand-back, for injection hits, is drawn faint.
+        render(mapPage(store, .preview(harmOnlyLocal: true), sample: .harm), to: "\(dir)/map-harm-local-light.png", dark: false)
         // A narrow window (the diagram scaled down) and a wide one (the settings beside the map).
         render(mapPage(store, .preview(), width: 720, height: 1500), to: "\(dir)/map-narrow-light.png", dark: false)
         for dark in [false, true] {

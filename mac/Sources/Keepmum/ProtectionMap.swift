@@ -153,7 +153,7 @@ struct MapLayout {
     var injectionCard: CGRect { CGRect(x: gateX, y: 58, width: 184, height: 84) }
     var harmCard: CGRect { CGRect(x: gateX, y: 162, width: 184, height: 84) }
     var maskCard: CGRect { CGRect(x: maskX, y: 92, width: 122, height: 108) }
-    var localCard: CGRect { CGRect(x: gateX, y: 318, width: 184, height: 56) }
+    var localCard: CGRect { CGRect(x: gateX, y: 310, width: 184, height: 74) }
     var restoreCard: CGRect { CGRect(x: gateX + 46, y: 428, width: 96, height: 100) }
     var commandsCard: CGRect { CGRect(x: edge - 200, y: 428, width: 180, height: 100) }
     var commandsX: CGFloat { commandsCard.minX + 90 }
@@ -253,7 +253,7 @@ struct MapLayout {
         return out
     }
     func harm(to y: CGFloat) -> Route { Route(harmX, 246).downRight(y, to: terminalX - 4) }
-    var harmLocal: Route { Route(harmX, 246).line(harmX, 318) }
+    var harmLocal: Route { Route(harmX, 246).line(harmX, 310) }
     var handback: Route { Route(gateRight, 364).curve(maskX + 60, 202, gateRight + 50, 364, maskX + 60, 300) }
     func answer(to y: CGFloat) -> Route { Route(gateX, 346).curve(118, y, gateX - 56, 346, gateX - 66, y) }
     func commands(to y: CGFloat) -> Route { Route(commandsX, 528).downRight(y, to: terminalX - 4) }
@@ -701,7 +701,8 @@ struct MapDiagram: View {
         line(layout.harm(to: MapLayout.logY), Theme.warning, harmWidth, dashed: true, on: s.harm == "warn")
         line(layout.harm(to: MapLayout.refuseY), Theme.blocked, harmWidth, on: s.harm == "block")
         line(layout.harmLocal, Theme.restored, harmWidth, on: s.harm == "local")
-        line(layout.handback, Theme.restored, 2, dotted: true, on: inj == "local" && s.handback != "stay")
+        // The hand-back is for the injection check's hits: drawn faint while that check is not Local.
+        line(layout.handback, inj == "local" ? Theme.restored : Theme.textTertiary, 2, dotted: true, on: s.handback != "stay")
         line(layout.answer(to: layout.agentsBack.first.map { $0.rect.midY } ?? 459), Theme.restored, 2,
              on: (inj == "local" && s.handback == "stay") || s.harm == "local")
         line(layout.commands(to: MapLayout.cmdLogY), Theme.warning, 2, dashed: true, on: s.commands == "warn")
@@ -833,11 +834,16 @@ struct MapDiagram: View {
         terminalLabel("Replaced", Theme.blocked, MapLayout.cmdReplaceY, on: s.commands == "block", hidden: true)
         let hb = ["answer": "local answer, then the cloud", "summary": "local summary to the cloud",
                   "rewrite": "local rewrite to the cloud", "withhold": "a notice to the cloud"][s.handback] ?? ""
-        Text(hb).font(.km(.caption)).foregroundStyle(Theme.restored)
-            .frame(width: 110, alignment: .leading).offset(x: layout.maskX + 70, y: 230)
-            .opacity(inj == "local" && s.handback != "stay" ? 1 : 0)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(hb).foregroundStyle(inj == "local" ? Theme.restored : Theme.textSecondary)
+            if inj != "local" { Text("injection hits only").foregroundStyle(Theme.textTertiary) }
+        }
+        .font(.km(.caption)).frame(width: 120, alignment: .leading).offset(x: layout.maskX + 70, y: 222)
+        .opacity(s.handback != "stay" ? 1 : 0)
+        .help(inj == "local" ? "After a local turn of the injection check, this goes to the cloud in the flagged result's place"
+              : "The hand-back follows a local turn of the injection check, which is not set to Local. A harm hit always stays on this Mac.")
         Text("answer back to the agent").font(.km(.caption)).foregroundStyle(Theme.restored).multilineTextAlignment(.trailing)
-            .frame(width: 100, alignment: .trailing).offset(x: layout.gateX - 108, y: 370)
+            .frame(width: 100, alignment: .trailing).offset(x: layout.gateX - 110, y: 312)
             .opacity((inj == "local" && s.handback == "stay") || s.harm == "local" ? 1 : 0)
     }
 
@@ -1000,13 +1006,16 @@ struct MapDiagram: View {
     private var localCard: some View {
         let rect = layout.localCard
         let answered = layout.hitCount("local", "injection") + layout.hitCount("local", "harm")
+        let servers = "\(s.localServers) server\(s.localServers == 1 ? "" : "s")"
         let detail = !s.localUsed ? "Not used: no check is Local"
             : s.localServers == 0 ? "No server yet: a hit is refused"
-            : "\(s.localServers) server\(s.localServers == 1 ? "" : "s")" + (answered > 0 ? " · \(answered) answered" : "")
+            : s.harm == "local" && s.injectionActs != "local" ? "\(servers) · harm hits stay here"
+            : servers + (answered > 0 ? " · \(answered) answered" : "")
         return VStack(alignment: .leading, spacing: Space.xxs) {
             title(.local, icon: "cpu")
             Text(detail).font(.km(.caption)).lineLimit(1)
                 .foregroundStyle(s.localUsed && s.localServers == 0 ? Theme.warning : Theme.textSecondary)
+            handbackMenu.padding(.top, Space.xxs)
         }
         .padding(Space.s)
         .frame(width: rect.width, height: rect.height, alignment: .topLeading)
@@ -1015,6 +1024,36 @@ struct MapDiagram: View {
         .opacity(s.localUsed ? 1 : 0.6)
         .modifier(selectable(.local))
         .offset(x: rect.minX, y: rect.minY)
+    }
+
+    /// What follows a local turn of the injection check (stay, or back to the cloud), on the card.
+    @ViewBuilder private var handbackMenu: some View {
+        let current = LocalHandbackSection.choices.first { $0.id == s.handback } ?? LocalHandbackSection.choices[0]
+        let short = ["stay": "stay local", "answer": "answer, then cloud", "summary": "summary, then cloud",
+                     "rewrite": "rewrite, then cloud", "withhold": "withhold, then cloud"][current.id] ?? current.label
+        let label = HStack(spacing: Space.xxs) {
+            Text("Then:").foregroundStyle(Theme.textSecondary)
+            Text(short).foregroundStyle(Theme.text).lineLimit(1)
+            Image(systemName: "chevron.down").foregroundStyle(Theme.textSecondary)
+        }
+        .font(.km(.caption))
+        if isSnapshot {
+            label
+        } else {
+            Menu {
+                Section("After a local turn of the injection check") {
+                    ForEach(LocalHandbackSection.choices, id: \.id) { c in
+                        Button(c.label + (c.id == s.handback ? " \u{2713}" : "")) {
+                            selected = .local
+                            Task { await engine.setLocalHandback(c.id) }
+                        }
+                    }
+                }
+            } label: { label }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .disabled(!engine.isBundled || engine.busy)
+            .help(current.detail + " For the injection check: a harm hit always stays on this Mac.")
+        }
     }
 
     private var restoreCard: some View {
