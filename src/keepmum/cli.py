@@ -796,14 +796,19 @@ def guard_local(ctx: typer.Context,
         cfg = _config()
     from .localmodels import CONTEXTS, DEFAULT_CONTEXT, DEFAULT_PICK, picks_json, show
 
+    from .splashsvc import context_info
+
     rows = []
     for server in cfg.guard_local_servers:
         have = models(server.url)
         name = kind(server.url) if have is not None else None
         info = show(server.url, server.model) if name == "Ollama" and server.model and server.model in have else None
+        if name == "Splash":
+            info = context_info(server.url)
         rows.append({"url": server.url, "model": server.model, "checks": list(server.checks), "api": server.api,
                      "kind": name, "models": have, "problem": missing(server, have, name),
-                     "context": info and info["context"], "context_max": info and info["max"], "base": info and info["parent"],
+                     "context": info and info["context"], "context_max": info and info["max"], "base": info and info.get("parent"),
+                     "context_bytes": info and info.get("bytes_per_token"),
                      "start": _splash_start(server, name), **_splash_managed(server, name)})
     if as_json:
         typer.echo(json.dumps({"servers": rows, "presets": [{"id": k, "name": n, "url": u} for k, (n, u) in PRESETS.items()],
@@ -1010,7 +1015,9 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
                        start: bool = typer.Option(False, "--start", help="Run it in the background: now, after a crash, and at login."),
                        stop: bool = typer.Option(False, "--stop", help="Stop the Splash keepmum runs, and no longer start it at login."),
                        idle: str = typer.Option(None, "--idle", help="With --start: how long without a request before it frees its "
-                                                "memory, or off (default: `[guard] local_keep_loaded`, `keepmum guard local speed`).")) -> None:
+                                                "memory, or off (default: `[guard] local_keep_loaded`, `keepmum guard local speed`)."),
+                       context: str = typer.Option("64k", "--context", help="Its context: 16k, 32k, 64k (the default), 128k, up to "
+                                                   "the model's own window (256k for keepmum's pick), or default (Splash's own).")) -> None:
     """Use Splash (github.com/incoai/splash) for local mode: tried first, the other servers kept behind it.
     Splash is an engine for Apple silicon built around a few models; with keepmum's pick it wrote about
     1.6 times as fast as Ollama in keepmum's tests. --start runs it in the background; without it, this
@@ -1027,6 +1034,13 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
         idle = splashsvc.idle_release(_config().guard_local_keep_loaded)
     if start and not re.fullmatch(r"\d+[smh]?|off", idle):
         typer.echo("keepmum guard local splash: --idle: seconds, or with s, m or h, such as 5m, or off", err=True)
+        raise typer.Exit(2)
+    from .localmodels import PullError, parse_context
+
+    try:
+        size = parse_context(context)
+    except PullError as e:
+        typer.echo(f"keepmum guard local splash: --context: {e}", err=True)
         raise typer.Exit(2)
     import dataclasses
     import shutil
@@ -1062,7 +1076,7 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
     typer.echo(f"local server 1: Splash at {url}, model {served}; the others stay behind it", err=True)
     if start:
         try:
-            splashsvc.start(spec, int(url.rsplit(":", 1)[-1]), idle)
+            splashsvc.start(spec, int(url.rsplit(":", 1)[-1]), idle, size)
         except (splashsvc.SplashError, ValueError, OSError) as e:
             typer.echo(f"{where}: {e}", err=True)
             raise typer.Exit(1)
@@ -1079,7 +1093,7 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
         typer.echo("Splash is not installed: `brew install incoai/tap/splash` (an M3 or newer Mac, macOS 26.4 or later).", err=True)
     typer.echo(f"Start it in the background with `{where} --start`, or in a terminal, and leave it running "
                "(the first start downloads the model and its draft):", err=True)
-    typer.echo(f"  {splash_command(spec)}" + ("" if url == SPLASH_URL else f" --port {url.rsplit(':', 1)[-1]}"))
+    typer.echo(f"  {splash_command(spec, size)}" + ("" if url == SPLASH_URL else f" --port {url.rsplit(':', 1)[-1]}"))
     typer.echo("Until it answers, flagged requests go to the next server. It frees its memory after 10 minutes idle.", err=True)
 
 
@@ -1121,13 +1135,11 @@ def guard_local_speed(keep_loaded: str = typer.Option(None, "--keep-loaded", hel
         raise typer.Exit(1)
     cfg = _config()
     if changed:
-        m = splashsvc.managed()
-        if m and m["model"] and m["port"]:
-            try:  # Splash reads it when it starts: started again, it loads its model again
-                splashsvc.start(m["model"], m["port"], splashsvc.idle_release(keep_loaded))
+        try:  # Splash reads it when it starts: started again, it loads its model again
+            if splashsvc.restart(idle=splashsvc.idle_release(keep_loaded)):
                 typer.echo("Splash starts again with it, and loads its model again in a few seconds.", err=True)
-            except (splashsvc.SplashError, OSError) as e:
-                typer.echo(f"{where}: Splash keeps its old setting until it starts again: {e}", err=True)
+        except (splashsvc.SplashError, OSError) as e:
+            typer.echo(f"{where}: Splash keeps its old setting until it starts again: {e}", err=True)
         for server in cfg.guard_local_servers:  # a model Ollama has loaded now; later ones get it after each request
             set_keep_alive(server.url, server.model, keep_loaded)
     if changed or thinking is not None:
@@ -1143,12 +1155,15 @@ def guard_local_speed(keep_loaded: str = typer.Option(None, "--keep-loaded", hel
 
 
 @local_app.command("context")
-def guard_local_context(size: str = typer.Argument(None, help="16k, 32k, 64k, 128k, a number of tokens, or `default` "
-                                                    "(Ollama's own). None: show it."),
-                        server: int = typer.Option(None, "--server", help="The Ollama server's number (default: the first Ollama one).")) -> None:
-    """The context size of an Ollama server's model: less takes less memory, more fits longer sessions."""
+def guard_local_context(size: str = typer.Argument(None, help="16k, 32k, 64k, 128k, a number of tokens up to the model's "
+                                                    "longest, or `default` (Ollama's or Splash's own). None: show it."),
+                        server: int = typer.Option(None, "--server", help="The Ollama or Splash server's number (default: the "
+                                                   "first of them with a model).")) -> None:
+    """The context size of an Ollama or Splash server's model: less takes less memory, more fits
+    longer sessions and longer tool results."""
     import dataclasses
 
+    from . import splashsvc
     from .local import kind, models
     from .localmodels import PullError, base_of, parse_context, show, with_context
 
@@ -1163,15 +1178,21 @@ def guard_local_context(size: str = typer.Argument(None, help="16k, 32k, 64k, 12
         _server_at(cfg, server)
         number = server
     else:
-        number = next((i for i, x in enumerate(servers, 1) if x.model and kind(x.url) == "Ollama"), None)
+        number = next((i for i, x in enumerate(servers, 1)
+                       if x.model and (kind(x.url) in ("Ollama", "Splash") or _runs_splash(x.url))), None)
         if number is None:
-            typer.echo("keepmum guard local context: no Ollama server with a model: `keepmum guard local pull` first", err=True)
+            typer.echo("keepmum guard local context: no Ollama or Splash server with a model: `keepmum guard local pull` "
+                       "or `keepmum guard local splash --start` first", err=True)
             raise typer.Exit(1)
     target = servers[number - 1]
     have = models(target.url)
-    if have is None or kind(target.url) != "Ollama":
-        typer.echo(f"keepmum guard local context: server {number} is not an Ollama that answers; set the context in its own app",
-                   err=True)
+    name = kind(target.url) if have is not None else None
+    if name == "Splash" or (name is None and _runs_splash(target.url)):
+        _splash_context(number, target, size, n)
+        return
+    if have is None or name != "Ollama":
+        typer.echo(f"keepmum guard local context: server {number} is not an Ollama or Splash that answers; set the context "
+                   "in its own app", err=True)
         raise typer.Exit(1)
     if not target.model or target.model not in have:
         typer.echo(f"keepmum guard local context: server {number} has no model there yet", err=True)
@@ -1192,6 +1213,58 @@ def guard_local_context(size: str = typer.Argument(None, help="16k, 32k, 64k, 12
     _drop_copy(target.url, target.model, servers)
     typer.echo(f"local server {number}: {used}", err=True)
     typer.echo(_context_note(n, used, base_of(target.url, used)), err=True)
+
+
+def _runs_splash(url: str) -> bool:
+    """Whether keepmum runs Splash on this server's port (it may be starting, and not answer yet)."""
+    from . import splashsvc
+
+    m = splashsvc.managed()
+    return bool(m and m["port"] and url.rstrip("/").endswith(f":{m['port']}"))
+
+
+def _splash_context(number: int, target, size: str | None, n: int | None) -> None:
+    """`keepmum guard local context` for Splash: it takes its context when it starts, so keepmum
+    starts the Splash it runs again; one started in a terminal is started again by hand."""
+    from . import splashsvc
+    from .localmodels import context_label, splash_command
+
+    where = "keepmum guard local context"
+    info = splashsvc.context_info(target.url)
+    most = info and info["max"]
+    per = info and info["bytes_per_token"]
+
+    def memory(tokens: int | None) -> str:
+        if not per or not (tokens or most):
+            return ""
+        gb = (tokens or most) * per / 1024 ** 3
+        return f" Splash takes the memory for it only while a request that long runs: up to about {gb:.1f} GB."
+
+    if size is None:
+        now = info and info["context"]
+        typer.echo(f"{number}. {target.model} (Splash): " + (_context_text(now, most) if now else "not answering yet"))
+        typer.echo("Options: 16k, 32k, 64k (keepmum's default), 128k, a number of tokens up to "
+                   + (f"{context_label(most)} (the model's longest)" if most else "the model's longest")
+                   + ", or default (Splash's own: the model's longest when memory holds it). A tool result or session "
+                   "longer than the context cannot be read by the local model.")
+        return
+    if most and n is not None and n > most:
+        typer.echo(f"{where}: {size}: this model takes at most {context_label(most)} tokens", err=True)
+        raise typer.Exit(2)
+    port = target.url.rstrip("/").rsplit(":", 1)[-1]
+    if not _runs_splash(target.url):
+        typer.echo(f"{where}: keepmum does not run this Splash, so it cannot start it again: stop it and run "
+                   f"`{splash_command(target.model, n)} --port {port}`, or `keepmum guard local splash --start --context {size}`",
+                   err=True)
+        raise typer.Exit(1)
+    try:
+        splashsvc.restart(context=n)
+    except (splashsvc.SplashError, OSError) as e:
+        typer.echo(f"{where}: {e}", err=True)
+        raise typer.Exit(1)
+    said = f"a {context_label(n)}-token context" if n else "Splash's own context (the model's longest when memory holds it)"
+    typer.echo(f"local server {number}: Splash starts again with {said}, and loads its model again in a few seconds."
+               + memory(n), err=True)
 
 
 @local_app.command("set")

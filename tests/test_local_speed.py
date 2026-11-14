@@ -211,7 +211,7 @@ def home(tmp_path, monkeypatch):
     told, started = [], []
     monkeypatch.setattr("keepmum.local.set_keep_alive", lambda url, model, value: told.append((url, model, value)) or True)
     monkeypatch.setattr(splashsvc, "managed", lambda: None)
-    monkeypatch.setattr(splashsvc, "start", lambda spec, port, idle: started.append((spec, port, idle)))
+    monkeypatch.setattr(splashsvc, "start", lambda spec, port, idle, context=65536: started.append((spec, port, idle, context)))
     return cfg, told, started
 
 
@@ -237,9 +237,9 @@ def test_speed_sets_both_and_tells_loaded_ollama_models(home):
 
 def test_speed_starts_the_splash_keepmum_runs_again(home, monkeypatch):
     _, _, started = home
-    monkeypatch.setattr(splashsvc, "managed", lambda: {"model": "o/r:IQ3_M", "port": 8000, "idle": "5m"})
+    monkeypatch.setattr(splashsvc, "managed", lambda: {"model": "o/r:IQ3_M", "port": 8000, "idle": "5m", "context": 131072})
     r = CliRunner().invoke(cli.app, ["guard", "local", "speed", "--keep-loaded", "always"])
-    assert r.exit_code == 0 and started == [("o/r:IQ3_M", 8000, "off")]
+    assert r.exit_code == 0 and started == [("o/r:IQ3_M", 8000, "off", 131072)]  # its context stays
     assert "Splash starts again" in r.output
 
 

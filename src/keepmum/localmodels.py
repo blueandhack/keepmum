@@ -253,10 +253,13 @@ def splash_id(spec: str) -> str:
     return spec
 
 
-def splash_command(model: str) -> str:
-    """The command that starts Splash with `model` (a Splash spec, a served name, or a pick's)."""
+def splash_command(model: str, context: int | None = 65536) -> str:
+    """The command that starts Splash with `model` (a Splash spec, a served name, or a pick's) and
+    `context` tokens (None: Splash's own)."""
+    from .splashsvc import context_flag
+
     spec = next((p.splash for p in PICKS if p.splash and model in (p.splash, p.id, p.model, p.splash.split(":", 1)[0])), model)
-    return f"splash serve --model {spec} --language-only --max-context 64K"
+    return f"splash serve --model {spec} --language-only" + ("" if context is None else f" --max-context {context_flag(context)}")
 
 
 def _ollama_error(text: str) -> str | None:

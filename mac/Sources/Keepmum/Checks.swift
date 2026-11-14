@@ -528,7 +528,7 @@ struct LocalServersSection: View {
             Spacer(minLength: Space.m)
             if server.start != nil || server.kind == "Splash" { splashControl(server) }
             modelMenu(n, server)
-            if server.kind == "Ollama", server.contextMax != nil { contextMenu(n, server) }
+            if server.kind == "Ollama" || server.kind == "Splash", server.contextMax != nil { contextMenu(n, server) }
             checksMenu(n, server)
             moreMenu(n, server)
         }
@@ -605,6 +605,8 @@ struct LocalServersSection: View {
         if server.kind == "Ollama", let most = server.contextMax {
             out += server.context.map { ", with a \(Self.tokens($0)) context" }
                 ?? ", at Ollama\u{2019}s own context: up to \(Self.tokens(most)), the most memory"
+        } else if server.kind == "Splash", let context = server.context {
+            out += ", with a \(Self.tokens(context)) context"
         }
         return out
     }
@@ -615,33 +617,52 @@ struct LocalServersSection: View {
     static func tokens(_ n: Int) -> String { n.isMultiple(of: 1024) ? "\(n / 1024)k" : n.formatted() }
 
     /// An Ollama model's context size: keepmum sets it through its own copy of the model, which
-    /// shares the downloaded files. Less takes less memory; a long session needs more.
+    /// shares the downloaded files. Less takes less memory; a long session needs more. Splash takes
+    /// its context when it starts, up to the model's own window, so keepmum starts it again with it.
     @ViewBuilder private func contextMenu(_ n: Int, _ server: Engine.LocalServers.Server) -> some View {
         let label = server.context.map { Self.tokens($0) } ?? "Max"
+        let splash = server.kind == "Splash"
         if isSnapshot {
             menuLabel(label)
         } else {
             Menu(label) {
-                Section("Context size: less takes less memory") {
-                    ForEach(contexts, id: \.self) { c in
-                        Button(contextLabel(c, server)) { Task { await engine.setLocalContext(n, size: String(c)) } }
-                            .disabled(c == server.context || (server.contextMax.map { c > $0 } ?? false))
+                Section(splash ? "Context size: a longer tool result fits; Splash starts again" : "Context size: less takes less memory") {
+                    ForEach(contextChoices(server), id: \.self) { c in
+                        Button(contextLabel(c, server)) {
+                            Task { await engine.setLocalContext(n, size: String(c), splash: splash ? server.url : nil) }
+                        }
+                        .disabled(c == server.context || (server.contextMax.map { c > $0 } ?? false))
                     }
-                    Button("Ollama\u{2019}s own setting, up to \(server.contextMax.map { Self.tokens($0) } ?? "the model\u{2019}s longest"): the most memory") {
-                        Task { await engine.setLocalContext(n, size: "default") }
+                    if !splash {
+                        Button("Ollama\u{2019}s own setting, up to \(server.contextMax.map { Self.tokens($0) } ?? "the model\u{2019}s longest"): the most memory") {
+                            Task { await engine.setLocalContext(n, size: "default") }
+                        }
+                        .disabled(server.context == nil)
                     }
-                    .disabled(server.context == nil)
                 }
             }
             .menuStyle(.borderlessButton).fixedSize()
             .disabled(!engine.isBundled || engine.busy)
-            .help("How much of a conversation the model takes in. A long agent session needs more; what does not fit is cut.")
+            .help(splash
+                ? "How much the model takes in at once. A tool result or session longer than this cannot be checked locally. Splash takes the memory only while a request that long runs."
+                : "How much of a conversation the model takes in. A long agent session needs more; what does not fit is cut.")
         }
+    }
+
+    /// The sizes offered: keepmum's, and for Splash the model's own window too (256k for keepmum's
+    /// pick), which takes little more memory there; never past it, where Splash would stretch it.
+    private func contextChoices(_ server: Engine.LocalServers.Server) -> [Int] {
+        guard server.kind == "Splash", let most = server.contextMax else { return contexts }
+        return contexts.filter { $0 < most } + [most]
     }
 
     private func contextLabel(_ c: Int, _ server: Engine.LocalServers.Server) -> String {
         var label = "\(Self.tokens(c)) tokens"
         if c == defaultContext { label += " (keepmum\u{2019}s default)" }
+        if server.kind == "Splash" {
+            if c == server.contextMax { label += ", the model\u{2019}s longest" }
+            if let per = server.contextBytes { label += " \u{00B7} up to \(Self.gb(Double(c) * per / 1_073_741_824)) in use" }
+        }
         if c == server.context { label += " \u{2713}" }
         return label
     }

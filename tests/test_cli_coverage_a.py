@@ -803,7 +803,7 @@ def test_context_checks_its_size_and_server(home, ollama):
     r = cli.invoke(app, ["guard", "local", "context", "1k"])
     assert r.exit_code == 2 and "from 2k to 1024k" in r.output
     r = cli.invoke(app, ["guard", "local", "context"])
-    assert r.exit_code == 1 and "no Ollama server with a model" in r.output
+    assert r.exit_code == 1 and "no Ollama or Splash server with a model" in r.output
     r = cli.invoke(app, ["guard", "local", "context", "--server", "3"])
     assert r.exit_code == 2 and "no server 3" in r.output
 
@@ -813,7 +813,7 @@ def test_context_needs_an_ollama_that_answers_with_the_model(home, monkeypatch, 
                 ' { url = "http://localhost:11434", model = "gone" }]\n')
     monkeypatch.setattr(local, "kind", lambda url, timeout=1.5: "Ollama" if url.endswith("11434") else "LM Studio")
     r = cli.invoke(app, ["guard", "local", "context", "32k", "--server", "1"])
-    assert r.exit_code == 1 and "server 1 is not an Ollama that answers; set the context in its own app" in r.output
+    assert r.exit_code == 1 and "server 1 is not an Ollama or Splash that answers; set the context in its own app" in r.output
     r = cli.invoke(app, ["guard", "local", "context", "32k"])  # the first Ollama with a model: server 2
     assert r.exit_code == 1 and "server 2 has no model there yet" in r.output
     assert ollama["copies"] == []

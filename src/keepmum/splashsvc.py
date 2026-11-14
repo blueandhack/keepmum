@@ -6,6 +6,13 @@ and loads it now. Splash frees its memory after `idle` without a request (keepmu
 minutes, as Ollama keeps a model) and loads it again in a few seconds when one comes. The first
 start downloads the model and its draft, which the log shows (~/Library/Logs/keepmum/splash.log).
 `--stop` unloads it and removes the file.
+
+Context: keepmum starts Splash with a 64k context (`--max-context`), and `keepmum guard local
+context` starts it again with another, up to the model's own window (262,144 tokens for keepmum's
+pick); `default` leaves it to Splash, which takes that window when memory holds it. Splash takes
+the memory for a long context only while a request that long runs: about 10 KB a token for
+keepmum's pick, whose attention is in 10 of its 40 layers. Past the window Splash would stretch it
+(YaRN), which changes every answer, so keepmum does not offer it.
 """
 
 from __future__ import annotations
@@ -15,10 +22,12 @@ import plistlib
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 LABEL = "app.keepmum.splash"
 DEFAULT_IDLE = "5m"
+DEFAULT_CONTEXT = 65536  # tokens; None: Splash's own (the model's window when memory holds it)
 SEARCH = ("/opt/homebrew/bin/splash", "/usr/local/bin/splash")
 
 
@@ -65,9 +74,21 @@ def idle_release(keep_loaded: str) -> str:
     return "off" if keep_loaded == "always" else keep_loaded
 
 
-def arguments(exe: str, spec: str, port: int, idle: str = DEFAULT_IDLE) -> list[str]:
-    return [exe, "serve", "--model", spec, "--language-only", "--no-webui", "--max-context", "64K",
-            "--port", str(port), "--idle-release", idle]
+def context_flag(context: int) -> str:
+    """Tokens as `--max-context` takes them: 64K (K is 1024 tokens to Splash), or a number."""
+    return f"{context // 1024}K" if context % 1024 == 0 else str(context)
+
+
+def parse_context_flag(text: str | None) -> int | None:
+    m = re.fullmatch(r"(\d+)([KkMm]?)", text or "")
+    if not m:
+        return None
+    return int(m.group(1)) * {"": 1, "k": 1024, "m": 1_000_000}[m.group(2).lower()]
+
+
+def arguments(exe: str, spec: str, port: int, idle: str = DEFAULT_IDLE, context: int | None = DEFAULT_CONTEXT) -> list[str]:
+    size = [] if context is None else ["--max-context", context_flag(context)]
+    return [exe, "serve", "--model", spec, "--language-only", "--no-webui", *size, "--port", str(port), "--idle-release", idle]
 
 
 def _launchctl(*args: str) -> subprocess.CompletedProcess:
@@ -78,8 +99,9 @@ def _domain() -> str:
     return f"gui/{os.getuid()}"
 
 
-def start(spec: str, port: int, idle: str = DEFAULT_IDLE) -> Path:
-    """Write the LaunchAgent for `spec` on `port` and load it now, replacing one keepmum wrote before."""
+def start(spec: str, port: int, idle: str = DEFAULT_IDLE, context: int | None = DEFAULT_CONTEXT) -> Path:
+    """Write the LaunchAgent for `spec` on `port` and load it now, replacing one keepmum wrote before.
+    `context` is its context in tokens, or None for Splash's own."""
     exe = find()
     if exe is None:
         raise SplashError("Splash is not installed: `brew install incoai/tap/splash` (an M3 or newer Mac, macOS 26.4 or later)")
@@ -90,7 +112,7 @@ def start(spec: str, port: int, idle: str = DEFAULT_IDLE) -> Path:
     with plist.open("wb") as f:
         plistlib.dump({
             "Label": LABEL,
-            "ProgramArguments": arguments(exe, spec, port, idle),
+            "ProgramArguments": arguments(exe, spec, port, idle, context),
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},  # again after a crash, not after a stop
             "ThrottleInterval": 30,
@@ -99,17 +121,34 @@ def start(spec: str, port: int, idle: str = DEFAULT_IDLE) -> Path:
             "StandardOutPath": str(log),
             "StandardErrorPath": str(log),
         }, f)
-    _launchctl("bootout", f"{_domain()}/{LABEL}")  # one loaded before; fails harmlessly when there is none
-    r = _launchctl("bootstrap", _domain(), str(plist))
-    if r.returncode != 0:
-        raise SplashError(f"launchctl could not start it: {(r.stderr or r.stdout).strip() or r.returncode}")
-    return plist
+    _unload()
+    for attempt in range(5):  # launchd can refuse (5: Input/output error) while it still tears the old one down
+        r = _launchctl("bootstrap", _domain(), str(plist))
+        if r.returncode == 0:
+            return plist
+        time.sleep(1 + attempt)
+    raise SplashError(f"launchctl could not start it: {(r.stderr or r.stdout).strip() or r.returncode}")
+
+
+def _loaded() -> bool:
+    return _launchctl("print", f"{_domain()}/{LABEL}").returncode == 0
+
+
+def _unload(wait: float = 30.0) -> None:
+    """Unload the agent if it is loaded, and wait until launchd has let it go: bootout returns while
+    Splash is still stopping, and a bootstrap then fails."""
+    if not _loaded():
+        return
+    _launchctl("bootout", f"{_domain()}/{LABEL}")
+    deadline = time.monotonic() + wait
+    while _loaded() and time.monotonic() < deadline:
+        time.sleep(0.25)
 
 
 def stop() -> bool:
     """Unload the LaunchAgent and remove it; True if there was one."""
     plist = plist_path()
-    _launchctl("bootout", f"{_domain()}/{LABEL}")
+    _unload()
     if plist.exists():
         plist.unlink()
         return True
@@ -117,7 +156,8 @@ def stop() -> bool:
 
 
 def managed() -> dict | None:
-    """The model and port keepmum runs Splash with, or None if it does not."""
+    """The model, port, idle release and context (tokens; None: Splash's own) keepmum runs Splash
+    with, or None if it does not."""
     try:
         with plist_path().open("rb") as f:
             args = plistlib.load(f).get("ProgramArguments", [])
@@ -125,7 +165,38 @@ def managed() -> dict | None:
         return None
     get = lambda flag: args[args.index(flag) + 1] if flag in args and args.index(flag) + 1 < len(args) else None
     port = get("--port")
-    return {"model": get("--model"), "port": int(port) if port and port.isdigit() else None, "idle": get("--idle-release")}
+    return {"model": get("--model"), "port": int(port) if port and port.isdigit() else None, "idle": get("--idle-release"),
+            "context": parse_context_flag(get("--max-context"))}
+
+
+def restart(**changes) -> dict | None:
+    """Start the Splash keepmum runs again with `changes` (idle, context), keeping the rest; None if
+    keepmum runs none. Splash reads them when it starts, and loads its model again in a few seconds."""
+    m = managed()
+    if not m or not m["model"] or not m["port"]:
+        return None
+    m = {**m, **changes}
+    start(m["model"], m["port"], m["idle"] or DEFAULT_IDLE, m["context"])
+    return m
+
+
+def context_info(url: str, timeout: float = 2.0) -> dict | None:
+    """What a Splash at `url` says of its context: the limit it runs with, the model's own window,
+    and its cache's bytes a token; None if nothing answers or it does not say."""
+    import httpx
+
+    try:
+        r = httpx.get(url.rstrip("/") + "/status", timeout=timeout)
+        d = r.json() if r.status_code == 200 else {}
+        model = (d.get("memory_plan") or {}).get("model") or {}
+        tokens, page = model.get("kv_page_tokens"), model.get("kv_page_bytes")
+        now, most = d.get("maximum_context_tokens"), model.get("maximum_context_tokens")
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return None
+    if not isinstance(now, int) or not isinstance(most, int):
+        return None
+    per = page / tokens if isinstance(tokens, int) and tokens > 0 and isinstance(page, (int, float)) else None
+    return {"context": now, "max": most, "bytes_per_token": per}
 
 
 def progress() -> str | None:

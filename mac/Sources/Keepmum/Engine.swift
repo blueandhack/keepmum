@@ -161,8 +161,9 @@ final class Engine {
             var kind: String?
             var models: [String]?
             var problem: String?
-            /// An Ollama model's context size (nil: Ollama's own setting), the longest it takes, and
-            /// the model a keepmum copy was made from. nil from older engines and other servers.
+            /// An Ollama model's context size (nil: Ollama's own setting), or the one Splash runs with;
+            /// the longest the model takes; and the model a keepmum copy was made from. nil from older
+            /// engines and other servers.
             var context: Int?
             var contextMax: Int?
             var base: String?
@@ -172,8 +173,11 @@ final class Engine {
             /// what it is doing while it starts (downloading, warming up).
             var managed: Bool?
             var progress: String?
+            /// For Splash: the memory its cache takes a token of context, while a request that long runs.
+            var contextBytes: Double?
             enum CodingKeys: String, CodingKey {
-                case url, model, checks, api, kind, models, problem, context, base, start, managed, progress, contextMax = "context_max"
+                case url, model, checks, api, kind, models, problem, context, base, start, managed, progress, contextMax = "context_max",
+                     contextBytes = "context_bytes"
             }
         }
         struct Preset: Decodable, Equatable, Identifiable { var id: String; var name: String; var url: String }
@@ -695,11 +699,12 @@ final class Engine {
         await loadLocalServers()
     }
 
-    /// The context size of local server `number`'s Ollama model (`keepmum guard local context`): a
-    /// number of tokens, or "default" for Ollama's own setting.
-    func setLocalContext(_ number: Int, size: String) async {
+    /// The context size of local server `number`'s Ollama or Splash model (`keepmum guard local
+    /// context`): a number of tokens, or "default" for the server's own setting. Splash takes it when it
+    /// starts, so keepmum starts it again: `splash` is its URL, followed until it answers again.
+    func setLocalContext(_ number: Int, size: String, splash: String? = nil) async {
         await act { try await self.check(["guard", "local", "context", size, "--server", String(number)]) }
-        await loadLocalServers()
+        if let splash { await followSplash(url: splash) } else { await loadLocalServers() }
     }
 
     func moveLocalServer(_ number: Int, to: Int) async {
