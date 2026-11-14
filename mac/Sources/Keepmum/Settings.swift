@@ -126,16 +126,19 @@ struct SettingsPage: View {
             ToolsSection(store: store, engine: engine)
             if engine.isBundled { ShellDestinationsSection(engine: engine) }
         case .checks:
+            MapLink(engine: engine, text: "See where each check acts on a request, and where a hit goes, on the Protection map.")
             ChecksSection(engine: engine)
             if localUsed { LocalModeSummary(engine: engine) { pane = $0 } }
         case .extensions:
             ExtensionsSection(engine: engine)
         case .localModels:
             localOff
+            MapLink(engine: engine, text: "See where Local mode sends a hit, and what goes back to the cloud, on the Protection map.")
             LocalServersSection(engine: engine)
             LocalSpeedSection(engine: engine)
         case .handback:
             localOff
+            MapLink(engine: engine, text: "See a hand-back's route back to the cloud on the Protection map.")
             LocalHandbackSection(engine: engine)
         case .skills:
             localOff

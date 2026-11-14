@@ -1,15 +1,16 @@
 import SwiftUI
 
 enum Page: String, CaseIterable, Identifiable {
-    case overview, activity, logs, performance, detection, audit, settings
+    case overview, activity, logs, performance, map, detection, audit, settings
     var id: String { rawValue }
-    var title: String { rawValue.capitalized }
+    var title: String { self == .map ? "Protection map" : rawValue.capitalized }
     var icon: String {
         switch self {
         case .overview: "square.grid.2x2"
         case .activity: "list.bullet.rectangle"
         case .logs: "text.magnifyingglass"
         case .performance: "speedometer"
+        case .map: "point.topleft.down.to.point.bottomright.curvepath"
         case .detection: "line.3.horizontal.decrease.circle"
         case .audit: "checkmark.seal"
         case .settings: "gearshape"
@@ -18,7 +19,7 @@ enum Page: String, CaseIterable, Identifiable {
 
     /// The sidebar's groups: what keepmum saw, and what it does about it.
     static let groups: [(String, [Page])] = [("Monitor", [.overview, .activity, .logs, .performance]),
-                                             ("Protection", [.detection, .audit])]
+                                             ("Protection", [.map, .detection, .audit])]
 }
 
 struct Dashboard: View {
@@ -49,6 +50,7 @@ struct Dashboard: View {
                     case .logs: LogsPage(store: store)
                     case .performance: PerformancePage(store: store)
                     case .detection: DetectionPage(store: store, engine: engine)
+                    case .map: ProtectionMapPage(store: store, engine: engine)
                     case .audit: AuditPage(engine: engine)
                     case .settings: SettingsPage(store: store, engine: engine, appearance: $appearance, pane: $settingsPane)
                     }

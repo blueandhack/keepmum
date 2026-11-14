@@ -7,6 +7,8 @@ import SwiftUI
 /// first use and unloads after 10 idle minutes.
 struct ChecksSection: View {
     var engine: Engine
+    /// One check's section alone ("injection", "harm" or "commands"), as the Protection map shows it.
+    var only: String? = nil
     @State private var confirmingRemove: String?
     @Environment(\.isSnapshot) private var isSnapshot
 
@@ -20,10 +22,10 @@ struct ChecksSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xl) {
             if let checks {
-                legend
-                injection(checks.injection)
-                harm(checks.harm)
-                if let commands = checks.commands { self.commands(commands) }
+                if only == nil { legend }
+                if only == nil || only == "injection" { injection(checks.injection) }
+                if only == nil || only == "harm" { harm(checks.harm) }
+                if only == nil || only == "commands", let commands = checks.commands { self.commands(commands) }
             } else {
                 FormSection(title: "Checks") {
                     FormRow(title: "Not available", detail: engine.isBundled ? "This engine has no optional checks" : "Needs the bundled engine") { EmptyView() }

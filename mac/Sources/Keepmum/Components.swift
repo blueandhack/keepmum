@@ -336,6 +336,8 @@ struct IconButton: View {
 struct Segmented<T: Hashable>: View {
     var options: [(T, String)]
     @Binding var selection: T
+    /// Small, its segments sharing the width it is given: on the Protection map's cards.
+    var compact = false
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
@@ -343,9 +345,11 @@ struct Segmented<T: Hashable>: View {
             ForEach(options, id: \.0) { value, title in
                 let on = selection == value
                 Button { selection = value } label: {
-                    Text(title).font(.km(.callout).weight(.medium))
+                    Text(title).font(.km(compact ? .caption : .callout).weight(.medium))
                         .foregroundStyle(on ? Theme.text : Theme.textSecondary)
-                        .padding(.horizontal, Space.m).padding(.vertical, Space.xs)
+                        .lineLimit(1)
+                        .padding(.horizontal, compact ? Space.xxs : Space.m).padding(.vertical, compact ? Space.xxs + 1 : Space.xs)
+                        .frame(maxWidth: compact ? .infinity : nil)
                         .background(RoundedRectangle(cornerRadius: Radius.s - Space.xxs, style: .continuous)
                             .fill(on ? Theme.raised : .clear)
                             .shadow(color: .black.opacity(on ? 0.12 : 0), radius: 1, y: 0.5))
