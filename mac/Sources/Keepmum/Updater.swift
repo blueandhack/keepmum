@@ -21,6 +21,12 @@ import Sparkle
 /// keepmum runs in the menu bar, so a scheduled check that finds an update does not interrupt: the
 /// menu shows it (`available`, Sparkle's gentle reminders), and Install opens Sparkle's window.
 /// Builds without a feed and key in Info.plist (development builds) have no updater.
+///
+/// keepmum.app's feed and downloads go through a Cloudflare Worker (worker/). If its feed does not
+/// load (the Worker down, over its daily limit, or gone), the check is made again, quietly, against
+/// the same signed feed on GitHub; if that one loads, checks read GitHub for three days, update
+/// downloads come straight from GitHub Releases, and nothing is counted (no `first`, `os` or
+/// `chip` goes to GitHub). Offline, both fail and nothing changes.
 @MainActor @Observable
 final class Updates: NSObject {
     static let shared = Updates()
@@ -43,6 +49,15 @@ final class Updates: NSObject {
     /// first check is still to be counted (`new`).
     static let lastCountedKeys = (day: "countedDay", week: "countedWeek", month: "countedMonth")
     static let newKey = "countNew"
+    /// Until when checks read the feed on GitHub, keepmum.app's having failed while GitHub's loaded.
+    static let fallbackUntilKey = "updatesFallbackUntil"
+    /// The same signed feed keepmum.app serves (the Worker serves this file byte for byte).
+    static let fallbackFeed = "https://raw.githubusercontent.com/blueandhack/keepmum/main/mac/appcast.xml"
+    static let fallbackDays = 3.0
+    /// The check under way reads GitHub's feed; it loaded its feed; the check it is a retry of.
+    @ObservationIgnored private var sessionOnGitHub = false
+    @ObservationIgnored private var loadedFeed = false
+    @ObservationIgnored private var retryOf: SPUUpdateCheck?
     /// What the check under way said it was first in, saved once its feed has loaded.
     @ObservationIgnored private var pendingFirsts: (periods: Periods, new: Bool)?
     /// This Mac's update checks and update downloads are in keepmum.app's totals (Settings ›
@@ -125,7 +140,8 @@ final class Updates: NSObject {
         alert.messageText = "Check for keepmum updates automatically?"
         alert.informativeText = """
             keepmum can look for a new version once a day and tell you when one is ready to install. \
-            Each check downloads keepmum's update list from keepmum.app, which sees your IP address and \
+            Each check downloads keepmum's update list from keepmum.app (from GitHub while keepmum.app \
+            is down), which sees your IP address and \
             keepmum's version and counts checks and updates per hour, keeping no addresses (Count this Mac, \
             in Settings, turns that off). To count each Mac once, a check also says whether it is this \
             Mac's first of the day, week or month, and the day's first says its macOS version and chip \
@@ -171,10 +187,21 @@ extension Updates: SPUUpdaterDelegate {
     /// keepmum asks on the first launch (above), with its own words about what a check sends.
     func updaterShouldPromptForPermissionToCheck(forUpdates updater: SPUUpdater) -> Bool { false }
 
+    /// keepmum.app's feed (Info.plist), or GitHub's while keepmum.app's fails (see the type's comment).
+    func feedURLString(for updater: SPUUpdater) -> String? {
+        sessionOnGitHub = Self.onGitHub(retrying: retryOf != nil)
+        loadedFeed = false
+        return sessionOnGitHub ? Self.fallbackFeed : nil
+    }
+
+    static func onGitHub(retrying: Bool, defaults: UserDefaults = .standard, now: Date = Date()) -> Bool {
+        retrying || (defaults.object(forKey: fallbackUntilKey) as? Date).map { $0 > now } ?? false
+    }
+
     /// `first=day,week,month,new` on the feed URL, for a counted Mac (see the type's comment), and
-    /// with the day's first, `os` and `chip`.
+    /// with the day's first, `os` and `chip`. None to GitHub: it counts nothing.
     func feedParameters(for updater: SPUUpdater, sendingSystemProfile: Bool) -> [[String: String]] {
-        guard counted else { pendingFirsts = nil; return [] }
+        guard counted, !Self.onGitHub(retrying: retryOf != nil) else { pendingFirsts = nil; return [] }
         let periods = Self.periods(Date())
         let firsts = Self.firsts(periods)
         pendingFirsts = (periods, firsts.contains("new"))
@@ -203,6 +230,7 @@ extension Updates: SPUUpdaterDelegate {
 
     /// The feed came back, so keepmum.app counted the check: remember its periods.
     func updater(_ updater: SPUUpdater, didFinishLoading appcast: SUAppcast) {
+        loadedFeed = true
         guard let pending = pendingFirsts else { return }
         pendingFirsts = nil
         let defaults = UserDefaults.standard
@@ -210,6 +238,59 @@ extension Updates: SPUUpdaterDelegate {
         defaults.set(pending.periods.week, forKey: Self.lastCountedKeys.week)
         defaults.set(pending.periods.month, forKey: Self.lastCountedKeys.month)
         if pending.new { defaults.removeObject(forKey: Self.newKey) }
+    }
+
+    /// While on GitHub, an update's DMG comes straight from GitHub Releases, not keepmum.app/update/.
+    /// The DMG's EdDSA signature is checked as ever, wherever it came from.
+    func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
+        guard sessionOnGitHub, let url = request.url, let direct = Self.githubDownload(url) else { return }
+        request.url = direct
+    }
+
+    /// keepmum.app/update/v<version>/<file> as the GitHub Releases asset it redirects to; nil otherwise.
+    static func githubDownload(_ url: URL) -> URL? {
+        let parts = url.pathComponents  // ["/", "update", "v0.1.0a7", "Keepmum-0.1.0a7.dmg"]
+        guard url.host == "keepmum.app", parts.count == 4, parts[1] == "update", parts[2].hasPrefix("v") else { return nil }
+        return URL(string: "https://github.com/blueandhack/keepmum/releases/download/\(parts[2])/\(parts[3])")
+    }
+
+    /// keepmum.app's feed did not load: try GitHub's once, in the background. A download from
+    /// keepmum.app that failed after its feed loaded moves the next checks to GitHub.
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        let origin = retryOf
+        retryOf = nil
+        let code = (error as NSError?).flatMap { $0.domain == SUSparkleErrorDomain ? $0.code : nil }
+        if let origin {  // the retry against GitHub finished
+            guard loadedFeed else { return }  // GitHub failed too: offline, most likely; nothing changes
+            UserDefaults.standard.set(Date().addingTimeInterval(Self.fallbackDays * 86_400), forKey: Self.fallbackUntilKey)
+            if origin == .updates { after { [weak self] in self?.controller?.checkForUpdates(nil) } }  // what the user asked for
+            return
+        }
+        guard !sessionOnGitHub, let code, !Self.notFailures.contains(code) else { return }
+        if !loadedFeed {
+            retryOf = updateCheck
+            after { [weak self] in
+                guard let self, let updater = self.controller?.updater, updater.canCheckForUpdates else {
+                    self?.retryOf = nil
+                    return
+                }
+                updater.checkForUpdatesInBackground()
+            }
+        } else if code == Int(SUError.downloadError.rawValue) {
+            UserDefaults.standard.set(Date().addingTimeInterval(Self.fallbackDays * 86_400), forKey: Self.fallbackUntilKey)
+        }
+    }
+
+    /// Endings that say nothing about keepmum.app: no update, or the user said no.
+    static let notFailures: Set<Int> = [Int(SUError.noUpdateError.rawValue), Int(SUError.installationCanceledError.rawValue),
+                                        Int(SUError.installationAuthorizeLaterError.rawValue)]
+
+    /// A moment after the update cycle has ended, when Sparkle takes a new check.
+    private func after(_ work: @escaping @MainActor () -> Void) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            work()
+        }
     }
 }
 
