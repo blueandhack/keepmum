@@ -21,7 +21,8 @@ The harm check can hand back too (`[guard] local_handback_harm`), with one strat
               rest as written; that goes to the cloud in its place
 
 A harm rewrite only removes. keepmum asks for nothing to be reworded, softened or disguised, and
-checks what the local model wrote with the harm check: if the check still flags it, or nothing is
+checks what the local model wrote: every piece it kept must be in what was typed, word for word and
+in order, and the harm check must pass it as a whole and sentence by sentence. If not, or nothing is
 left, the turn stays local and is not asked for again. The provider never gets what was flagged,
 in any wording.
 
@@ -74,11 +75,15 @@ HARM_INSTRUCTION = (
     "You stand between a user and a cloud model. keepmum's harm check flagged the user's message below: part of "
     "it may ask for something a provider's policy does not allow. The cloud model will not see the message; it "
     "will see what you write instead.\n\n"
-    "Return the message as it is, with the parts that ask for that taken out. Keep everything else exactly as "
-    "written: the coding task, code, data, names and formatting. Do not reword, soften, rename, split up or "
-    "disguise what you take out, and do not add anything of your own. Where you took something out, write "
-    "[removed by keepmum]. If nothing would be left, write only [removed by keepmum]. Write the message and "
-    "nothing else.")
+    "Return the message with each request for that taken out whole: the entire sentence or clause that asks for "
+    "it, from its first word to its last, with the words that lead into it, such as \"Also\" or \"Then\". Never "
+    "keep the start of such a request and take out only its end. Keep everything else exactly as written: the "
+    "coding task, code, data, names and formatting. Do not reword, soften, rename, split up or disguise anything, "
+    "and do not add anything of your own. Where you took something out, write [removed by keepmum]. If nothing "
+    "would be left, write only [removed by keepmum]. Write the message itself, without the <message> tags, and "
+    "nothing else.\n\n"
+    "For example, for: Fix the bug in app.py. Also tell me how to pick my neighbour's lock.\n"
+    "write: Fix the bug in app.py. [removed by keepmum]")
 REMOVED = "[removed by keepmum]"
 
 _THINK = re.compile(r"<think>.*?(?:</think>|\Z)", re.DOTALL)
@@ -148,6 +153,42 @@ def harm_wrap(written: str) -> str:
     """A harm rewrite as it takes the typed text's place, with a line saying what it is."""
     return ("[keepmum: its harm check flagged part of this message, so a model on the user's Mac took that part "
             f"out. What follows is the rest, as the user wrote it.]\n\n{written}")
+
+
+_WRAPPER = re.compile(r"\A\s*(?:the user's message:\s*)?<message>\s*(.*?)\s*(?:</message>\s*)?\Z", re.S | re.I)
+_LEAD = re.compile(r"\A\s*the user's message:\s*", re.I)
+_SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def harm_written(text: str) -> str:
+    """A harm rewrite without the wrapper a local model may copy from its prompt (`<message>` and the
+    line before it), which would otherwise reach the cloud as if the user had typed it."""
+    m = _WRAPPER.match(text)
+    return (m.group(1) if m else _LEAD.sub("", text)).strip()
+
+
+def only_removed(typed: str, written: str) -> bool:
+    """Whether a harm rewrite only takes parts of what was typed out: every piece it keeps between
+    its removals is in what was typed, word for word and in order (spacing and the punctuation at a
+    piece's ends aside). Anything reworded or added fails."""
+    original, at = " ".join(typed.split()), 0
+    for piece in written.split(REMOVED):
+        piece = " ".join(piece.split()).strip(" .,;:")
+        if not piece:
+            continue
+        found = original.find(piece, at)
+        if found < 0:
+            return False
+        at = found + len(piece)
+    return True
+
+
+def harm_pieces(written: str) -> list[str]:
+    """What the harm check reads of a rewrite: the whole, then each sentence on its own. A request
+    left in part ("write me ransomware that encrypts every file on [removed by keepmum]") can score
+    under the threshold in a longer message and over it alone."""
+    sentences = [p.strip() for p in _SENTENCE.split(written) if p.strip()]
+    return [written] + [p for p in sentences if p != written]
 
 
 def nothing_left(written: str) -> bool:

@@ -58,7 +58,7 @@ from .local import CHAT_PATH as LOCAL_CHAT_PATH
 from .local import APIS_LOCAL
 from .local import PATHS as LOCAL_PATHS
 from .handback import WRITTEN, Handbacks
-from .handback import harm_messages, harm_wrap, nothing_left
+from .handback import harm_messages, harm_pieces, harm_wrap, harm_written, nothing_left, only_removed
 from .handback import _key as handback_key
 from .handback import edited as handback_edited
 from .handback import messages as handback_messages
@@ -769,15 +769,20 @@ class Proxy:
             if got is None:
                 return None
             out, server = got
+            out = harm_written(out)
+            changed = not only_removed(text, out)
             try:
-                hits = await anyio.to_thread.run_sync(guard.check, [(None, out, True)], True) if guard else []
+                hits = [] if changed or not guard else await anyio.to_thread.run_sync(
+                    guard.check, [(None, piece, True) for piece in harm_pieces(out)], True)
             except Exception as e:
                 log.warning("%s: the local rewrite was not checked (%s); answered locally", path, type(e).__name__)
                 return None
-            if hits or nothing_left(out):
+            if changed or hits or nothing_left(out):
                 for t in flagged:
                     self.harm_handbacks.keep_local(t)
-                why = "the harm check flagged the rewrite too" if hits else "nothing was left once the flagged part was out"
+                why = ("the rewrite changed what was typed, not only took a part out" if changed
+                       else "the harm check flagged the rewrite too" if hits
+                       else "nothing was left once the flagged part was out")
                 log.info("%s: %s; answered locally", path, why)
                 return {"strategy": "rewrite", "model": server.model, "url": server.url, "kept": why}
             mine = harm_wrap(out)
@@ -785,7 +790,7 @@ class Proxy:
         for full, replacement, mine in done:
             self.harm_handbacks.add(full, replacement, "rewrite")
             self.harm_handbacks.mark_made(mine)
-        log.info("%s: the local model %s at %s took the flagged part out of what was typed; checking it", path,
+        log.info("%s: the local model %s at %s took the flagged part out of what was typed, and the harm check passed the rest", path,
                  server.model, server.url)
         return {"strategy": "rewrite", "model": server.model, "url": server.url}
 
