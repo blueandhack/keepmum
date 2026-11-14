@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // The Protection map: a request's round trip drawn once, with each setting on the part of the flow
@@ -9,8 +10,9 @@ import SwiftUI
 // hand-back, into masking (Local). The bands are the Overview's last hour; the cards are the
 // settings themselves, and the one selected shows its full settings under the map.
 //
-// The layout is fixed, on a canvas of `MapLayout.size`: only the bands' split between agents and
-// between providers comes from the traffic.
+// The columns spread across the width the page gives the diagram (`MapLayout.width`, never under
+// `minWidth`: a narrower window shows it scaled down); the height is fixed. The bands' split between
+// agents and between providers comes from the traffic.
 
 /// A part of the map with settings of its own.
 enum MapPart: String, CaseIterable {
@@ -94,7 +96,9 @@ struct MapSettings {
 
 /// Where everything sits, and the bands' split from the traffic.
 struct MapLayout {
-    static let size = CGSize(width: 860, height: 636)
+    /// The narrowest the columns go; the page scales the diagram down below it.
+    static let minWidth: CGFloat = 860
+    static let height: CGFloat = 636
 
     struct Bar {
         var id: String
@@ -118,9 +122,11 @@ struct MapLayout {
     var restored = 0
     /// Hits in the window, by result and check: flagged (warned), refused, local.
     var hits: [String: [String: Int]] = [:]
+    /// The diagram's width: the columns between the agents and the providers spread across it.
+    var width: CGFloat = MapLayout.minWidth
 
-    // The fixed parts.
-    static let agentX: CGFloat = 112, bundleX: CGFloat = 196, providerX: CGFloat = 716, bar: CGFloat = 6
+    // The parts that stay put: the agents' column and the lanes' heights.
+    static let agentX: CGFloat = 112, bundleX: CGFloat = 196, bar: CGFloat = 6
     static let thickness: CGFloat = 84
     static let bundle: ClosedRange<CGFloat> = 112...196
     static let toolStrand: ClosedRange<CGFloat> = 68...132
@@ -128,17 +134,32 @@ struct MapLayout {
     static let maskIn: ClosedRange<CGFloat> = 104...188
     static let backIn: ClosedRange<CGFloat> = 436...520
 
-    static let injectionCard = CGRect(x: 236, y: 58, width: 184, height: 84)
-    static let harmCard = CGRect(x: 236, y: 162, width: 184, height: 84)
-    static let maskCard = CGRect(x: 442, y: 92, width: 122, height: 108)
-    static let localCard = CGRect(x: 236, y: 318, width: 184, height: 56)
-    static let restoreCard = CGRect(x: 282, y: 428, width: 96, height: 100)
-    static let commandsCard = CGRect(x: 440, y: 428, width: 180, height: 100)
-    static let edge: CGFloat = 640
-    static let logY: CGFloat = 276, refuseY: CGFloat = 300, terminalX: CGFloat = 560
+    static let logY: CGFloat = 276, refuseY: CGFloat = 300
     static let cmdLogY: CGFloat = 584, cmdReplaceY: CGFloat = 608
 
-    init(flows: Flows) {
+    // The parts that move with the width: what a wider diagram gains goes to the gaps between them.
+    private var extra: CGFloat { max(0, width - Self.minWidth) }
+    var providerX: CGFloat { width - 144 }
+    /// The edge of this Mac.
+    var edge: CGFloat { providerX - 76 }
+    var terminalX: CGFloat { edge - 80 }
+    var gateX: CGFloat { 236 + extra * 0.22 }
+    var gateRight: CGFloat { gateX + 184 }
+    var maskX: CGFloat { gateRight + 22 + extra * 0.18 }
+    var maskRight: CGFloat { maskX + 122 }
+    /// Where a hit's line runs down, between the injection card and masking.
+    var branchX: CGFloat { (gateRight + maskX) / 2 }
+    var harmX: CGFloat { gateX + 92 }
+    var injectionCard: CGRect { CGRect(x: gateX, y: 58, width: 184, height: 84) }
+    var harmCard: CGRect { CGRect(x: gateX, y: 162, width: 184, height: 84) }
+    var maskCard: CGRect { CGRect(x: maskX, y: 92, width: 122, height: 108) }
+    var localCard: CGRect { CGRect(x: gateX, y: 318, width: 184, height: 56) }
+    var restoreCard: CGRect { CGRect(x: gateX + 46, y: 428, width: 96, height: 100) }
+    var commandsCard: CGRect { CGRect(x: edge - 200, y: 428, width: 180, height: 100) }
+    var commandsX: CGFloat { commandsCard.minX + 90 }
+
+    init(flows: Flows, width: CGFloat = MapLayout.minWidth) {
+        self.width = max(width, Self.minWidth)
         hits = flows.checks ?? [:]
         let unsent: Set<String> = ["blocked", "refused", "failed", "local"]
         var clients = flows.clients.filter { $0.sent > 0 }.sorted { $0.sent > $1.sent }
@@ -161,9 +182,9 @@ struct MapLayout {
             agentsOut = [Bar(id: "none", name: "No requests yet", requests: 0, color: Theme.neutral,
                              rect: CGRect(x: Self.agentX, y: 70, width: Self.bar, height: Self.thickness), join: Self.bundle)]
             providersOut = [Bar(id: "none", name: "Your provider", requests: 0, color: Theme.neutral,
-                                rect: CGRect(x: Self.providerX, y: 72, width: Self.bar, height: Self.thickness), join: Self.maskIn)]
+                                rect: CGRect(x: providerX, y: 72, width: Self.bar, height: Self.thickness), join: Self.maskIn)]
             providersBack = [Bar(id: "none", name: "Your provider", requests: 0, color: Theme.neutral,
-                                 rect: CGRect(x: Self.providerX, y: 420, width: Self.bar, height: Self.thickness), join: Self.backIn)]
+                                 rect: CGRect(x: providerX, y: 420, width: Self.bar, height: Self.thickness), join: Self.backIn)]
             agentsBack = [Bar(id: "none", name: "", requests: 0, color: Theme.neutral,
                               rect: CGRect(x: Self.agentX, y: 430, width: Self.bar, height: Self.thickness), join: Self.backIn)]
             return
@@ -187,11 +208,11 @@ struct MapLayout {
                 : p.id == "google" ? Theme.client("gemini") : Theme.neutral
             let name = names[p.id] ?? p.id.capitalized
             providersOut.append(Bar(id: p.id, name: name, requests: p.n, color: color,
-                                    rect: CGRect(x: Self.providerX, y: py, width: Self.bar, height: h), join: pj...(pj + h),
+                                    rect: CGRect(x: providerX, y: py, width: Self.bar, height: h), join: pj...(pj + h),
                                     marked: Double(maskedBy[p.id] ?? 0) / Double(max(1, p.n)), marked2: maskedBy[p.id] ?? 0))
             let replies = flows.providers.first { $0.id == p.id }?.replies ?? p.n
             providersBack.append(Bar(id: p.id, name: name, requests: replies, color: color,
-                                     rect: CGRect(x: Self.providerX, y: by, width: Self.bar, height: h), join: bj...(bj + h)))
+                                     rect: CGRect(x: providerX, y: by, width: Self.bar, height: h), join: bj...(bj + h)))
             py += max(h, 10) + 16; pj += h
             by += max(h, 10) + 16; bj += h
         }
@@ -220,6 +241,22 @@ struct MapLayout {
     }
 
     func hitCount(_ result: String, _ check: String) -> Int { hits[result]?[check] ?? 0 }
+
+    // The lines a hit takes.
+    /// Out of the injection card's right side and down the gap beside masking.
+    var injectionOut: Route { Route(gateRight, 128).curve(branchX, 180, branchX, 128, branchX, 150) }
+    func injection(to y: CGFloat) -> Route { injectionOut.downRight(y, to: terminalX - 4) }
+    var injectionLocal: Route {
+        var out = injectionOut.line(branchX, 338)
+        out.path.addQuadCurve(to: CGPoint(x: branchX - 8, y: 346), control: CGPoint(x: branchX, y: 346))
+        out.path.addLine(to: CGPoint(x: gateRight, y: 346))
+        return out
+    }
+    func harm(to y: CGFloat) -> Route { Route(harmX, 246).downRight(y, to: terminalX - 4) }
+    var harmLocal: Route { Route(harmX, 246).line(harmX, 318) }
+    var handback: Route { Route(gateRight, 364).curve(maskX + 60, 202, gateRight + 50, 364, maskX + 60, 300) }
+    func answer(to y: CGFloat) -> Route { Route(gateX, 346).curve(118, y, gateX - 56, 346, gateX - 66, y) }
+    func commands(to y: CGFloat) -> Route { Route(commandsX, 528).downRight(y, to: terminalX - 4) }
 
     /// A ribbon between two spans, its edges curving like the Overview's bands.
     static func ribbon(_ x0: CGFloat, _ a: ClosedRange<CGFloat>, _ x1: CGFloat, _ b: ClosedRange<CGFloat>) -> Path {
@@ -273,23 +310,6 @@ struct Route {
         r.path.addCurve(to: CGPoint(x: x, y: y), control1: CGPoint(x: c1x, y: c1y), control2: CGPoint(x: c2x, y: c2y))
         return r
     }
-
-    // The lines a hit takes.
-    /// Out of the injection card's right side and down the gap beside masking.
-    static var injectionOut: Route { Route(420, 128).curve(431, 180, 431, 128, 431, 150) }
-    static func injection(to y: CGFloat) -> Route { injectionOut.downRight(y, to: MapLayout.terminalX - 4) }
-    static var injectionLocal: Route {
-        let r = injectionOut.line(431, 338)
-        var out = r
-        out.path.addQuadCurve(to: CGPoint(x: 423, y: 346), control: CGPoint(x: 431, y: 346))
-        out.path.addLine(to: CGPoint(x: 420, y: 346))
-        return out
-    }
-    static func harm(to y: CGFloat) -> Route { Route(328, 246).downRight(y, to: MapLayout.terminalX - 4) }
-    static var harmLocal: Route { Route(328, 246).line(328, 318) }
-    static var handback: Route { Route(420, 364).curve(502, 202, 470, 364, 502, 300) }
-    static func answer(to y: CGFloat) -> Route { Route(236, 346).curve(118, y, 180, 346, 170, y) }
-    static func commands(to y: CGFloat) -> Route { Route(530, 528).downRight(y, to: MapLayout.terminalX - 4) }
 }
 
 /// A dot travelling a route: when it sets off, how long it takes, and its color along the way.
@@ -320,40 +340,41 @@ struct SampleRun {
         let providerBackY = layout.providersBack.first.map { $0.rect.midY } ?? 449
         let agentName = agent?.name ?? "Your agent", providerName = provider?.name ?? "the provider"
         let grey = Theme.textSecondary
-        let toolIn = Route(118, ay).flow(199, 141).flow(236, 100).line(380, 100)
-        let toolOn = toolIn.line(420, 100).flow(442, 133).line(564, 133).flow(MapLayout.providerX, py)
-        let typedIn = Route(118, ay + 6).flow(199, 186).flow(236, 204).line(328, 204)
-        let typedOn = typedIn.line(420, 204).flow(442, 178).line(564, 178).flow(MapLayout.providerX, py)
-        let answer = Route.answer(to: backY)
+        let l = layout
+        let toolIn = Route(118, ay).flow(199, 141).flow(l.gateX, 100).line(l.gateX + 144, 100)
+        let toolOn = toolIn.line(l.gateRight, 100).flow(l.maskX, 133).line(l.maskRight, 133).flow(l.providerX, py)
+        let typedIn = Route(118, ay + 6).flow(199, 186).flow(l.gateX, 204).line(l.harmX, 204)
+        let typedOn = typedIn.line(l.gateRight, 204).flow(l.maskX, 178).line(l.maskRight, 178).flow(l.providerX, py)
+        let answer = l.answer(to: backY)
         func then(_ a: Route, _ b: Route) -> Path { var p = a.path; p.addPath(b.path); return p }
 
         switch sample {
         case .injection:
             title = "\(agentName) fetched a page with an instruction planted for the agent"
-            let toCard = toolIn.line(420, 128)
+            let toCard = toolIn.line(l.gateRight, 128)
             switch s.injectionActs {
             case "warn":
                 route = toolOn.path
                 dots = [MapDot(path: toolOn.path, colors: [(0, grey)]),
-                        MapDot(path: Route.injection(to: MapLayout.logY).path, delay: 2.4, duration: 1.4, colors: [(0, Theme.warning)])]
+                        MapDot(path: l.injection(to: MapLayout.logY).path, delay: 2.4, duration: 1.4, colors: [(0, Theme.warning)])]
                 story = "Warn: the request went to \(providerName) at once. The injection check read it afterwards, flagged the page, and logged the hit in Logs."
             case "block":
-                route = then(toCard, Route.injection(to: MapLayout.refuseY))
+                route = then(toCard, l.injection(to: MapLayout.refuseY))
                 dots = [MapDot(path: route, colors: [(0, grey), (0.48, Theme.blocked)])]
                 story = "Block: the injection check read the page before the request left, flagged it and refused the request. Nothing reached \(providerName)."
             case "local":
-                let local = then(toCard, Route.injectionLocal)
+                let local = then(toCard, l.injectionLocal)
                 if s.handback == "stay" {
                     var p = local
-                    p.addLine(to: CGPoint(x: 236, y: 346))
+                    p.addLine(to: CGPoint(x: l.gateX, y: 346))
                     p.addPath(answer.path)
                     route = p
                     dots = [MapDot(path: p, duration: 4, colors: [(0, grey), (0.5, Theme.restored)])]
                     story = "Local: the check flagged the page before it left. Your local model answered that turn on this Mac, and the conversation stays local."
                 } else {
                     var p = local
-                    p.addLine(to: CGPoint(x: 420, y: 364))
-                    p.addPath(Route.handback.line(502, 133).line(564, 133).flow(MapLayout.providerX, py).path)
+                    p.addLine(to: CGPoint(x: l.gateRight, y: 364))
+                    p.addPath(l.handback.line(l.maskX + 60, 133).line(l.maskRight, 133).flow(l.providerX, py).path)
                     route = p
                     dots = [MapDot(path: p, duration: 4.4, colors: [(0, grey), (0.42, Theme.restored)])]
                     let what = ["answer": "answered that turn, and the next one went to \(providerName) with that answer in the result's place",
@@ -374,14 +395,14 @@ struct SampleRun {
             case "warn":
                 route = typedOn.path
                 dots = [MapDot(path: typedOn.path, colors: [(0, grey)]),
-                        MapDot(path: Route.harm(to: MapLayout.logY).path, delay: 2.4, duration: 1.3, colors: [(0, Theme.warning)])]
+                        MapDot(path: l.harm(to: MapLayout.logY).path, delay: 2.4, duration: 1.3, colors: [(0, Theme.warning)])]
                 story = "Warn: your request went to \(providerName) at once. The harm check read it afterwards and logged the hit, with its categories."
             case "block":
-                route = then(typedIn, Route.harm(to: MapLayout.refuseY))
+                route = then(typedIn, l.harm(to: MapLayout.refuseY))
                 dots = [MapDot(path: route, colors: [(0, grey), (0.45, Theme.blocked)])]
                 story = "Block: the harm check read what you typed before it left and refused it, with the model's categories. Nothing reached \(providerName)."
             case "local":
-                var p = then(typedIn, Route.harmLocal.line(328, 346).line(236, 346))
+                var p = then(typedIn, l.harmLocal.line(l.harmX, 346).line(l.gateX, 346))
                 p.addPath(answer.path)
                 route = p
                 dots = [MapDot(path: p, duration: 4, colors: [(0, grey), (0.45, Theme.restored)])]
@@ -394,7 +415,7 @@ struct SampleRun {
         case .secret:
             title = "You pasted an API key into your prompt"
             route = typedOn.path
-            let back = Route(MapLayout.providerX, providerBackY).flow(620, 444).line(282, 444).flow(118, backY - 8)
+            let back = Route(l.providerX, providerBackY).flow(l.commandsCard.maxX, 444).line(l.restoreCard.minX, 444).flow(118, backY - 8)
             let found = s.observe ? Theme.warning : Theme.masked
             dots = [MapDot(path: typedOn.path, colors: [(0, grey), (0.6, found)]),
                     MapDot(path: back.path, delay: 3.5, duration: 2.8, colors: [(0, found), (s.observe ? 2 : 0.62, Theme.restored)])]
@@ -402,19 +423,19 @@ struct SampleRun {
                 : "Masking swapped the key for a placeholder before the request left. The reply used the placeholder, and Restore put the real key back before \(agentName) saw it."
         case .command:
             title = "A reply asked the agent to run curl \u{2026} | sh"
-            let arrive = Route(MapLayout.providerX, providerBackY).flow(620, 465).line(530, 465)
+            let arrive = Route(l.providerX, providerBackY).flow(l.commandsCard.maxX, 465).line(l.commandsX, 465)
             switch s.commands {
             case "block":
-                route = then(arrive, Route.commands(to: MapLayout.cmdReplaceY))
+                route = then(arrive, l.commands(to: MapLayout.cmdReplaceY))
                 dots = [MapDot(path: route, duration: 3, colors: [(0, grey), (0.4, Theme.blocked)]),
-                        MapDot(path: Route(440, 488).line(282, 488).flow(118, backY + 10).path, delay: 1.5, duration: 2, colors: [(0, Theme.blocked)], size: 8)]
+                        MapDot(path: Route(l.commandsCard.minX, 488).line(l.restoreCard.minX, 488).flow(118, backY + 10).path, delay: 1.5, duration: 2, colors: [(0, Theme.blocked)], size: 8)]
                 story = "Block: the commands check replaced it with a command that tells the agent why it was stopped, and fails. Nothing ran."
             default:
-                let on = arrive.line(282, 465).flow(118, backY)
+                let on = arrive.line(l.restoreCard.minX, 465).flow(118, backY)
                 route = on.path
                 dots = [MapDot(path: on.path, duration: 3, colors: [(0, grey)])]
                 if s.commands == "warn" {
-                    dots.append(MapDot(path: Route.commands(to: MapLayout.cmdLogY).path, delay: 1.5, duration: 1.3, colors: [(0, Theme.warning)]))
+                    dots.append(MapDot(path: l.commands(to: MapLayout.cmdLogY).path, delay: 1.5, duration: 1.3, colors: [(0, Theme.warning)]))
                 }
                 story = s.commands == "warn" ? "Warn: the commands check logged it as it arrived, then handed it to the agent, which may still ask you before it runs."
                     : "The commands check is off, so the agent got the command as written."
@@ -441,50 +462,69 @@ struct ProtectionMapPage: View {
         _sample = State(initialValue: sample)
     }
 
+    /// From this width the selected part's settings sit beside the map, in a column this wide.
+    private static let sideBySide: CGFloat = 1400
+    private static let sideWidth: CGFloat = 540
+    /// The widest the diagram spreads: past this, rows get hard to follow across.
+    private static let widest: CGFloat = 1360
+
     var body: some View {
         let settings = MapSettings(engine: engine, store: store)
-        let layout = MapLayout(flows: store.flows)
-        let run = sample.map { SampleRun($0, settings, layout) }
         VStack(alignment: .leading, spacing: Space.l) {
             PageHeader(title: "Protection map", subtitle: "Every check where it acts on a request, and where a hit goes. Click a part to change it.")
-            if isSnapshot {
-                content(settings, layout, run)
-            } else {
-                ScrollView { content(settings, layout, run).padding(.bottom, Space.xl) }.scrollIndicators(.automatic)
+            GeometryReader { geo in
+                let side = geo.size.width >= Self.sideBySide
+                let mapWidth = side ? geo.size.width - Self.sideWidth - Space.xl : geo.size.width
+                // The diagram's own width: the card's, less its padding, up to the widest it spreads.
+                let inner = min(mapWidth - 2 * Space.m, Self.widest)
+                let layout = MapLayout(flows: store.flows, width: inner)
+                let run = sample.map { SampleRun($0, settings, layout) }
+                let page = content(settings, layout, run, side: side, mapWidth: mapWidth, inner: inner)
+                if isSnapshot {
+                    page
+                } else {
+                    ScrollView { page.padding(.bottom, Space.xl) }.scrollIndicators(.automatic)
+                }
             }
         }
         .task { await engine.loadLocalHandback() }
     }
 
-    private func content(_ settings: MapSettings, _ layout: MapLayout, _ run: SampleRun?) -> some View {
-        VStack(alignment: .leading, spacing: Space.l) {
-            Group {
-                if isSnapshot {
-                    diagram(settings, layout, run)
-                } else {
-                    ScrollView(.horizontal) { diagram(settings, layout, run) }.scrollIndicators(.automatic)
-                }
-            }
-            .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.surface))
-            .frame(maxWidth: MapLayout.size.width + 2 * Space.m)
+    @ViewBuilder private func content(_ settings: MapSettings, _ layout: MapLayout, _ run: SampleRun?,
+                                      side: Bool, mapWidth: CGFloat, inner: CGFloat) -> some View {
+        let map = VStack(alignment: .leading, spacing: Space.l) {
+            diagram(settings, layout, run, inner: inner)
             narration(run)
             legend
-            VStack(alignment: .leading, spacing: Space.xl) {
-                selectedSettings(settings)
+        }
+        let panel = VStack(alignment: .leading, spacing: Space.xl) { selectedSettings(settings) }.id(selected)
+        if side {
+            HStack(alignment: .top, spacing: Space.xl) {
+                map.frame(width: mapWidth)
+                panel.frame(width: Self.sideWidth, alignment: .topLeading)
             }
-            .frame(maxWidth: 780, alignment: .topLeading)
-            .id(selected)
+        } else {
+            VStack(alignment: .leading, spacing: Space.l) {
+                map.frame(width: mapWidth)
+                panel.frame(maxWidth: 780, alignment: .topLeading)
+            }
         }
     }
 
-    private func diagram(_ settings: MapSettings, _ layout: MapLayout, _ run: SampleRun?) -> some View {
-        MapDiagram(engine: engine, settings: settings, layout: layout, selected: $selected, run: run, started: started)
+    /// The diagram on its card: laid out for the width it has, or scaled down when that is under the narrowest.
+    private func diagram(_ settings: MapSettings, _ layout: MapLayout, _ run: SampleRun?, inner: CGFloat) -> some View {
+        let scale = min(1, max(0.5, inner / MapLayout.minWidth))
+        return MapDiagram(engine: engine, settings: settings, layout: layout, selected: $selected, run: run, started: started)
+            .scaleEffect(scale, anchor: .topLeading)
+            .frame(width: layout.width * scale, height: MapLayout.height * scale, alignment: .topLeading)
             .padding(Space.m)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.surface))
     }
 
     private var samples: some View {
-        HStack(spacing: Space.xs) {
-            Text("Send a sample:").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+        ChipFlow(spacing: Space.xs) {
+            Text("Send a sample:").font(.km(.caption)).foregroundStyle(Theme.textSecondary).padding(.vertical, Space.xs + 1)
             ForEach(MapSample.allCases) { s in
                 let on = sample == s
                 Button {
@@ -510,7 +550,7 @@ struct ProtectionMapPage: View {
             story(run)
         }
         .padding(Space.m)
-        .frame(maxWidth: MapLayout.size.width + 2 * Space.m, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.surface))
     }
 
@@ -529,7 +569,7 @@ struct ProtectionMapPage: View {
     }
 
     private var legend: some View {
-        HStack(spacing: Space.l) {
+        ChipFlow(spacing: Space.l) {
             key(Theme.masked, "Masked before it left")
             key(Theme.restored, "Put back, or answered on this Mac")
             key(Theme.warning, "Sent, then logged", dashed: true)
@@ -576,6 +616,7 @@ struct MapDiagram: View {
     @Binding var selected: MapPart
     var run: SampleRun?
     var started: Date
+    @State private var hovered: MapPart?
     @Environment(\.isSnapshot) private var isSnapshot
 
     private var s: MapSettings { settings }
@@ -588,7 +629,7 @@ struct MapDiagram: View {
             labels
             cards
         }
-        .frame(width: MapLayout.size.width, height: MapLayout.size.height, alignment: .topLeading)
+        .frame(width: layout.width, height: MapLayout.height, alignment: .topLeading)
         .animation(Motion.quick, value: s.injection)
         .animation(Motion.quick, value: s.harm)
         .animation(Motion.quick, value: s.commands)
@@ -600,9 +641,9 @@ struct MapDiagram: View {
     private func drawBands(_ ctx: inout GraphicsContext) {
         let band = GraphicsContext.Shading.color(Theme.neutral.opacity(0.28))
         // The edge of this Mac, and the line between the lanes.
-        ctx.stroke(Path { p in p.move(to: CGPoint(x: MapLayout.edge, y: 10)); p.addLine(to: CGPoint(x: MapLayout.edge, y: 630)) },
+        ctx.stroke(Path { p in p.move(to: CGPoint(x: layout.edge, y: 10)); p.addLine(to: CGPoint(x: layout.edge, y: 630)) },
                    with: .color(Theme.textTertiary), style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
-        ctx.stroke(Path { p in p.move(to: CGPoint(x: 0, y: 390)); p.addLine(to: CGPoint(x: 620, y: 390)) },
+        ctx.stroke(Path { p in p.move(to: CGPoint(x: 0, y: 390)); p.addLine(to: CGPoint(x: layout.commandsCard.maxX, y: 390)) },
                    with: .color(Theme.separator), lineWidth: 1)
 
         // Requests out.
@@ -610,31 +651,31 @@ struct MapDiagram: View {
             ctx.fill(MapLayout.ribbon(MapLayout.agentX + MapLayout.bar, a.rect.minY...a.rect.maxY, MapLayout.bundleX, a.join),
                      with: .color(a.color.opacity(0.32)))
         }
-        ctx.fill(MapLayout.ribbon(202, 112...176, 236, MapLayout.toolStrand), with: band)
-        ctx.fill(MapLayout.ribbon(202, 176...196, 236, MapLayout.typedStrand), with: band)
-        ctx.fill(MapLayout.ribbon(420, MapLayout.toolStrand, 442, 104...168), with: band)
-        ctx.fill(MapLayout.ribbon(420, MapLayout.typedStrand, 442, 168...188), with: band)
+        ctx.fill(MapLayout.ribbon(202, 112...176, layout.gateX, MapLayout.toolStrand), with: band)
+        ctx.fill(MapLayout.ribbon(202, 176...196, layout.gateX, MapLayout.typedStrand), with: band)
+        ctx.fill(MapLayout.ribbon(layout.gateRight, MapLayout.toolStrand, layout.maskX, 104...168), with: band)
+        ctx.fill(MapLayout.ribbon(layout.gateRight, MapLayout.typedStrand, layout.maskX, 168...188), with: band)
         let maskColor = s.observe ? Theme.warning : Theme.masked
         for p in layout.providersOut {
             let target = p.rect.minY...p.rect.maxY
-            ctx.fill(MapLayout.ribbon(564, MapLayout.upper(p.join, 1 - p.marked), MapLayout.providerX, MapLayout.upper(target, 1 - p.marked)), with: band)
+            ctx.fill(MapLayout.ribbon(layout.maskRight, MapLayout.upper(p.join, 1 - p.marked), layout.providerX, MapLayout.upper(target, 1 - p.marked)), with: band)
             if p.marked > 0 {
-                ctx.fill(MapLayout.ribbon(564, MapLayout.lower(p.join, p.marked), MapLayout.providerX, MapLayout.lower(target, p.marked)),
+                ctx.fill(MapLayout.ribbon(layout.maskRight, MapLayout.lower(p.join, p.marked), layout.providerX, MapLayout.lower(target, p.marked)),
                          with: .color(maskColor.opacity(0.4)))
             }
         }
 
         // Replies back.
         for p in layout.providersBack {
-            ctx.fill(MapLayout.ribbon(MapLayout.providerX, p.rect.minY...p.rect.maxY, 620, p.join), with: band)
+            ctx.fill(MapLayout.ribbon(layout.providerX, p.rect.minY...p.rect.maxY, layout.commandsCard.maxX, p.join), with: band)
         }
-        ctx.fill(MapLayout.ribbon(440, MapLayout.backIn, 378, MapLayout.backIn), with: band)
+        ctx.fill(MapLayout.ribbon(layout.commandsCard.minX, MapLayout.backIn, layout.restoreCard.maxX, MapLayout.backIn), with: band)
         for a in layout.agentsBack {
             let target = a.rect.minY...a.rect.maxY
-            ctx.fill(MapLayout.ribbon(282, MapLayout.lower(a.join, 1 - a.marked), MapLayout.agentX + MapLayout.bar, MapLayout.lower(target, 1 - a.marked)),
+            ctx.fill(MapLayout.ribbon(layout.restoreCard.minX, MapLayout.lower(a.join, 1 - a.marked), MapLayout.agentX + MapLayout.bar, MapLayout.lower(target, 1 - a.marked)),
                      with: .color(a.color.opacity(0.26)))
             if a.marked > 0 {
-                ctx.fill(MapLayout.ribbon(282, MapLayout.upper(a.join, a.marked), MapLayout.agentX + MapLayout.bar, MapLayout.upper(target, a.marked)),
+                ctx.fill(MapLayout.ribbon(layout.restoreCard.minX, MapLayout.upper(a.join, a.marked), MapLayout.agentX + MapLayout.bar, MapLayout.upper(target, a.marked)),
                          with: .color(Theme.restored.opacity(0.42)))
             }
         }
@@ -654,17 +695,17 @@ struct MapDiagram: View {
 
     @ViewBuilder private var hitLines: some View {
         let inj = s.injectionActs
-        line(Route.injection(to: MapLayout.logY), Theme.warning, injectionWidth, dashed: true, on: inj == "warn")
-        line(Route.injection(to: MapLayout.refuseY), Theme.blocked, injectionWidth, on: inj == "block")
-        line(Route.injectionLocal, Theme.restored, injectionWidth, on: inj == "local")
-        line(Route.harm(to: MapLayout.logY), Theme.warning, harmWidth, dashed: true, on: s.harm == "warn")
-        line(Route.harm(to: MapLayout.refuseY), Theme.blocked, harmWidth, on: s.harm == "block")
-        line(Route.harmLocal, Theme.restored, harmWidth, on: s.harm == "local")
-        line(Route.handback, Theme.restored, 2, dotted: true, on: inj == "local" && s.handback != "stay")
-        line(Route.answer(to: layout.agentsBack.first.map { $0.rect.midY } ?? 459), Theme.restored, 2,
+        line(layout.injection(to: MapLayout.logY), Theme.warning, injectionWidth, dashed: true, on: inj == "warn")
+        line(layout.injection(to: MapLayout.refuseY), Theme.blocked, injectionWidth, on: inj == "block")
+        line(layout.injectionLocal, Theme.restored, injectionWidth, on: inj == "local")
+        line(layout.harm(to: MapLayout.logY), Theme.warning, harmWidth, dashed: true, on: s.harm == "warn")
+        line(layout.harm(to: MapLayout.refuseY), Theme.blocked, harmWidth, on: s.harm == "block")
+        line(layout.harmLocal, Theme.restored, harmWidth, on: s.harm == "local")
+        line(layout.handback, Theme.restored, 2, dotted: true, on: inj == "local" && s.handback != "stay")
+        line(layout.answer(to: layout.agentsBack.first.map { $0.rect.midY } ?? 459), Theme.restored, 2,
              on: (inj == "local" && s.handback == "stay") || s.harm == "local")
-        line(Route.commands(to: MapLayout.cmdLogY), Theme.warning, 2, dashed: true, on: s.commands == "warn")
-        line(Route.commands(to: MapLayout.cmdReplaceY), Theme.blocked, 2, on: s.commands == "block")
+        line(layout.commands(to: MapLayout.cmdLogY), Theme.warning, 2, dashed: true, on: s.commands == "warn")
+        line(layout.commands(to: MapLayout.cmdReplaceY), Theme.blocked, 2, on: s.commands == "block")
         terminal(MapLayout.logY, Theme.warning, on: inj == "warn" || s.harm == "warn")
         terminal(MapLayout.refuseY, Theme.blocked, on: inj == "block" || s.harm == "block")
         terminal(MapLayout.cmdLogY, Theme.warning, on: s.commands == "warn", hidden: true)
@@ -680,7 +721,7 @@ struct MapDiagram: View {
 
     private func terminal(_ y: CGFloat, _ color: Color, on: Bool, hidden: Bool = false) -> some View {
         Circle().fill(color).frame(width: 8, height: 8)
-            .offset(x: MapLayout.terminalX - 4, y: y - 4)
+            .offset(x: layout.terminalX - 4, y: y - 4)
             .opacity(on ? 1 : hidden ? 0 : 0.28)
             .allowsHitTesting(false)
     }
@@ -720,12 +761,13 @@ struct MapDiagram: View {
         let ay2 = a.dropFirst().first.map { $0.rect.midY } ?? ay, py2 = p.dropFirst().first.map { $0.rect.midY } ?? py
         let backY = layout.agentsBack.first.map { $0.rect.midY } ?? 459
         let pby = layout.providersBack.first.map { $0.rect.midY } ?? 449
+        let l = layout
         return [
-            Route(118, ay).flow(199, 141).flow(236, 100).line(420, 100).flow(442, 133).line(564, 133).flow(MapLayout.providerX, py).path,
-            Route(118, ay2).flow(199, 186).flow(236, 204).line(420, 204).flow(442, 178).line(564, 178).flow(MapLayout.providerX, py2).path,
-            Route(MapLayout.providerX, pby).flow(620, 465).line(282, 465).flow(118, backY).path,
-            Route(118, ay).flow(199, 130).flow(236, 116).line(420, 116).flow(442, 150).line(564, 150).flow(MapLayout.providerX, py).path,
-            Route(MapLayout.providerX, pby).flow(620, 480).line(282, 480).flow(118, backY + 4).path,
+            Route(118, ay).flow(199, 141).flow(l.gateX, 100).line(l.gateRight, 100).flow(l.maskX, 133).line(l.maskRight, 133).flow(l.providerX, py).path,
+            Route(118, ay2).flow(199, 186).flow(l.gateX, 204).line(l.gateRight, 204).flow(l.maskX, 178).line(l.maskRight, 178).flow(l.providerX, py2).path,
+            Route(l.providerX, pby).flow(l.commandsCard.maxX, 465).line(l.restoreCard.minX, 465).flow(118, backY).path,
+            Route(118, ay).flow(199, 130).flow(l.gateX, 116).line(l.gateRight, 116).flow(l.maskX, 150).line(l.maskRight, 150).flow(l.providerX, py).path,
+            Route(l.providerX, pby).flow(l.commandsCard.maxX, 480).line(l.restoreCard.minX, 480).flow(118, backY + 4).path,
         ]
     }
 
@@ -740,13 +782,13 @@ struct MapDiagram: View {
 
     @ViewBuilder private var labels: some View {
         eyebrow("YOUR AGENTS \u{2192}", 0, 14)
-        eyebrow("CHECKED BEFORE IT LEAVES", 236, 14)
-        eyebrow("MASKING", 442, 14)
-        eyebrow("THIS MAC", 560, 14, width: 72, align: .trailing)
-        eyebrow("INTERNET", 648, 14)
+        eyebrow("CHECKED BEFORE IT LEAVES", layout.gateX, 14)
+        eyebrow("MASKING", layout.maskX, 14)
+        eyebrow("THIS MAC", layout.edge - 80, 14, width: 72, align: .trailing)
+        eyebrow("INTERNET", layout.edge + 8, 14)
         eyebrow("\u{2190} REPLIES BACK", 0, 400)
-        eyebrow("RESTORE", 282, 400)
-        eyebrow("CHECKED ON ARRIVAL", 440, 400)
+        eyebrow("RESTORE", layout.restoreCard.minX, 400)
+        eyebrow("CHECKED ON ARRIVAL", layout.commandsCard.minX, 400)
         caption("tool results", 150, 86, width: 80, align: .center)
         caption("what you typed", 146, 214, width: 88, align: .center)
 
@@ -775,10 +817,10 @@ struct MapDiagram: View {
             }
         }
         ForEach(Array(layout.providersOut.enumerated()), id: \.offset) { _, p in
-            twoLine(p.name, p.requests > 0 ? "\(p.requests.formatted()) sent" : "", 732, p.rect.midY - 15)
+            twoLine(p.name, p.requests > 0 ? "\(p.requests.formatted()) sent" : "", layout.providerX + 16, p.rect.midY - 15)
         }
         ForEach(Array(layout.providersBack.enumerated()), id: \.offset) { _, p in
-            twoLine(p.name, p.requests > 0 ? "\(p.requests.formatted()) replies" : "", 732, p.rect.midY - 15)
+            twoLine(p.name, p.requests > 0 ? "\(p.requests.formatted()) replies" : "", layout.providerX + 16, p.rect.midY - 15)
         }
 
         let warned = layout.hitCount("flagged", "injection") + layout.hitCount("flagged", "harm")
@@ -792,10 +834,10 @@ struct MapDiagram: View {
         let hb = ["answer": "local answer, then the cloud", "summary": "local summary to the cloud",
                   "rewrite": "local rewrite to the cloud", "withhold": "a notice to the cloud"][s.handback] ?? ""
         Text(hb).font(.km(.caption)).foregroundStyle(Theme.restored)
-            .frame(width: 110, alignment: .leading).offset(x: 512, y: 230)
+            .frame(width: 110, alignment: .leading).offset(x: layout.maskX + 70, y: 230)
             .opacity(inj == "local" && s.handback != "stay" ? 1 : 0)
         Text("answer back to the agent").font(.km(.caption)).foregroundStyle(Theme.restored).multilineTextAlignment(.trailing)
-            .frame(width: 100, alignment: .trailing).offset(x: 128, y: 370)
+            .frame(width: 100, alignment: .trailing).offset(x: layout.gateX - 108, y: 370)
             .opacity((inj == "local" && s.handback == "stay") || s.harm == "local" ? 1 : 0)
     }
 
@@ -819,21 +861,21 @@ struct MapDiagram: View {
 
     private func terminalLabel(_ text: String, _ color: Color, _ y: CGFloat, on: Bool, hidden: Bool = false) -> some View {
         Text(text).font(.km(.caption).weight(.semibold)).foregroundStyle(color)
-            .offset(x: MapLayout.terminalX + 8, y: y - 8)
+            .offset(x: layout.terminalX + 8, y: y - 8)
             .opacity(on ? 1 : hidden ? 0 : 0.35)
     }
 
     // MARK: Cards
 
     @ViewBuilder private var cards: some View {
-        gate(.injection, icon: "syringe", mode: s.injection, options: Self.four, rect: MapLayout.injectionCard,
+        gate(.injection, icon: "syringe", mode: s.injection, options: Self.four, rect: layout.injectionCard,
              caption: injectionCaption, paused: s.paused) { await engine.setCheck("injection", mode: $0) }
-        gate(.harm, icon: "exclamationmark.bubble", mode: s.harm, options: Self.four, rect: MapLayout.harmCard,
+        gate(.harm, icon: "exclamationmark.bubble", mode: s.harm, options: Self.four, rect: layout.harmCard,
              caption: harmCaption) { await engine.setCheck("harm", mode: $0) }
         maskingCard
         localCard
         restoreCard
-        gate(.commands, icon: "terminal", mode: s.commands, options: Self.three, rect: MapLayout.commandsCard,
+        gate(.commands, icon: "terminal", mode: s.commands, options: Self.three, rect: layout.commandsCard,
              caption: s.commands == "off" ? "Off: commands reach the agent unchecked" : "Rules: curl | sh, rm -rf ~, keys sent out\u{2026}") {
             await engine.setCheck("commands", mode: $0)
         }
@@ -869,8 +911,12 @@ struct MapDiagram: View {
 
     private func ring(_ part: MapPart) -> some View {
         RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
-            .strokeBorder(selected == part ? Theme.accent : Theme.separator, lineWidth: selected == part ? 2 : 1)
+            .strokeBorder(selected == part ? Theme.accent : hovered == part ? Theme.accent.opacity(0.45) : Theme.separator,
+                          lineWidth: selected == part ? 2 : hovered == part ? 1.5 : 1)
     }
+
+    /// Anywhere on a card selects it, its controls included, with a pointing hand over it.
+    private func selectable(_ part: MapPart) -> some ViewModifier { SelectableCard(part: part, selected: $selected, hovered: $hovered) }
 
     private func cardBackground() -> some View {
         RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.raised)
@@ -924,11 +970,12 @@ struct MapDiagram: View {
         .overlay(paused ? AnyView(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Theme.warning, lineWidth: 2))
                         : AnyView(ring(part)))
         .opacity(mode == "off" && !paused ? 0.8 : 1)
+        .modifier(selectable(part))
         .offset(x: rect.minX, y: rect.minY)
     }
 
     private var maskingCard: some View {
-        let rect = MapLayout.maskCard
+        let rect = layout.maskCard
         return VStack(alignment: .leading, spacing: Space.xs + 1) {
             title(.masking, icon: "eye.slash")
             if isSnapshot {
@@ -946,11 +993,12 @@ struct MapDiagram: View {
         .frame(width: rect.width, height: rect.height, alignment: .topLeading)
         .background(cardBackground())
         .overlay(ring(.masking))
+        .modifier(selectable(.masking))
         .offset(x: rect.minX, y: rect.minY)
     }
 
     private var localCard: some View {
-        let rect = MapLayout.localCard
+        let rect = layout.localCard
         let answered = layout.hitCount("local", "injection") + layout.hitCount("local", "harm")
         let detail = !s.localUsed ? "Not used: no check is Local"
             : s.localServers == 0 ? "No server yet: a hit is refused"
@@ -965,11 +1013,12 @@ struct MapDiagram: View {
         .background(cardBackground())
         .overlay(ring(.local))
         .opacity(s.localUsed ? 1 : 0.6)
+        .modifier(selectable(.local))
         .offset(x: rect.minX, y: rect.minY)
     }
 
     private var restoreCard: some View {
-        let rect = MapLayout.restoreCard
+        let rect = layout.restoreCard
         return VStack(alignment: .leading, spacing: Space.xs) {
             HStack(spacing: Space.xs + 2) {
                 Image(systemName: "arrow.uturn.backward").font(.km(.caption)).foregroundStyle(Theme.restored)
@@ -986,6 +1035,30 @@ struct MapDiagram: View {
         .background(cardBackground())
         .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Theme.separator, lineWidth: 1))
         .offset(x: rect.minX, y: rect.minY)
+    }
+}
+
+/// A card on the map that selects its part when clicked anywhere, its controls included (they still
+/// work: the click does both), and shows a pointing hand while the pointer is over it.
+private struct SelectableCard: ViewModifier {
+    var part: MapPart
+    @Binding var selected: MapPart
+    @Binding var hovered: MapPart?
+
+    func body(content: Content) -> some View {
+        content
+            .contentShape(RoundedRectangle(cornerRadius: Radius.m, style: .continuous))
+            .simultaneousGesture(TapGesture().onEnded { selected = part })
+            .onHover { inside in
+                if inside {
+                    hovered = part
+                    NSCursor.pointingHand.push()
+                } else {
+                    if hovered == part { hovered = nil }
+                    NSCursor.pop()
+                }
+            }
+            .accessibilityAddTraits(selected == part ? [.isSelected] : [])
     }
 }
 

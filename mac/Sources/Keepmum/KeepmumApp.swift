@@ -472,6 +472,12 @@ enum Snapshotter {
         }
         render(mapPage(store, .preview(localOff: true), sample: .injection), to: "\(dir)/map-warn-light.png", dark: false)
         render(mapPage(store, .preview(outdated: true)), to: "\(dir)/map-outdated-light.png", dark: false)
+        // A narrow window (the diagram scaled down) and a wide one (the settings beside the map).
+        render(mapPage(store, .preview(), width: 720, height: 1500), to: "\(dir)/map-narrow-light.png", dark: false)
+        for dark in [false, true] {
+            render(Dashboard(store: store, engine: .preview(), page: .map).frame(width: 1900, height: 1100),
+                   to: "\(dir)/map-wide-\(dark ? "dark" : "light").png", dark: dark)
+        }
         // The background service just started, waiting for it to answer.
         render(Dashboard(store: store, engine: .preview(starting: true), page: .settings).frame(width: 1200, height: 780),
                to: "\(dir)/settings-starting-light.png", dark: false)
@@ -506,9 +512,10 @@ enum Snapshotter {
         exit(0)
     }
 
-    private static func mapPage(_ store: StatsStore, _ engine: Engine, selected: MapPart = .injection, sample: MapSample? = nil) -> some View {
+    private static func mapPage(_ store: StatsStore, _ engine: Engine, selected: MapPart = .injection, sample: MapSample? = nil,
+                                width: CGFloat = 992, height: CGFloat = 1500) -> some View {
         ProtectionMapPage(store: store, engine: engine, selected: selected, sample: sample)
-            .padding(Space.xl).frame(width: 992, height: 1500, alignment: .topLeading).background(Theme.canvas)
+            .padding(Space.xl).frame(width: width, height: height, alignment: .topLeading).background(Theme.canvas)
     }
 
     /// The dashboard at its default window size: what fits without scrolling is what you see.

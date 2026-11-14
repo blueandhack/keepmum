@@ -360,6 +360,8 @@ struct Segmented<T: Hashable>: View {
         }
         .padding(Space.xxs)
         .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.fill))
+        // Full width or nothing: the text beside it wraps instead of the segments truncating.
+        .fixedSize(horizontal: !compact, vertical: false)
         .opacity(isEnabled ? 1 : 0.4)
         .animation(Motion.quick, value: selection)
     }
