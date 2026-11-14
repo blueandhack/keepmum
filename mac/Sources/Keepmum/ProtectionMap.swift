@@ -132,6 +132,9 @@ struct MapLayout {
     var agentsBack: [Bar] = []
     var empty = true
     var masked = 0
+    /// Requests keepmum did not send for an error of its own (a scan that failed, a provider that
+    /// did not answer): not a check's refusal, so on no route of the map.
+    var notSent = 0
     var restored = 0
     /// Hits in the window, by result and check: flagged (warned), refused, local.
     var hits: [String: [String: Int]] = [:]
@@ -188,6 +191,7 @@ struct MapLayout {
         }
         for p in flows.providers { names[p.id] = p.name }
         masked = maskedBy.values.reduce(0, +)
+        notSent = flows.out.filter { $0.kind == "blocked" || $0.kind == "failed" }.reduce(0) { $0 + $1.n }
         empty = clients.isEmpty
         let providers = sent.sorted { $0.value > $1.value }.prefix(3).map { (id: $0.key, n: $0.value) }
 
@@ -213,6 +217,12 @@ struct MapLayout {
             join += h
         }
 
+        if providers.isEmpty {  // nothing reached a provider yet: the column stays, so the bands do
+            providersOut = [Bar(id: "none", name: "Your provider", requests: 0, color: Theme.neutral,
+                                rect: CGRect(x: providerX, y: 72, width: Self.bar, height: Self.thickness), join: Self.maskIn)]
+            providersBack = [Bar(id: "none", name: "Your provider", requests: 0, color: Theme.neutral,
+                                 rect: CGRect(x: providerX, y: 420, width: Self.bar, height: Self.thickness), join: Self.backIn)]
+        }
         let ptotal = Double(max(1, providers.reduce(0) { $0 + $1.n }))
         let pheights = Self.split(providers.map { Double($0.n) / ptotal })
         var py: CGFloat = 72, pj = Self.maskIn.lowerBound, by: CGFloat = 420, bj = Self.backIn.lowerBound
@@ -1091,6 +1101,11 @@ struct MapDiagram: View {
             }
             Text(s.observe ? "Sent as is" : layout.masked > 0 ? "\(layout.masked.formatted()) masked" : "Placeholders out")
                 .font(.km(.caption).weight(.medium)).foregroundStyle(s.observe ? Theme.warning : Theme.masked).lineLimit(1)
+            if layout.notSent > 0 {
+                Text("\(layout.notSent.formatted()) not sent: errors")
+                    .font(.km(.caption)).foregroundStyle(Theme.blocked).lineLimit(1)
+                    .help("keepmum did not send these: a scan failed or the provider did not answer. Logs has each one.")
+            }
         }
         .padding(Space.s)
         .frame(width: rect.width, height: rect.height, alignment: .topLeading)

@@ -475,6 +475,12 @@ enum Snapshotter {
         render(mapPage(store, .preview(outdated: true)), to: "\(dir)/map-outdated-light.png", dark: false)
         // Only harm answers locally: the hand-back, for injection hits, is drawn faint.
         render(mapPage(store, .preview(harmOnlyLocal: true), sample: .harm), to: "\(dir)/map-harm-local-light.png", dark: false)
+        // Every request refused for an error (a scan that failed): the provider column and its bands
+        // stay drawn, and Masking says how many were not sent.
+        store.injectFlows(Flows(clients: [.init(id: "codex", name: "Codex", sent: 60)],
+                                out: [.init(client: "codex", provider: nil, kind: "blocked", n: 60)]))
+        render(mapPage(store, .preview(), selected: .masking), to: "\(dir)/map-not-sent-light.png", dark: false)
+        store.injectFlows(SampleFeed.flows(window: 3600))
         // A narrow window (the diagram scaled down) and a wide one (the settings beside the map).
         render(mapPage(store, .preview(), width: 720, height: 1500), to: "\(dir)/map-narrow-light.png", dark: false)
         for dark in [false, true] {
