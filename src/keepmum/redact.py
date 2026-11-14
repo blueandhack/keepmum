@@ -210,6 +210,9 @@ class Redactor:
         # The same for the harm check (harm.py): what the user typed, as (None, text, new), without
         # what agents add to a user turn. `_role` is the role of the message being masked.
         self.user_texts: list[tuple[None, str, bool]] = []
+        # Each of those texts -> the whole string it came from, as the request holds it (a harm
+        # hand-back replaces the typed part inside it). Reset with `user_texts`.
+        self.typed_in: dict[str, str] = {}
         # With [log] context on: each of those texts as the Logs page may show it, every masked value
         # in it as its type (as_types). Per request, in memory only.
         self.shown: dict[str, str] = {}
@@ -282,6 +285,7 @@ class Redactor:
 
             if mine := typed(text):
                 self.user_texts.append((None, mine, not seen))
+                self.typed_in[mine] = text
                 if self.context:
                     self.shown[mine] = typed(as_types(text, spans, limit=len(text)))[:CHECK_TEXT]
         if not seen:

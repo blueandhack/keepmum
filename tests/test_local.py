@@ -61,7 +61,7 @@ def answer(body: dict, model: str) -> httpx.Response:
 
 
 def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", servers=None, local=None, harm=False,
-        skills=None, handback=None, scorer=None):
+        skills=None, handback=None, scorer=None, handback_harm=None):
     """Requests through a proxy whose local servers are mocked: `local` maps a port to a handler
     taking (request, body), else every server on localhost answers like Ollama."""
     seen = {"upstream": [], "local": [], "sent": []}
@@ -87,7 +87,8 @@ def run(mode, bodies, model="qwen3:0.6b", local_up=True, path="/v1/messages", se
                       client=client, stats_token="t", guards=checks,
                       local=lambda check: servers_for(servers, check), gemini_upstream="http://up",
                       local_skills=lambda check: skills_for(skills or [], check),
-                      handback=handback if callable(handback) else (lambda: handback) if handback else None)
+                      handback=handback if callable(handback) else (lambda: handback) if handback else None,
+                      handback_harm=(lambda: handback_harm) if handback_harm else None)
         agent = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
         paths = path if isinstance(path, list) else [path] * len(bodies)  # one per request, or the same for all
         rs = [await agent.post(p, json=b, headers={"x-api-key": "sk-ant-secret-key", "anthropic-version": "2023-06-01"})
@@ -677,7 +678,7 @@ def test_an_answer_the_check_flags_keeps_the_conversation_local():
     assert [r.json()["id"] for r in rs] == ["local", "local"] and seen["upstream"] == []
 
 
-def test_the_harm_check_never_hands_back():
+def test_the_injection_checks_hand_back_leaves_a_harm_hit_local():
     body = {"model": "claude-x", "max_tokens": 50, "messages": [{"role": "user", "content": ATTACK}]}
     rs, seen, _ = run("local", [body], harm=True, local=writes("a summary"), handback=("summary", ""))
     assert rs[0].json()["id"] == "local" and seen["upstream"] == []

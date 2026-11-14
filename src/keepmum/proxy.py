@@ -58,6 +58,7 @@ from .local import CHAT_PATH as LOCAL_CHAT_PATH
 from .local import APIS_LOCAL
 from .local import PATHS as LOCAL_PATHS
 from .handback import WRITTEN, Handbacks
+from .handback import harm_messages, harm_wrap, nothing_left
 from .handback import _key as handback_key
 from .handback import edited as handback_edited
 from .handback import messages as handback_messages
@@ -217,7 +218,7 @@ class Proxy:
                  chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
                  gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM,
                  tools=None, guards=None, commands=None, local=None, antigravity_upstream: str = ANTIGRAVITY_UPSTREAM,
-                 local_skills=None, handback=None, review=None, speed=None):
+                 local_skills=None, handback=None, review=None, speed=None, handback_harm=None):
         self.redactor = redactor
         # The checks on a request's texts (guard.Guard): "injection" on tool results, "harm" on what
         # the user typed. Warn-mode checks run after the request is sent, in `_background`.
@@ -233,6 +234,9 @@ class Proxy:
         # local_handback_instructions), and the results handed back so far (handback.py).
         self._handback = handback if callable(handback) else (lambda: ("stay", ""))
         self.handbacks = Handbacks()
+        # The same for the harm check ([guard] local_handback_harm): "stay", or "rewrite" what was typed.
+        self._handback_harm = handback_harm if callable(handback_harm) else (lambda: "stay")
+        self.harm_handbacks = Handbacks()
         # Whether the user reviews a summary or rewrite before it goes: a callable giving ([guard]
         # local_handback_review, _wait, _timeout), and the reviews waiting for an answer (review.py).
         self._review = review if callable(review) else (lambda: ("off", 60, "stay"))
@@ -457,6 +461,7 @@ class Proxy:
             # keepmum's own replacements are not tool output: what the local model wrote in them was
             # checked on its own (`_hand_back`), and their wording reads like an injection to the model.
             texts["injection"] = [i for i in texts.get("injection") or [] if not self.handbacks.made(i[1])]
+            texts["harm"] = [i for i in texts.get("harm") or [] if not self.harm_handbacks.made(i[1])]
             refused = await self._guarded(texts, path, origin, kind="masked" if new else "clean", api=t.api)
             if isinstance(refused, LocalRoute):
                 if first is None and (handed := await self._hand_back(refused, texts, path)):
@@ -467,7 +472,7 @@ class Proxy:
                     first, (body, _) = refused, self._handed_back(original, seen)
                     continue  # scanned again: what the local model wrote is checked like any result
                 if first is not None:
-                    log.info("%s: the injection check flagged what the local model wrote too; answered locally", path)
+                    log.info("%s: the %s check flagged what the local model wrote too; answered locally", path, refused.check)
                     self.stats.note_guard(first.entries, handed_back={**handed, "kept": "what the local model wrote was flagged too"})
                 return await self._answer_locally(request, t, original, refused, origin, texts)
             if refused is not None:
@@ -476,7 +481,7 @@ class Proxy:
         if first is not None:
             self.stats.note_guard(first.entries, handed_back=handed)
         # The first request to carry a replacement to the cloud is its hand-back on the flow diagram.
-        handed_back = next(iter(self.handbacks.first_sent(seen)), None)
+        handed_back = next(iter(self.handbacks.first_sent(seen) + self.harm_handbacks.first_sent(seen)), None)
         scan_ms = (time.perf_counter() - started) * 1000
         payload = json.dumps(masked, ensure_ascii=False).encode("utf-8", "replace")
         url = self._url(request, t)
@@ -588,6 +593,7 @@ class Proxy:
             self.redactor.findings = []
             self.redactor.tool_results = []
             self.redactor.user_texts = []
+            self.redactor.typed_in = {}
             self.redactor.shown = {}
             self.redactor.previews = self._previews()
             self.redactor.context = self._context()
@@ -600,8 +606,9 @@ class Proxy:
             self.stats.record_findings(self.redactor.findings, outcome, origin)
             result = (masked, Counter(self.redactor.counts), self.redactor.fresh, found_by(self.redactor.findings),
                       {"injection": self.redactor.tool_results, "harm": self.redactor.user_texts,
-                       "shown": self.redactor.shown})
+                       "shown": self.redactor.shown, "typed_in": self.redactor.typed_in})
             self.redactor.tool_results, self.redactor.user_texts, self.redactor.shown = [], [], {}
+            self.redactor.typed_in = {}
         if self.tools is not None:
             try:
                 self.tools.observe(definitions(body, api), origin[0] if origin else None,
@@ -667,14 +674,21 @@ class Proxy:
         local mode and hands back. Turned off, or set to stay, the request goes as the agent wrote it.
         `seen` gets the replaced results' keys (Handbacks.first_sent)."""
         guard = next((g for g in self.guards if g.name == "injection"), None)
-        if guard is None or guard.mode != "local" or self._handback()[0] == "stay":
-            return body, 0
-        return self.handbacks.apply(body, seen)
+        n = 0
+        if guard is not None and guard.mode == "local" and self._handback()[0] != "stay":
+            body, n = self.handbacks.apply(body, seen)
+        harm = next((g for g in self.guards if g.name == "harm"), None)
+        if harm is not None and harm.mode == "local" and self._handback_harm() == "rewrite":
+            body, m = self.harm_handbacks.apply(body, seen)
+            n += m
+        return body, n
 
     async def _hand_back(self, route: LocalRoute, texts: dict, path: str) -> dict | None:
         """[guard] local_handback (handback.py): a replacement for each result the injection check
         flagged, so the turn can go to the cloud. What was done, for the Logs page; None leaves
         the turn to the local model (stay, answer, or no replacement could be written)."""
+        if route.check == "harm":
+            return await self._hand_back_harm(route, texts, path)
         strategy, instructions = self._handback()
         if route.check != "injection" or strategy not in ("withhold", *WRITTEN):
             return None
@@ -732,6 +746,49 @@ class Proxy:
                  server.url, strategy)
         return {"strategy": strategy, "model": server.model, "url": server.url, **({"review": "; ".join(reviews)} if reviews else {})}
 
+    async def _hand_back_harm(self, route: LocalRoute, texts: dict, path: str) -> dict | None:
+        """[guard] local_handback_harm "rewrite" (handback.py): what the user typed, with what the harm
+        check flagged taken out by the local model, in place of what they typed, so the turn can go to
+        the cloud. Removal only: what the local model wrote is checked by the harm check, and if it is
+        still flagged, or nothing is left, the turn stays local. None leaves it to the local model."""
+        if self._handback_harm() != "rewrite":
+            return None
+        flagged = self._flagged_texts(route, texts)
+        whole = (texts or {}).get("typed_in") or {}
+        if not flagged or any(self.harm_handbacks.kept(text) for text in flagged):
+            return None
+        guard = next((g for g in self.guards if g.name == "harm"), None)
+        skills = self.local_skills("handback") if callable(self.local_skills) else []
+        skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
+        done, server = [], None
+        for text in flagged:
+            full = whole.get(text)
+            if not full or text not in full:  # what was typed is not one piece of its message: kept local
+                return None
+            got = await self._write_locally("rewrite", text, None, None, "", skills, path, check="harm")
+            if got is None:
+                return None
+            out, server = got
+            try:
+                hits = await anyio.to_thread.run_sync(guard.check, [(None, out, True)], True) if guard else []
+            except Exception as e:
+                log.warning("%s: the local rewrite was not checked (%s); answered locally", path, type(e).__name__)
+                return None
+            if hits or nothing_left(out):
+                for t in flagged:
+                    self.harm_handbacks.keep_local(t)
+                why = "the harm check flagged the rewrite too" if hits else "nothing was left once the flagged part was out"
+                log.info("%s: %s; answered locally", path, why)
+                return {"strategy": "rewrite", "model": server.model, "url": server.url, "kept": why}
+            mine = harm_wrap(out)
+            done.append((full, full.replace(text, mine, 1), mine))
+        for full, replacement, mine in done:
+            self.harm_handbacks.add(full, replacement, "rewrite")
+            self.harm_handbacks.mark_made(mine)
+        log.info("%s: the local model %s at %s took the flagged part out of what was typed; checking it", path,
+                 server.model, server.url)
+        return {"strategy": "rewrite", "model": server.model, "url": server.url}
+
     @staticmethod
     def _flagged_texts(route: LocalRoute, texts: dict | None) -> dict[str, str | None]:
         """The texts of a route's hits, each with its source (the tool)."""
@@ -740,14 +797,16 @@ class Proxy:
                 if isinstance(h.get("at"), int) and 0 <= h["at"] < len(items)}
 
     async def _write_locally(self, strategy: str, text: str, source: str | None, prompt: str | None,
-                             instructions: str, skills: str, path: str) -> tuple[str, object] | None:
-        """A summary or rewrite of a flagged result from the injection check's local servers, the first
-        that writes one, in Chat Completions (every local server speaks it), with no tools."""
-        servers = self.local("injection") if callable(self.local) else []
+                             instructions: str, skills: str, path: str, check: str = "injection") -> tuple[str, object] | None:
+        """A summary or rewrite of a flagged result (or, for the harm check, of what was typed) from the
+        check's local servers, the first that writes one, in Chat Completions (every local server speaks
+        it), with no tools."""
+        servers = self.local(check) if callable(self.local) else []
         failures = []
         for server in servers:
             data = {"model": server.model, "stream": False, "max_tokens": LOCAL_MAX_TOKENS,
-                    "messages": handback_messages(strategy, text, source, prompt, instructions, skills), **NO_THINKING}
+                    "messages": (harm_messages(text, skills) if check == "harm"
+                                 else handback_messages(strategy, text, source, prompt, instructions, skills)), **NO_THINKING}
             try:
                 resp = await self.client.post(server.url + LOCAL_CHAT_PATH, json=data)
                 if resp.status_code in (400, 422):  # a server that refuses the fields that turn thinking off
@@ -768,7 +827,7 @@ class Proxy:
                 return out, server
             failures.append(f"{server.model} at {server.url}: no text")
         log.warning("%s: no local model wrote a %s of the flagged result (%s); answered locally", path, strategy,
-                    "; ".join(failures) or "no local server is set for the injection check")
+                    "; ".join(failures) or f"no local server is set for the {check} check")
         return None
 
     async def _after_answer(self, route: LocalRoute, flagged: dict, answer: str, path: str, model: str = "") -> None:

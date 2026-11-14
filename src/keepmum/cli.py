@@ -550,7 +550,8 @@ def _guard_status() -> dict:
         "local": {"servers": [{"url": x.url, "model": x.model, "checks": list(x.checks), "api": x.api}
                               for x in cfg.guard_local_servers],
                   "skills": [{"path": x.path, "checks": list(x.checks), "places": list(x.places)} for x in cfg.guard_local_skills],
-                  "handback": cfg.guard_local_handback, "handback_instructions": cfg.guard_local_handback_instructions},
+                  "handback": cfg.guard_local_handback, "handback_instructions": cfg.guard_local_handback_instructions,
+                  "handback_harm": cfg.guard_local_handback_harm},
         "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
                  "installed": {size: harm.installed(size) for size in harm.SIZES},
                  "server": server, "licence": harm.LICENCE,
@@ -1620,6 +1621,11 @@ HANDBACK_HELP = {
     "rewrite": "the local model takes out what the result addresses to the agent; the rest goes to the cloud model",
     "withhold": "no local model: a notice takes the result's place, and the turn goes to the cloud model",
 }
+HARM_HANDBACK_HELP = {
+    "stay": "a flagged request is answered by the local model, and the conversation stays there",
+    "rewrite": "the local model takes what the check flagged out of what you typed; the rest goes to the cloud model "
+               "(still flagged, or nothing left: it stays local)",
+}
 
 
 @local_app.command("handback")
@@ -1629,13 +1635,15 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
                          review: str = typer.Option(None, "--review", help="Look at it before it goes: off, rewrite, or all (answers and summaries too)."),
                          review_wait: int = typer.Option(None, "--review-wait", help="Seconds to wait for your answer (10-600; default 60)."),
                          review_timeout: str = typer.Option(None, "--review-timeout", help="With no answer: stay (on this Mac, the default) or send."),
+                         harm_strategy: str = typer.Option(None, "--harm", help="After a local turn of the harm check: stay (the default), or rewrite: the local model takes what the check flagged out of what you typed, and the rest goes to the cloud."),
                          as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
-    """What follows a local turn of the injection check: stay local, or hand the conversation back to the cloud model."""
+    """What follows a local turn: stay local, or hand the conversation back to the cloud model. The strategy is the
+    injection check's; --harm is the harm check's."""
     import json
     from pathlib import Path
 
     from .config import ConfigError
-    from .handback import INSTRUCTIONS, MAX_INSTRUCTIONS, STRATEGIES, WRITTEN
+    from .handback import HARM_INSTRUCTION, HARM_STRATEGIES, INSTRUCTIONS, MAX_INSTRUCTIONS, STRATEGIES, WRITTEN
 
     if instructions is not None and instructions_file is not None:
         typer.echo("keepmum guard local handback: --instructions or --instructions-file, not both", err=True)
@@ -1648,6 +1656,9 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
             raise typer.Exit(2)
     if strategy is not None and strategy not in STRATEGIES:
         typer.echo(f"keepmum guard local handback: {strategy}: use {', '.join(STRATEGIES)}", err=True)
+        raise typer.Exit(2)
+    if harm_strategy is not None and harm_strategy not in HARM_STRATEGIES:
+        typer.echo(f"keepmum guard local handback: --harm {harm_strategy}: use {', '.join(HARM_STRATEGIES)}", err=True)
         raise typer.Exit(2)
     if instructions is not None and len(instructions.strip()) > MAX_INSTRUCTIONS:
         typer.echo(f"keepmum guard local handback: the instructions are over {MAX_INSTRUCTIONS:,} characters", err=True)
@@ -1668,6 +1679,9 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
     try:
         if strategy is not None and strategy != cfg.guard_local_handback:
             _update_config(cfg.path, "guard", "local_handback", None if strategy == "stay" else strategy, command)
+        if harm_strategy is not None and harm_strategy != cfg.guard_local_handback_harm:
+            _update_config(cfg.path, "guard", "local_handback_harm", None if harm_strategy == "stay" else harm_strategy,
+                           f"keepmum guard local handback --harm {harm_strategy}")
         if instructions is not None and instructions.strip() != cfg.guard_local_handback_instructions:
             _update_config(cfg.path, "guard", "local_handback_instructions", instructions.strip() or None,
                            command + " --instructions")
@@ -1679,7 +1693,7 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
     except (ConfigError, OSError) as e:
         typer.echo(f"keepmum guard local handback: {e}", err=True)
         raise typer.Exit(1)
-    if strategy is not None or instructions is not None or asked:
+    if strategy is not None or instructions is not None or asked or harm_strategy is not None:
         typer.echo("Running proxies use it on their next flagged result.", err=True)
         cfg = _config()
     now, own = cfg.guard_local_handback, cfg.guard_local_handback_instructions
@@ -1687,9 +1701,12 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
           "timeout": cfg.guard_local_handback_review_timeout}
     if as_json:
         typer.echo(json.dumps({"handback": now, "instructions": own, "default_instructions": INSTRUCTIONS,
-                               "strategies": [{"id": k, "about": v} for k, v in HANDBACK_HELP.items()], "review": rv}))
+                               "strategies": [{"id": k, "about": v} for k, v in HANDBACK_HELP.items()], "review": rv,
+                               "harm": cfg.guard_local_handback_harm, "harm_instruction": HARM_INSTRUCTION,
+                               "harm_strategies": [{"id": k, "about": v} for k, v in HARM_HANDBACK_HELP.items()]}))
         return
     typer.echo(f"{now}: {HANDBACK_HELP[now]}")
+    typer.echo(f"harm: {cfg.guard_local_handback_harm}: {HARM_HANDBACK_HELP[cfg.guard_local_handback_harm]}")
     if now in WRITTEN:
         typer.echo("instructions: " + ("your own (" + f"{len(own):,} characters)" if own else "keepmum's"))
     if now in (*WRITTEN, "answer"):

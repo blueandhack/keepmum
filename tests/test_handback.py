@@ -26,13 +26,18 @@ from keepmum.audit import config_changes, config_state
 from keepmum.cli import app
 from keepmum.config import ConfigError, load
 from keepmum.handback import (
+    HARM_STRATEGIES,
     INSTRUCTIONS,
     MAX_INSTRUCTIONS,
     STRATEGIES,
     Handbacks,
+    harm_messages,
+    harm_wrap,
     messages,
+    nothing_left,
     notice,
     parse,
+    parse_harm,
     wrap,
     written,
 )
@@ -555,3 +560,106 @@ def test_a_server_that_refuses_the_no_thinking_fields_is_asked_again_without_the
     rs, seen, _ = run("local", [conversation(ATTACK)], local={11434: handler}, handback=("rewrite", ""))
     assert len(asked) == 2 and "reasoning_effort" in asked[0] and not {"reasoning_effort", "chat_template_kwargs"} & asked[1]
     assert seen["upstream"] == ["/v1/messages"]
+
+
+# --- The harm check's hand-back ([guard] local_handback_harm) ---------------------------------------
+
+ASKED = "Sort the list in utils.py by date. "
+
+
+def typed_turn(text: str) -> dict:
+    return {"model": "claude-x", "max_tokens": 50, "messages": [{"role": "user", "content": text}]}
+
+
+def test_a_harm_hit_rewritten_goes_to_the_cloud_without_what_was_flagged():
+    rs, seen, proxy = run("local", [typed_turn(ASKED + ATTACK)], harm=True, handback_harm="rewrite",
+                          local=writes(ASKED + "[removed by keepmum]"))
+    assert rs[0].json()["id"] == "up" and seen["upstream"] == ["/v1/messages"]
+    sent = seen["sent"][0]["messages"][0]["content"]
+    assert ATTACK not in json.dumps(seen["sent"]) and sent.startswith("[keepmum: its harm check flagged part")
+    assert sent.endswith(ASKED + "[removed by keepmum]")
+    asked = seen["local"][0][3]["messages"]
+    assert "Do not reword, soften" in asked[0]["content"] and ATTACK in asked[1]["content"]  # removal only
+    assert proxy.stats.guard_hits[-1]["handed_back"] == {"strategy": "rewrite", "model": "qwen3:0.6b",
+                                                         "url": "http://localhost:11434"}
+
+
+def test_the_rewrite_keeps_what_the_agent_added_to_the_turn():
+    turn = f"<system-reminder>Today is Friday.</system-reminder>\n{ASKED}{ATTACK}"
+    rs, seen, _ = run("local", [typed_turn(turn)], harm=True, handback_harm="rewrite", local=writes(ASKED.strip()))
+    sent = seen["sent"][0]["messages"][0]["content"]
+    assert sent.startswith("<system-reminder>Today is Friday.</system-reminder>\n[keepmum: its harm check")
+    assert ATTACK not in sent
+
+
+def test_a_rewrite_the_harm_check_still_flags_stays_local_and_is_not_asked_for_again():
+    first = typed_turn(ASKED + ATTACK)
+    second = later(first, {"role": "assistant", "content": "kept on your Mac"}, {"role": "user", "content": "go on"})
+    rs, seen, proxy = run("local", [first, second], harm=True, handback_harm="rewrite", local=writes("Reworded: " + ATTACK))
+    assert [r.json()["id"] for r in rs] == ["local", "local"] and seen["upstream"] == []
+    assert [p for _, p, _, _ in seen["local"]].count("/v1/chat/completions") == 1
+    assert proxy.stats.guard_hits[0]["handed_back"]["kept"] == "the harm check flagged the rewrite too"
+
+
+def test_a_rewrite_with_nothing_left_stays_local():
+    rs, seen, proxy = run("local", [typed_turn(ATTACK)], harm=True, handback_harm="rewrite", local=writes("[removed by keepmum]"))
+    assert rs[0].json()["id"] == "local" and seen["upstream"] == []
+    assert proxy.stats.guard_hits[-1]["handed_back"]["kept"] == "nothing was left once the flagged part was out"
+
+
+def test_later_turns_carry_the_rewrite_without_asking_or_checking_again():
+    first = typed_turn(ASKED + ATTACK)
+    second = later(first, {"role": "assistant", "content": "Sorted."}, {"role": "user", "content": "thanks, now add a test"})
+    rs, seen, _ = run("local", [first, second], harm=True, handback_harm="rewrite", local=writes(ASKED + "[removed by keepmum]"))
+    assert [r.json()["id"] for r in rs] == ["up", "up"] and len(seen["sent"]) == 2
+    assert [p for _, p, _, _ in seen["local"]] == ["/v1/chat/completions"]
+    assert ATTACK not in json.dumps(seen["sent"][1]) and "[keepmum: its harm check" in json.dumps(seen["sent"][1])
+
+
+def test_with_harm_stay_a_harm_hit_stays_local_as_before():
+    rs, seen, _ = run("local", [typed_turn(ASKED + ATTACK)], harm=True, handback_harm="stay", local=writes("anything"))
+    assert rs[0].json()["id"] == "local" and seen["upstream"] == []
+
+
+def test_the_harm_rewrite_needs_a_local_server_for_the_harm_check():
+    rs, seen, _ = run("local", [typed_turn(ASKED + ATTACK)], harm=True, handback_harm="rewrite", servers=[])
+    assert rs[0].status_code == 403 and seen["upstream"] == []
+
+
+def test_config_and_cli_set_the_harm_handback(cli):
+    assert load(cli.config).guard_local_handback_harm == "stay"
+    r = cli.invoke(app, ["guard", "local", "handback", "--harm", "rewrite"])
+    assert r.exit_code == 0, r.output
+    assert load(cli.config).guard_local_handback_harm == "rewrite" and 'local_handback_harm = "rewrite"' in cli.config.read_text()
+    data = json.loads(cli.invoke(app, ["guard", "local", "handback", "--json"]).stdout)
+    assert data["harm"] == "rewrite" and [s["id"] for s in data["harm_strategies"]] == list(HARM_STRATEGIES)
+    assert "harm: rewrite: " in cli.invoke(app, ["guard", "local", "handback"]).stdout
+    assert json.loads(cli.invoke(app, ["guard", "--json"]).stdout)["local"]["handback_harm"] == "rewrite"
+    assert cli.invoke(app, ["guard", "local", "handback", "--harm", "summary"]).exit_code == 2
+    assert cli.invoke(app, ["guard", "local", "handback", "--harm", "stay"]).exit_code == 0
+    assert "local_handback_harm" not in cli.config.read_text()
+
+
+def test_config_refuses_a_bad_harm_handback(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[guard]\nlocal_handback_harm = "summary"\n')
+    with pytest.raises(ConfigError, match="local_handback_harm must be one of stay, rewrite"):
+        load(path)
+
+
+def test_the_audit_log_marks_a_harm_rewrite_as_weakening():
+    old = {"local_handback_harm": "stay"}
+    assert config_changes(old, {"local_handback_harm": "rewrite"}) == [
+        {"setting": "guard.local_handback_harm", "from": "stay", "to": "rewrite", "weakens": True}]
+    assert config_changes({"local_handback_harm": "rewrite"}, old)[0]["weakens"] is False
+    assert config_changes({}, {"local_handback_harm": "rewrite"}) == []  # older logs: not a change
+
+
+def test_harm_pieces_on_their_own():
+    assert nothing_left("[removed by keepmum]\n[removed by keepmum].") and not nothing_left("Sort it. [removed by keepmum]")
+    assert harm_wrap("x").endswith("\n\nx") and "harm check" in harm_wrap("x")
+    msgs = harm_messages("hello", "Mine.")
+    assert msgs[0]["content"].endswith("\n\nMine.") and "<message>\nhello\n</message>" in msgs[1]["content"]
+    assert parse_harm("rewrite") == "rewrite"
+    with pytest.raises(ValueError):
+        parse_harm("answer")

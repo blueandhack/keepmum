@@ -54,6 +54,9 @@
     # with the flagged result replaced: "answer" (after the local answer), "summary", "rewrite" or "withhold"
     local_handback = "stay"
     local_handback_instructions = ""  # your own instruction for summary and rewrite, in place of keepmum's
+    # after a local turn of the harm check: "stay", or "rewrite": the local model takes what the check
+    # flagged out of what you typed, and the rest goes to the cloud; still flagged, or nothing left: stays local
+    local_handback_harm = "stay"
     # look at a hand-back before it goes to the cloud (review.py): "off", "rewrite" or "all"
     # (answers and summaries too), the seconds to wait for an answer, and then "stay" (on this Mac) or "send"
     local_handback_review = "off"
@@ -91,6 +94,7 @@ _SCHEMA = {
     "audit": {"keep_days": int},
     "guard": {"injection": str, "injection_threshold": float, "harm": str, "harm_model": str, "harm_sensitivity": str, "commands": str, "local_url": str, "local_model": str,
               "local_servers": list, "local_skills": list, "local_handback": str, "local_handback_instructions": str,
+              "local_handback_harm": str,
               "local_handback_review": str, "local_handback_review_wait": int, "local_handback_review_timeout": str,
               "local_keep_loaded": str, "local_answer_thinking": bool},
 }
@@ -156,6 +160,8 @@ class Config:
     # What follows a local turn of the injection check (handback.py), and the user's own instruction.
     guard_local_handback: str = "stay"
     guard_local_handback_instructions: str = ""
+    # What follows a local turn of the harm check: stay, or rewrite (handback.py).
+    guard_local_handback_harm: str = "stay"
     # Whether the user reviews a hand-back before it goes (review.py): off, rewrite or all;
     # how long to wait for them; and what happens when they do not answer: stay or send.
     guard_local_handback_review: str = "off"
@@ -320,11 +326,13 @@ def load(path: Path | None = None) -> Config:
     except ValueError as e:
         raise ConfigError(f"{path}: {e}")
     from .handback import parse as parse_handback
+    from .handback import parse_harm as parse_harm_handback
 
     try:
         cfg.guard_local_handback, cfg.guard_local_handback_instructions = parse_handback(
             guard.get("local_handback", cfg.guard_local_handback),
             guard.get("local_handback_instructions", cfg.guard_local_handback_instructions))
+        cfg.guard_local_handback_harm = parse_harm_handback(guard.get("local_handback_harm", cfg.guard_local_handback_harm))
     except ValueError as e:
         raise ConfigError(f"{path}: {e}")
     from .review import parse as parse_review

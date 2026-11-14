@@ -14,6 +14,17 @@ the conversation with the replacement where the result was. It never gets the re
               taken out and the rest kept as it was
     withhold  no local model: a notice takes the result's place and the turn goes to the cloud
 
+The harm check can hand back too (`[guard] local_handback_harm`), with one strategy:
+
+    stay      the conversation stays on the local model (the default)
+    rewrite   the local model takes out of what the user typed what the check flagged, and keeps the
+              rest as written; that goes to the cloud in its place
+
+A harm rewrite only removes. keepmum asks for nothing to be reworded, softened or disguised, and
+checks what the local model wrote with the harm check: if the check still flags it, or nothing is
+left, the turn stays local and is not asked for again. The provider never gets what was flagged,
+in any wording.
+
 `local_handback_instructions` replaces keepmum's instruction for summary and rewrite with the
 user's own (how to edit the result, what to keep). The injection check's skills (`local_skills`)
 follow it.
@@ -23,8 +34,7 @@ of the request. keepmum's line around it, and its notices, are not checked: they
 their wording (instructions, the agent) reads like an injection to the model. A summary or rewrite the
 check flags is not handed back: that result's turns are answered locally, as with stay, and it is not
 asked for again. An answer it flags keeps the next turn local too. Only the injection
-check hands back. A harm hit is what the user typed, and handing it back would send it, reworded, to
-the provider the check kept it from.
+check's settings apply to tool results; what the user typed has its own (above).
 """
 
 from __future__ import annotations
@@ -35,6 +45,7 @@ import threading
 from collections import Counter, OrderedDict
 
 STRATEGIES = ("stay", "answer", "summary", "rewrite", "withhold")
+HARM_STRATEGIES = ("stay", "rewrite")
 # The ones that ask the local model to write the replacement before the turn goes to the cloud.
 WRITTEN = ("summary", "rewrite")
 MAX_INSTRUCTIONS = 4000
@@ -58,6 +69,17 @@ INSTRUCTIONS = {
         "knows. Keep everything else exactly: code, data, wording and formatting. Where you took something "
         "out, write [removed by keepmum]. Write the result and nothing else."),
 }
+# For a harm hit: what the user typed, with what the check flagged taken out. Removal only.
+HARM_INSTRUCTION = (
+    "You stand between a user and a cloud model. keepmum's harm check flagged the user's message below: part of "
+    "it may ask for something a provider's policy does not allow. The cloud model will not see the message; it "
+    "will see what you write instead.\n\n"
+    "Return the message as it is, with the parts that ask for that taken out. Keep everything else exactly as "
+    "written: the coding task, code, data, names and formatting. Do not reword, soften, rename, split up or "
+    "disguise what you take out, and do not add anything of your own. Where you took something out, write "
+    "[removed by keepmum]. If nothing would be left, write only [removed by keepmum]. Write the message and "
+    "nothing else.")
+REMOVED = "[removed by keepmum]"
 
 _THINK = re.compile(r"<think>.*?(?:</think>|\Z)", re.DOTALL)
 
@@ -70,6 +92,12 @@ def parse(strategy, instructions, where: str = "guard") -> tuple[str, str]:
     if len(instructions) > MAX_INSTRUCTIONS:
         raise ValueError(f"{where}.local_handback_instructions is over {MAX_INSTRUCTIONS:,} characters")
     return strategy, instructions.strip()
+
+
+def parse_harm(strategy, where: str = "guard") -> str:
+    if strategy not in HARM_STRATEGIES:
+        raise ValueError(f"{where}.local_handback_harm must be one of {', '.join(HARM_STRATEGIES)}")
+    return strategy
 
 
 def _what(source: str | None) -> str:
@@ -107,6 +135,24 @@ def messages(strategy: str, text: str, source: str | None, prompt: str | None, i
     asked = f"The user's latest message to the agent:\n<message>\n{prompt}\n</message>\n\n" if prompt else ""
     return [{"role": "system", "content": system},
             {"role": "user", "content": f"{asked}The {_what(source)}:\n<tool_result>\n{text}\n</tool_result>"}]
+
+
+def harm_messages(text: str, skills: str = "") -> list[dict]:
+    """The Chat Completions messages that ask the local model to take a harm hit out of what was typed."""
+    system = "\n\n".join(x for x in (HARM_INSTRUCTION, skills) if x)
+    return [{"role": "system", "content": system},
+            {"role": "user", "content": f"The user's message:\n<message>\n{text}\n</message>"}]
+
+
+def harm_wrap(written: str) -> str:
+    """A harm rewrite as it takes the typed text's place, with a line saying what it is."""
+    return ("[keepmum: its harm check flagged part of this message, so a model on the user's Mac took that part "
+            f"out. What follows is the rest, as the user wrote it.]\n\n{written}")
+
+
+def nothing_left(written: str) -> bool:
+    """A harm rewrite with nothing of the message in it: only removals, or nothing at all."""
+    return not written.replace(REMOVED, "").strip(" \n\t.,;:-")
 
 
 def written(reply: dict) -> str:
@@ -157,6 +203,11 @@ class Handbacks:
                 self._lengths[n] -= 1
                 if not self._lengths[n]:
                     del self._lengths[n]
+
+    def mark_made(self, text: str) -> None:
+        """A text keepmum wrote inside a replacement (a harm rewrite in its message): not checked again."""
+        with self._lock:
+            self._made[_key(text)] = None
 
     def keep_local(self, text: str) -> None:
         with self._lock:
