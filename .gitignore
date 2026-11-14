@@ -48,3 +48,4 @@ e2e/keys.env
 .coverage.*
 htmlcov/
 bench/data/gguf/
+bench/data/ft/

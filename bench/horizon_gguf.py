@@ -44,6 +44,11 @@ MODELS = {
     "injection": ("Horizon-Labs/prompt-injection-guard-small", "9760ad5a613aa87b38c2e621189b9d06bfb6d12b", "v2.3",
                   "Prompt Injection Guard Small", ["SAFE", "INJECTION"],
                   "Apply its tokenizer normalizer before tokenizing (see the model card)."),
+    # keepmum's fine-tune of the injection model (bench/ft_train.py): SRC is its local folder.
+    "injection-ft": ("Horizon-Labs/prompt-injection-guard-small", "9760ad5a613aa87b38c2e621189b9d06bfb6d12b", "v2.3-km1",
+                     "Prompt Injection Guard Small, keepmum fine-tune", ["SAFE", "INJECTION"],
+                     "Apply its tokenizer normalizer before tokenizing (see the model card). Fine-tuned by keepmum on "
+                     "agent tool output (bench/ft_data.py, bench/ft_train.py)."),
     "safety": ("Horizon-Labs/content-safety-guard-small", "e2995329cff04dd2d3bcb5f97a02c6bf77d341ef", "v1.2",
                "Content Safety Guard Small", SAFETY_LABELS, "Logits: unsafe, then 15 categories; a sigmoid each."),
 }
@@ -56,8 +61,10 @@ def metadata(model: str) -> dict:
     basename = repo.split("/")[1]
     return {
         "general.name": name, "general.basename": basename, "general.version": version,
-        "general.organization": "Horizon-Labs", "general.quantized_by": "keepmum",
-        "general.description": f"GGUF conversion of Horizon-Labs' {name} ({version}). Not made or endorsed by Horizon-Labs. {note}",
+        "general.organization": "keepmum" if model.endswith("-ft") else "Horizon-Labs", "general.quantized_by": "keepmum",
+        "general.description": (f"keepmum's fine-tune of Horizon-Labs' Prompt Injection Guard Small (v2.3), as a GGUF. "
+                                 f"Not made or endorsed by Horizon-Labs. {note}") if model.endswith("-ft") else
+                               f"GGUF conversion of Horizon-Labs' {name} ({version}). Not made or endorsed by Horizon-Labs. {note}",
         "general.license": "apache-2.0", "general.license.name": "Apache License 2.0",
         "general.license.link": "https://www.apache.org/licenses/LICENSE-2.0",
         "general.source.url": f"https://huggingface.co/{repo}/tree/{revision}", "general.source.repo_url": f"https://huggingface.co/{repo}",
@@ -120,7 +127,8 @@ def main() -> None:
     hf = a.out / "hf"  # only the model's files: the converter reads the folder it is given
     hf.mkdir(parents=True, exist_ok=True)
     for f in FILES:
-        shutil.copyfile(a.src / f, hf / f)  # without the cache's read-only mode
+        if (a.src / f).exists():  # a fine-tune's folder has no README
+            shutil.copyfile(a.src / f, hf / f)  # without the cache's read-only mode
     # The same pre-tokenizer in mmBERT's older form (add_prefix_space), as llama.cpp's mmbert vocab
     # expects: written as prepend_scheme "always", it is refused for a BPE vocab.
     tj = json.loads((hf / "tokenizer.json").read_text())
@@ -130,6 +138,7 @@ def main() -> None:
     meta.write_text(json.dumps(metadata(a.model), indent=1))
     repo, _, version, name, *_ = MODELS[a.model]
     convert(hf, a.out / f"{repo.split('/')[1]}-{version}.{a.type.upper()}.gguf", a.type, meta, name)
+    return None
 
 
 if __name__ == "__main__":

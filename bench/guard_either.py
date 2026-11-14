@@ -27,15 +27,24 @@ SOURCES = ("agentdojo", "injecagent", "llmail", "codeipi", "prodnull")
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("public", type=Path)
-    ap.add_argument("handwritten", type=Path)
+    ap.add_argument("handwritten", type=Path, nargs="+", help="guard.py result(s) holding the --guard-pair runs")
     ap.add_argument("--pair", default="keepmum,shieldstral-3b", help="the two detectors in the public result")
     ap.add_argument("--guard-pair", default="horizon-small,shieldstral-3b", help="the same two in the guard.py result")
+    ap.add_argument("--heldout", action="store_true", help="only documents fine-tuning left out (ft_data.heldout)")
+    ap.add_argument("--public-extra", type=Path, nargs="*", default=[], help="more guard-public results with runs to add")
     ap.add_argument("--splits", default="0.01:0,0:0.01,0.005:0.005,0.007:0.003,0.003:0.007",
                     help="share of calibrate output each detector may flag, as first:second")
     a = ap.parse_args()
     one, two = a.pair.split(",")
-    sc = {r["detector"]: r["scores"] for r in json.loads(a.public.read_text())["runs"]}
+    sc = {}
+    for f in [a.public, *a.public_extra]:
+        for r in json.loads(f.read_text())["runs"]:
+            sc.setdefault(r["detector"], r["scores"])
     recs = [r for r in gp.load() if r["id"] in sc[one] and r["id"] in sc[two]]
+    if a.heldout:
+        from ft_data import heldout
+
+        recs = [r for r in recs if heldout(r)]
     cal = [r for r in recs if r["source"] in gp.CODING and r["half"] == "calibrate"]
     test = [r for r in recs if r["source"] in gp.CODING and r["half"] == "test"]
 
@@ -45,7 +54,10 @@ def main() -> None:
         v = sorted((sc[name][r["id"]]["score"] for r in cal), reverse=True)
         return v[max(0, int(share * len(v)) - 1)] + 1e-12
 
-    g = {r["detector"]: r["scores"] for r in json.loads(a.handwritten.read_text())["runs"]}
+    g = {}
+    for f in a.handwritten:
+        for r in json.loads(f.read_text())["runs"]:
+            g.setdefault(r["detector"], r["scores"])
     g1, g2 = a.guard_pair.split(",")
     data = {sp: guard.load(sp) for sp in ("dev", "holdout")}
     print(f"| {one} : {two} (thresholds) | coding output flagged | "

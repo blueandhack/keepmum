@@ -56,6 +56,9 @@ DETECTORS = {
     "haloguard2-0.8b": ("llm", "astroware/HaloGuard2-Gen-0.8B", None, 8192, "Apache-2.0", "P(unsafe), Q8_0"),
     "haloguard1-4b": ("llm", "astroware/HaloGuard1-Gen-4B", None, 8192, "Apache-2.0", "P(unsafe), Q8_0"),
     "shieldstral-3b": ("llm", "mistralai/Shieldstral-1.0-3B", None, 8192, "Apache-2.0", "injection policy, Q8_0"),
+    # The fine-tuned Horizon Small (bench/ft_train.py): bench/data/ft/model links to the run to score.
+    "horizon-small-ft": ("hf", str(ROOT / "bench" / "data" / "ft" / "model"), {"INJECTION"}, 2048, "Apache-2.0",
+                         "fine-tuned here"),
     "kev-0.8b": ("kev", "jaredpalmer/kev-0.8b", None, 8192, "Apache-2.0", "one yes/no question, MLX"),
     "kev-4b": ("kev", "jaredpalmer/kev-4b", None, 8192, "Apache-2.0", "one yes/no question, MLX"),
 }

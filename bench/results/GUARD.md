@@ -153,6 +153,31 @@ On public data, each at the threshold that flags 1% of one half of the SWE-chat 
 
   At the same false alarms on coding-agent output, the pair catches 25 points more of AgentDojo, 6 more of InjecAgent and 12 more of prodnull, and no less of anything. The cost: 4.5 GB more memory while the check runs, Shieldstral's 90 ms (p50, 525 ms p95) on each tool result in block mode (none in warn mode, which checks after the request goes), and 8–12% of security writing flagged (keepmum's own docs and code, and articles that quote attacks), against none.
 
+## Fine-tuning Horizon Small on agent tool output (Nov 13, 2026)
+
+*Nov 13, 2026, later.* Could keepmum's own model learn what Shieldstral catches, at its own size? Fine-tuned on this Mac (MPS, about 45 minutes a run) from Horizon-Labs Small v2.3: data [`../ft_data.py`](../ft_data.py), training [`../ft_train.py`](../ft_train.py) (learning rate 2e-5, 2 epochs, 2,048-token windows, about 32k tokens a step).
+
+**Training data, kept apart from the tests:** planted injections (payloads built from goals, framings and wrappers, put into real SWE-chat and SWE-Hero tool output that also goes in clean), AgentDojo's banking and slack suites, MCP tool lists with a poisoned description, issue-style reports with a payload, and as benign: other SWE-chat sessions and SWE-Hero shards than the benchmark's, short fragments of that output, instruction-heavy documents that are not injections, plus Horizon-Labs' own public training sets as replay. 25,555 examples. **Tests:** AgentDojo's travel and workspace suites (unseen tasks, but the same seven attack templates as training, so easier than new data), and InjecAgent, CodeIPI, prodnull, LLMail and this benchmark's hand-written set, none used in training. `guard_public.py run --heldout` scores only these.
+
+Three runs; each column is at the threshold that flags 1% of the calibrate half of SWE-chat and SWE-Hero ([`guard-public-20261113-171252.md`](guard-public-20261113-171252.md) for run 3; hand-written: [`guard-20261113-171214.md`](guard-20261113-171214.md)):
+
+| Model | AgentDojo (test suites) | InjecAgent | CodeIPI | prodnull | prodnull benign flagged | LLMail* | Hand-written holdout @dev: caught / security flagged |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Horizon Small (keepmum's now) | 63% | 66% | 40% | 35% | 1.2% | 96% | 100% / 8% |
+| Run 1: with half of prodnull in training | 94% | 90% | 54% | (trained on) | **24.6%** | 98% | 98% / 0% |
+| Run 2: prodnull out, short fragments in | 91% | 86% | 37% | 54% | 2.3% | 98% | 94% / 0% |
+| **Run 3: + tool lists and issues** | **91%** | **75%** | **40%** | **50%** | **1.6%** | 99% | **98% / 0%** |
+| Shieldstral 3B, for comparison | 85% | 74% | 9% | 45% | 3.9% | 32% | 81% / 25% |
+
+\* LLMail is in Horizon-Labs' training data.
+
+- **Run 1 learned prodnull's fragments, not injections.** It flagged a quarter of prodnull's benign half: `"install": "npm install --production=true"`, a lockfile hash, a curl download. prodnull's one-line fragments are labelled by small differences, so it stayed out of training after this.
+- **Run 2 forgot what it was not shown.** It missed most hand-written tool-poisoning attacks (instructions in an MCP tool's description) and some injections in issue text. With the original as a pair (either flags, [`../guard_either.py`](../guard_either.py)) it met every target: AgentDojo 90%, InjecAgent 86%, CodeIPI 46%, prodnull 54%.
+- **Run 3 alone meets every target set before training** (AgentDojo ≥ 85%, InjecAgent ≥ 70%, prodnull ≥ 45%, CodeIPI and hand-written no lower) with fewer false alarms than the original on security writing (0% against 8%) and about the same on coding-agent output and repository files. Tool poisoning is back to the original's 83%. Its InjecAgent gain is smaller than run 2's (75% against 86%), and pairing it with the original adds only CodeIPI (46%).
+- **It runs as keepmum runs its model.** Converted by [`../horizon_gguf.py`](../horizon_gguf.py) `--model injection-ft` (164 MB Q8_0, as before); in keepmum's runtime it scores the hand-written holdout as PyTorch does (AUC 0.992, recall 0.979, no false alarms; 4 of 472 verdicts differ, all within 0.03 of the threshold), at 13 ms: [`horizon-gguf-20261113-171914.md`](horizon-gguf-20261113-171914.md).
+- **Its scores sit lower than the original's**, so keepmum's sensitivity levels (`keepmum.guard.LEVELS`) would need setting again: 1% of coding-agent output is flagged at 0.25, against the original's 0.98.
+- Run 1 and run 2's files: [`guard-public-20261113-151510.md`](guard-public-20261113-151510.md), [`guard-20261113-151358.md`](guard-20261113-151358.md) (run 1, the checkpoint at step 300 of 605); [`guard-public-20261113-160727.md`](guard-public-20261113-160727.md), [`guard-20261113-160650.md`](guard-20261113-160650.md) (run 2). Each names the model `horizon-small-ft`.
+
 ## Verdict
 
 *Nov 4, 2026:* superseded in part. Horizon-Labs Prompt Injection Guard Small (Apache-2.0) now beats Shield Small on this benchmark (above), so point 1's "the best Apache model misses six of ten" no longer holds. keepmum's injection check now uses it, as a GGUF in llama-server, and no longer offers Shield Small or asks users to confirm non-commercial use. Points 2 and 3 stand: the check is optional, off by default, and on top of the restore guards.
@@ -167,3 +192,5 @@ On public data, each at the threshold that flags 1% of one half of the SWE-chat 
 4. **Re-run when new checkpoints land.** `guard.py` takes any Hugging Face sequence classifier. Patronus says a Wolf retrain is in progress, and Prompt Guard 2 needs only a login.
 
 *Nov 13, 2026:* keepmum's model stays (above). Shieldstral 3B is the first model to beat it on some public sources, and the two together catch more at the same false alarms on coding-agent output; it could become an optional second model for the injection check (4.5 GB, warn mode), at the cost of more false alarms on security writing.
+
+*Nov 13, 2026, later:* a fine-tune of keepmum's model (run 3, above) meets the targets on its own at the same size and speed: AgentDojo 91%, InjecAgent 75%, prodnull 50%, CodeIPI 40%, with no security writing flagged. It could replace the current model, after new sensitivity levels and a published, pinned GGUF.

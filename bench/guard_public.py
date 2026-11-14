@@ -437,8 +437,15 @@ def run(a) -> None:
     recs = load()
     if not recs:
         raise SystemExit("no data: run `bench/guard_public.py build` first")
+    if a.heldout:  # only what fine-tuning (ft_data.py) left out: AgentDojo's test suites, prodnull's test half
+        from ft_data import heldout
+
+        recs = [r for r in recs if heldout(r)]
     if a.rescore:
         saved = json.loads(a.rescore.read_text())
+        for extra in a.merge or []:  # runs from other result files, scored on the same documents
+            names = {r["detector"] for r in saved["runs"]}
+            saved["runs"] += [r for r in json.loads(extra.read_text())["runs"] if r["detector"] not in names]
         summaries = [summarize(r, recs) for r in saved["runs"]]
         saved["summaries"] = summaries
         a.rescore.write_text(json.dumps(saved, indent=1))
@@ -481,6 +488,9 @@ def main() -> None:
     r.add_argument("--device", default="auto", help="auto (MPS when available), mps or cpu")
     r.add_argument("--out", type=Path, default=RESULTS)
     r.add_argument("--rescore", type=Path, help="re-render a guard-public-*.json from its saved scores")
+    r.add_argument("--merge", type=Path, nargs="*", help="with --rescore: add the runs of these guard-public-*.json files")
+    r.add_argument("--heldout", action="store_true",
+                   help="report only documents fine-tuning left out (bench/ft_data.py): for a fine-tuned model")
     ap.add_argument("--worker", help=argparse.SUPPRESS)
     ap.add_argument("--worker-out", type=Path, help=argparse.SUPPRESS)
     ap.add_argument("--device", dest="worker_device", default="auto", help=argparse.SUPPRESS)
