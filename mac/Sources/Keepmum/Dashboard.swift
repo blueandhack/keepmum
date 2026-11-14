@@ -62,6 +62,7 @@ struct Dashboard: View {
             }
             .padding(Space.xl)
         }
+        .followsPalette()
         // Up under the hidden title bar, so the sidebar's material reaches the top of the window.
         .ignoresSafeArea(.container, edges: .top)
         .background(Theme.canvas)

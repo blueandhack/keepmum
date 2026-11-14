@@ -82,6 +82,7 @@ struct SettingsPage: View {
     @Binding var pane: SettingsPane
     @AppStorage(DashboardWindow.dockKey) private var showInDock = true
     @AppStorage(FlowPulseStyle.key) private var flowStyle: FlowPulseStyle = .comet
+    @AppStorage(Palette.key) private var palette: Palette = .standard
     @Environment(\.isSnapshot) private var isSnapshot
 
     /// The column's widest: rows past this get hard to read across.
@@ -173,6 +174,10 @@ struct SettingsPage: View {
         FormSection(title: "Display") {
             FormRow(title: "Appearance") {
                 Segmented(options: Appearance.allCases.map { ($0, $0.title) }, selection: $appearance)
+            }
+            Hairline()
+            FormRow(title: "Colors", detail: "Color-blind safe keeps blocked, restored, masked and warnings apart with red-green or blue-yellow color blindness") {
+                Segmented(options: Palette.allCases.map { ($0, $0.title) }, selection: $palette)
             }
             Hairline()
             FormRow(title: "Live flow", detail: "How each request moves across the dashboard's Live flow: a dot, or a dot with a tail") {

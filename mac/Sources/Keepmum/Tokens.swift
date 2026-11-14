@@ -50,20 +50,35 @@ enum Theme {
     static let textSecondary = Color(light: 0x6E6E73, dark: 0x98989D)
     static let textTertiary = Color(light: 0x8E8E93, dark: 0x6C6C70)
 
+    // The colors below follow the palette chosen in Settings › General (`Palette`), so they are
+    // read on each use rather than stored.
+
+    /// The standard palette, or the color-blind safe one.
+    private static func pick(_ standard: @autoclosure () -> Color, safe: @autoclosure () -> Color) -> Color {
+        Palette.current == .standard ? standard() : safe()
+    }
+
     // Brand: keepmum's coral, a shade darker than the icon's so text and labels on it stay legible.
-    static let accent = Color(light: 0xC93F17, dark: 0xFF7A4D)
+    // Color-blind safe: blue, since coral and the warning amber look alike without red-green vision.
+    static var accent: Color { pick(Color(light: 0xC93F17, dark: 0xFF7A4D), safe: Color(light: 0x0A60D0, dark: 0x5B96FA)) }
     /// Behind white text: a primary button, an on switch.
-    static let accentFill = Color(light: 0xC93F17, dark: 0xD44A20)
-    static let accentSoft = Color(light: NSColor(hex: 0xC93F17, alpha: 0.10), dark: NSColor(hex: 0xFF7A4D, alpha: 0.16))
+    static var accentFill: Color { pick(Color(light: 0xC93F17, dark: 0xD44A20), safe: Color(light: 0x0A60D0, dark: 0x2F6FDB)) }
+    static var accentSoft: Color {
+        pick(Color(light: NSColor(hex: 0xC93F17, alpha: 0.10), dark: NSColor(hex: 0xFF7A4D, alpha: 0.16)),
+             safe: Color(light: NSColor(hex: 0x0A60D0, alpha: 0.10), dark: NSColor(hex: 0x5B96FA, alpha: 0.16)))
+    }
     static let onAccent = Color.white
 
     // Signals: what happened to a request. Blocked is crimson, well apart from the coral accent.
-    static let masked = Color(light: 0x0B63CE, dark: 0x5AA2FF)
-    static let restored = Color(light: 0x16834A, dark: 0x3DD68C)
-    static let blocked = Color(light: 0xC8193C, dark: 0xFF5C74)
+    // Color-blind safe: indigo, teal, wine and amber, which stay apart (CIEDE2000 ≥ 12, each pair
+    // and the accent against blocked and warning) under simulated protanopia, deuteranopia and
+    // tritanopia, and as text meet 4.5:1 like the rest.
+    static var masked: Color { pick(Color(light: 0x0B63CE, dark: 0x5AA2FF), safe: Color(light: 0x3A22C4, dark: 0xA496FF)) }
+    static var restored: Color { pick(Color(light: 0x16834A, dark: 0x3DD68C), safe: Color(light: 0x1D7779, dark: 0x3FD9D0)) }
+    static var blocked: Color { pick(Color(light: 0xC8193C, dark: 0xFF5C74), safe: Color(light: 0x8E0F45, dark: 0xE8798A)) }
     /// Behind white text: the observe banner.
-    static let blockedFill = Color(light: 0xC8193C, dark: 0xC42443)
-    static let warning = Color(light: 0xA15C00, dark: 0xFFB547)
+    static var blockedFill: Color { pick(Color(light: 0xC8193C, dark: 0xC42443), safe: Color(light: 0x8E0F45, dark: 0xA3264A)) }
+    static var warning: Color { pick(Color(light: 0xA15C00, dark: 0xFFB547), safe: Color(light: 0x9D5D03, dark: 0xF2D22E)) }
     /// Nothing to report: clean requests, replies with nothing to restore.
     static let neutral = Color(light: 0xA6A6AD, dark: 0x5E5E63)
 
@@ -71,19 +86,52 @@ enum Theme {
     static func soft(_ color: Color) -> Color { color.opacity(0.12) }
 
     /// Each coding agent's color in the flow diagram: its own brand's hue where it has one.
+    /// Color-blind safe: Okabe–Ito's hues, the nearest to each brand's.
     static func client(_ id: String) -> Color {
-        switch id {
-        case "claude-code": Color(light: 0xC8775A, dark: 0xD98B6E)
+        let safe = Palette.current == .colorBlind
+        return switch id {
+        case "claude-code": safe ? Color(light: 0xB84A00, dark: 0xF08A3C) : Color(light: 0xC8775A, dark: 0xD98B6E)
         case "codex": Color(light: 0x5B6270, dark: 0x9AA1AE)
-        case "pi": Color(light: 0x6E78E0, dark: 0x8F98F0)
-        case "opencode": Color(light: 0xB7791F, dark: 0xE0A458)
-        case "gemini": Color(light: 0x7E64B8, dark: 0x9F8AD6)  // the purple of Gemini's spark
-        default: Color(light: 0x2A9D8F, dark: 0x4FC3B5)
+        case "pi": safe ? Color(light: 0x0072B2, dark: 0x56B4E9) : Color(light: 0x6E78E0, dark: 0x8F98F0)
+        case "opencode": safe ? Color(light: 0xB89300, dark: 0xF0E442) : Color(light: 0xB7791F, dark: 0xE0A458)
+        // The purple of Gemini's spark.
+        case "gemini": safe ? Color(light: 0xB4528A, dark: 0xE6A3C8) : Color(light: 0x7E64B8, dark: 0x9F8AD6)
+        default: safe ? Color(light: 0x008A65, dark: 0x2FD3A0) : Color(light: 0x2A9D8F, dark: 0x4FC3B5)
         }
     }
 
     // A categorical series, for charts that compare things rather than signal outcomes.
-    static let series = [masked, Color(light: 0x7C4DCC, dark: 0xB38CFF), Color(light: 0x0E7C7B, dark: 0x4FD1C5)]
+    static var series: [Color] {
+        Palette.current == .standard
+            ? [masked, Color(light: 0x7C4DCC, dark: 0xB38CFF), Color(light: 0x0E7C7B, dark: 0x4FD1C5)]
+            : [Color(light: 0x0A60D0, dark: 0x5B96FA), Color(light: 0x9D5D03, dark: 0xF2B53A), Color(light: 0xA3306F, dark: 0xE88FC4)]
+    }
+}
+
+/// The set of signal colors: the standard one, or one whose colors stay apart for each common
+/// kind of color blindness (red-green and blue-yellow).
+enum Palette: String, CaseIterable, Identifiable {
+    case standard, colorBlind
+    static let key = "palette"
+    var id: String { rawValue }
+    var title: String { self == .standard ? "Standard" : "Color-blind safe" }
+
+    static var current: Palette {
+        UserDefaults.standard.string(forKey: key).flatMap(Palette.init(rawValue:)) ?? .standard
+    }
+}
+
+extension View {
+    /// On a window's root: redraws it all when the palette changes, since views read `Theme`'s
+    /// colors directly rather than observing them. It resets the window's view state, so it is
+    /// left off windows holding unsaved text (the skills editor, a review): those take the new
+    /// palette when next opened.
+    func followsPalette() -> some View { modifier(PaletteRoot()) }
+}
+
+private struct PaletteRoot: ViewModifier {
+    @AppStorage(Palette.key) private var palette: Palette = .standard
+    func body(content: Content) -> some View { content.id(palette) }
 }
 
 /// Spacing, on a 4-point grid.

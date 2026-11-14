@@ -212,6 +212,7 @@ struct MenuPanel: View {
             }
         }
         .padding(Space.l)
+        .followsPalette()
         .frame(width: 320)
         // Its full height, always: the menu bar window is sized from this, and without it a row
         // that appears while the panel is open is squeezed (text cut to one line) instead.
