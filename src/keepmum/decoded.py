@@ -13,6 +13,9 @@ What counts as a block, and what is decoded:
 - `od -c`: an offset, then one character (or escape) per 4-column field
 - plain hex (`xxd -p`): a run of 32 or more hex digits, across consecutive lines
 - base64: a run of 20 or more base64 characters, across consecutive lines (`base64` wraps)
+- hex bytes in other text: 8 or more two-digit hex bytes with spaces between them, or `0x` bytes
+  in a list, after a label or across lines (`print("bytes:", " ".join(f"{x:02x}" ...))`, which a
+  live run's model wrote for itself, and opencode's `HEX: 47 49 54 ...` both sent a token out so)
 
 Only text comes out of decoding: bytes that are not mostly printable UTF-8 (a hash, an image) are
 left alone. The decoded text is scanned by the rules and the values masked before, never by the
@@ -33,6 +36,9 @@ _PLAIN_HEX = re.compile(r"(?<![0-9A-Za-z])(?:[0-9a-fA-F]{2}){16,}(?![0-9A-Za-z])
 _PLAIN_HEX_LINE = re.compile(r"(?:[0-9a-fA-F]{2}){8,}")
 _B64_RUN = re.compile(r"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/_-]{20,}={0,2}(?![A-Za-z0-9+/=_-])")
 _B64_LINE = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
+_SPACED_HEX = re.compile(r"(?<![0-9A-Za-z])(?:[0-9a-fA-F]{2}[ \t]*[\r\n]?[ \t]*(?=[0-9a-fA-F]{2}(?![0-9A-Za-z]))[ \t]?){7,}"
+                         r"[0-9a-fA-F]{2}(?![0-9A-Za-z])")
+_0X_HEX = re.compile(r"(?<![0-9A-Za-z])(?:0[xX][0-9a-fA-F]{2}[,;]?\s*){7,}0[xX][0-9a-fA-F]{2}(?![0-9A-Za-z])")
 _OD_ESCAPES = {"\\n": "\n", "\\t": "\t", "\\r": "\r", "\\0": "\0", "\\v": "\v", "\\f": "\f", "\\b": "\b", "\\a": "\a"}
 
 
@@ -178,7 +184,21 @@ def blocks(text: str) -> list[tuple[int, int, str]]:
             if free(m.start(), m.end()) and (raw := decode(m.group())) and (s := _text(raw)):
                 out.append((m.start(), m.end(), s))
                 taken.append((m.start(), m.end()))
-    return out
+    # Hex bytes after a label, maybe wrapped: a run takes the place of the blocks it holds whole (a
+    # wrapped line read as a bare dump on its own holds only part of the secret).
+    for rx, decode in ((_SPACED_HEX, lambda h: bytes.fromhex("".join(h.split()))),
+                       (_0X_HEX, lambda h: bytes(int(x, 16) for x in re.findall(r"0[xX]([0-9a-fA-F]{2})", h)))):
+        for m in rx.finditer(text):
+            a, b = m.start(), m.end()
+            inside = [blk for blk in out if a <= blk[0] and blk[1] <= b]
+            if any(x < b and a < y for x, y, _ in out if (x, y, _) not in inside):
+                continue  # part of something read already (a dump with offsets)
+            if (raw := decode(m.group())) and (s := _text(raw)) and (len(inside) or free(a, b)):
+                out[:] = [blk for blk in out if blk not in inside]
+                taken[:] = [(x, y) for x, y in taken if not (a <= x and y <= b)]
+                out.append((a, b, s))
+                taken.append((a, b))
+    return sorted(out)
 
 
 def encoded(text: str, depth: int = 2) -> list[tuple[int, int, str]]:

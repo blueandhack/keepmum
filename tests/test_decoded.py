@@ -79,6 +79,13 @@ FORMATS = {
     "GNU od -An -tx1c": gnu_od_an_tx1c(ENV),
     "base64": wrapped(base64.b64encode(ENV).decode(), 76),
     "base64 inline": "the file is " + base64.b64encode(ENV).decode() + " (base64)",
+    # Found live (Nov 14, 2026): a model's own script printed `bytes: 47 49 …` (pi, gpt-6-luna), and
+    # opencode's run showed `HEX: 47 49 …`; both went out whole before these were read.
+    "hex bytes after a label": "length: 69\nbytes: " + " ".join(f"{b:02x}" for b in ENV) + "\nCR count: 0\n",
+    "hex bytes wrapped": "HEX: " + " ".join(f"{b:02x}" for b in ENV[:30]) + "\n     "
+                         + " ".join(f"{b:02x}" for b in ENV[30:]) + "\n",
+    "0x list": "data = [" + ", ".join(f"0x{b:02x}" for b in ENV) + "]",
+    "xxd -g 1": "\n".join(f"{o:08x}: " + " ".join(f"{b:02x}" for b in ENV[o:o + 16]) for o in range(0, len(ENV), 16)) + "\n",
 }
 
 
@@ -91,7 +98,7 @@ def test_each_format_decodes_to_the_file(name):
 def test_a_secret_printed_encoded_is_masked_with_its_block(name):
     out = Redactor(Pipeline(RulesDetector()), Vault(bytes(range(32)))).redact_text(f"$ cmd .env\n{FORMATS[name]}done\n")
     assert "KEEPMUM_SECRET_" in out and out.endswith("done\n")
-    assert not any(x in out for x in ("ghp", "Zq8v", "_Zq8", "4749", "R0lU", "6768"))
+    assert not any(x in out for x in ("ghp", "Zq8v", "_Zq8", "4749", "R0lU", "6768", "47 49", "0x47", "67 68"))
 
 
 @pytest.mark.parametrize("name", FORMATS)
@@ -115,6 +122,8 @@ def test_a_value_masked_before_is_found_encoded():
     "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
     "commit a3f9c2e17b4d9e8f0a1b2c3d4e5f60718293a4b5",
     "00000000 fix: the build",
+    "bytes: " + " ".join(f"{b:02x}" for b in b"just a readme, nothing secret in it\n"),
+    "the words be ad de ad fa ce ca fe 00 11 were here",
     "def test_a_value_in_a_script_a_shell_runs_is_quoted_for_that_shell_too():",
     xxd(b"just a readme, nothing secret in it at all\n"),
     "payload " + base64.b64encode(b"hello world, this is plain text").decode(),
