@@ -1,0 +1,34 @@
+# keepmum
+
+> keepmum is a free, open-source local proxy for macOS (Apple silicon, macOS 14 or later) that keeps secrets and personal data on your Mac while you use AI coding agents: Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi and opencode. Before a request leaves the Mac, it replaces API keys, tokens, passwords, private keys, connection strings and, if you turn it on, personal data (names, emails, phone numbers, addresses, account numbers) with placeholders such as `KEEPMUM_SECRET_7f3a9c2e`. When the model answers, keepmum puts the real values back, so the agent can still edit a `.env` file or run a command, but the provider (Anthropic, OpenAI or Google) never sees them. Apache 2.0. Status: alpha, not yet independently audited.
+
+Key facts:
+
+- Detection runs entirely on the Mac: 96 rules with entropy and checksum checks, then OpenAI Privacy Filter (an open-weight token classifier) on the Mac's GPU, then a deterministic step that drops UUIDs, hashes and documented example keys. Hex dumps and base64 of a secret are decoded and scanned too.
+- Placeholders come from a per-install key (HMAC-SHA256); the same value always gets the same placeholder, so the provider's prompt cache keeps working. Real values live only in memory.
+- Fails closed: a request keepmum cannot scan (an unknown endpoint, an unreadable body, a WebSocket) is blocked, never sent raw.
+- Tools that reach the network get less: web search and fetch keep placeholders, and an MCP server gets back only the values it returned itself.
+- Optional checks, all local and off by default: prompt injection in tool results, harmful requests, and risky shell commands. Each can warn, block, or send a flagged request to a local model instead of the provider.
+- Also watches what other apps add to agents' settings (plugins, hooks, MCP servers, skills, instruction files) and can take an entry back out.
+- Measured on synthetic, labeled datasets: secret recall 0.989 to 1; personal data recall 0.996 to 1; about 100 to 145 ms added at the 95th percentile for 4K tokens of new text; 8 to 9 ms with the rules alone.
+- Works in front of an existing gateway (LiteLLM, OpenRouter, a company proxy): agent → keepmum → gateway → provider.
+- Limitations: shell commands receive real values (pair keepmum with a sandbox that limits the network); local transcripts keep real values; images and PDFs are not scanned; the local model is strongest on English; macOS on Apple silicon only.
+- No telemetry. Besides the request it forwards, keepmum only downloads its models, and the Mac app checks for updates if you allow it.
+
+## Pages
+
+- [keepmum.app](https://keepmum.app/): what keepmum does, how it works, the optional checks, the Mac app, measured accuracy and speed, limitations, and install
+- [Privacy](https://keepmum.app/privacy): what keepmum and keepmum.app collect
+- [Download for Mac](https://github.com/blueandhack/keepmum/releases/latest): the latest release (a .dmg with everything included)
+
+## Docs
+
+- [README](https://github.com/blueandhack/keepmum/blob/main/README.md): install, use with each agent, configuration, what keepmum stores and where, and every limitation in full
+- [Security policy](https://github.com/blueandhack/keepmum/blob/main/SECURITY.md): how to report a vulnerability
+- [Benchmarks](https://github.com/blueandhack/keepmum/tree/main/bench/results): the method and every result
+
+## Optional
+
+- [Source code](https://github.com/blueandhack/keepmum)
+- [Releases and changelog](https://github.com/blueandhack/keepmum/releases)
+- [License (Apache 2.0)](https://github.com/blueandhack/keepmum/blob/main/LICENSE)

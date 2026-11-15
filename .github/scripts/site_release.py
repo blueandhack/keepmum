@@ -41,6 +41,8 @@ def main() -> None:
                            f'<time data-release="date" datetime="{iso}">{text}</time>', html)
         if not nv or nv != nd:
             sys.exit(f"{page}: expected matching data-release version and date, found {nv} and {nd}")
+        # The structured data for search engines (schema.org), where the page has it.
+        html = re.sub(r'("softwareVersion": )"[^"]*"', rf'\g<1>"{version}"', html)
         page.write_text(html)
         print(f"{page}: {version}, {text} ({nv} places)")
 

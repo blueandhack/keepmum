@@ -5,10 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self' https://*.google-analytics.com https://*.googletagmanager.com; media-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://*.googletagmanager.com; connect-src https://cloudflareinsights.com https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<title>keepmum: keep secrets on your Mac while you use coding agents</title>
-<meta name="description" content="A local proxy for Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi and opencode. It masks API keys, tokens, passwords and personal data before a request leaves your Mac, and restores them in the answer.">
+<title>keepmum: mask API keys and secrets for Claude Code, Codex and Gemini CLI</title>
+<meta name="description" content="Free, open-source local proxy for Mac. It masks API keys, passwords, .env secrets and personal data before Claude Code, Codex or Gemini CLI send a request, and restores them in the answer.">
 <meta name="theme-color" content="#E4572E">
 <link rel="canonical" href="https://keepmum.app/">
+<link rel="alternate" type="text/plain" href="/llms.txt" title="keepmum, for language models">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preload" href="fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
@@ -18,6 +19,8 @@
 <!-- The newest release's build time in the visitor's time zone -->
 <script src="release.js" defer></script>
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="keepmum">
+<meta property="og:locale" content="en_US">
 <meta property="og:url" content="https://keepmum.app/">
 <meta property="og:title" content="keepmum: keep secrets on your Mac">
 <meta property="og:description" content="Your coding agent reads your secrets. keepmum makes sure that’s where they stop.">
@@ -26,6 +29,141 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Keep mum. The keepmum mark on coral.">
 <meta name="twitter:card" content="summary_large_image">
+<!-- Structured data for search engines (schema.org). The version is filled in by .github/scripts/site_release.py;
+     the questions match the FAQ section below, word for word. -->
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://keepmum.app/#website",
+   "url": "https://keepmum.app/",
+   "name": "keepmum",
+   "inLanguage": "en"
+  },
+  {
+   "@type": "SoftwareApplication",
+   "@id": "https://keepmum.app/#app",
+   "name": "keepmum",
+   "description": "A free, open-source local proxy for macOS that masks API keys, tokens, passwords and personal data before Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi or opencode send a request to Anthropic, OpenAI or Google, and restores them in the answer.",
+   "url": "https://keepmum.app/",
+   "applicationCategory": "SecurityApplication",
+   "applicationSubCategory": "Developer tool",
+   "operatingSystem": "macOS 14 or later, Apple silicon",
+   "softwareVersion": "0.1.0a6",
+   "downloadUrl": "https://keepmum.app/download",
+   "installUrl": "https://github.com/blueandhack/keepmum#install",
+   "softwareRequirements": "macOS 14 or later on Apple silicon; about 1.7 GB of free memory and 1.6 GB of disk for the local model",
+   "memoryRequirements": "1.7 GB",
+   "storageRequirements": "1.6 GB",
+   "screenshot": "https://keepmum.app/img/dashboard.webp",
+   "image": "https://keepmum.app/og.png",
+   "license": "https://www.apache.org/licenses/LICENSE-2.0",
+   "isAccessibleForFree": true,
+   "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+   },
+   "featureList": [
+    "Masks API keys, tokens, passwords, private keys and connection strings before a request leaves the Mac",
+    "Optionally masks personal data: names, emails, phone numbers, addresses and account numbers",
+    "Restores real values in streamed text, file edits and shell commands",
+    "Detection on the Mac: 96 rules and OpenAI Privacy Filter on the GPU",
+    "Fails closed: a request it cannot scan is blocked, never sent raw",
+    "Optional local checks for prompt injection, harmful requests and risky shell commands",
+    "Notices plugins, hooks, MCP servers and skills other apps add to coding agents",
+    "Works with Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi and opencode"
+   ],
+   "sameAs": [
+    "https://github.com/blueandhack/keepmum"
+   ]
+  },
+  {
+   "@type": "VideoObject",
+   "@id": "https://keepmum.app/#video",
+   "name": "How a request travels through keepmum",
+   "description": "A request from a coding agent goes through keepmum on a Mac: secrets are detected and masked, the request is sent with placeholders only, and the real values are restored in the answer. 67 seconds, no sound.",
+   "thumbnailUrl": "https://keepmum.app/img/flow-poster.webp",
+   "contentUrl": "https://keepmum.app/video/keepmum-flow-1b4b44f951.mp4",
+   "embedUrl": "https://keepmum.app/#video",
+   "uploadDate": "2026-11-09T00:00:00Z",
+   "duration": "PT1M7S"
+  },
+  {
+   "@type": "FAQPage",
+   "@id": "https://keepmum.app/#faq",
+   "mainEntity": [
+    {
+     "@type": "Question",
+     "name": "How do I stop Claude Code from sending my API keys to Anthropic?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Run it through keepmum. In the Mac app, switch on protection for Claude Code; on the command line, start it with keepmum claude. Each request is then scanned on your Mac, and every key, token or password is replaced with a placeholder before it is sent. The real value goes back into the answer, so Claude Code can still use it."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Which coding agents and providers does it work with?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Claude Code (in the terminal, VS Code and the desktop app), Codex, the Antigravity CLI, Gemini CLI, pi and opencode, talking to Anthropic, OpenAI or Google. It can also sit in front of a gateway you already use, such as LiteLLM, OpenRouter or a company proxy, which then gets placeholders only."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "What does keepmum mask?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Always secrets: API keys, tokens, passwords, private keys and connection strings, in code, config files, command-line flags and plain sentences, and in a hex dump or base64 of them. With personal data on, also names, emails, phone numbers, addresses, account numbers and dates of birth. You can turn off a type, add your own patterns and list exceptions."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Can my agent still work if the model never sees the real values?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Yes. Placeholders in the answer become real values again on your Mac, in streamed text, file edits and shell commands, so your agent can still edit your .env, log in and run your tests. The same value always gets the same placeholder, so the provider’s prompt cache keeps working."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Does anything leave my Mac?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Only the scanned request, on its way to the provider. Detection runs on your Mac, masked values live only in memory, and there is no telemetry. keepmum downloads its models when you set it up, and the Mac app checks for updates only if you say yes."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "How much time does it add?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "About 100 to 145 ms at the 95th percentile for 4K tokens of new text; earlier turns are cached. With the model off and the rules alone, 8 to 9 ms."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Is keepmum enough on its own?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "No. It controls what the provider sees, not what commands do: shell commands get real values, so git push and curl keep working. Pair it with a sandbox that limits the network, such as Claude Code’s. keepmum is also alpha, and not yet independently audited."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Is it free, and what does it need?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Free and open source, under Apache 2.0. It needs a Mac with Apple silicon and macOS 14 or later. The local model takes 1.6 GB of disk and about 1.7 GB of memory while it runs; with the rules alone, neither."
+     }
+    }
+   ]
+  }
+ ]
+}
+</script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -254,6 +392,49 @@ keepmum setup
 keepmum claude</code></pre>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section id="faq" class="faq" aria-labelledby="faq-title">
+    <div class="wrap section split">
+    <div class="side">
+      <h2 id="faq-title">Questions, answered.</h2>
+      <p class="intro">The short version. The <a href="https://github.com/blueandhack/keepmum#readme">README</a> has the long one.</p>
+    </div>
+    <div class="main cols">
+      <div class="qa">
+        <h3>How do I stop Claude Code from sending my API keys to Anthropic?</h3>
+        <p>Run it through keepmum. In the Mac app, switch on protection for Claude Code; on the command line, start it with <code>keepmum claude</code>. Each request is then scanned on your Mac, and every key, token or password is replaced with a placeholder before it is sent. The real value goes back into the answer, so Claude Code can still use it.</p>
+      </div>
+      <div class="qa">
+        <h3>Which coding agents and providers does it work with?</h3>
+        <p>Claude Code (in the terminal, VS Code and the desktop app), Codex, the Antigravity CLI, Gemini CLI, pi and opencode, talking to Anthropic, OpenAI or Google. It can also sit in front of a gateway you already use, such as LiteLLM, OpenRouter or a company proxy, which then gets placeholders only.</p>
+      </div>
+      <div class="qa">
+        <h3>What does keepmum mask?</h3>
+        <p>Always secrets: API keys, tokens, passwords, private keys and connection strings, in code, config files, command-line flags and plain sentences, and in a hex dump or base64 of them. With personal data on, also names, emails, phone numbers, addresses, account numbers and dates of birth. You can turn off a type, add your own patterns and list exceptions.</p>
+      </div>
+      <div class="qa">
+        <h3>Can my agent still work if the model never sees the real values?</h3>
+        <p>Yes. Placeholders in the answer become real values again on your Mac, in streamed text, file edits and shell commands, so your agent can still edit your .env, log in and run your tests. The same value always gets the same placeholder, so the provider’s prompt cache keeps working.</p>
+      </div>
+      <div class="qa">
+        <h3>Does anything leave my Mac?</h3>
+        <p>Only the scanned request, on its way to the provider. Detection runs on your Mac, masked values live only in memory, and there is no telemetry. keepmum downloads its models when you set it up, and the Mac app checks for updates only if you say yes.</p>
+      </div>
+      <div class="qa">
+        <h3>How much time does it add?</h3>
+        <p>About 100 to 145 ms at the 95th percentile for 4K tokens of new text; earlier turns are cached. With the model off and the rules alone, 8 to 9 ms.</p>
+      </div>
+      <div class="qa">
+        <h3>Is keepmum enough on its own?</h3>
+        <p>No. It controls what the provider sees, not what commands do: shell commands get real values, so <code>git push</code> and <code>curl</code> keep working. Pair it with a sandbox that limits the network, such as Claude Code’s. keepmum is also alpha, and not yet independently audited.</p>
+      </div>
+      <div class="qa">
+        <h3>Is it free, and what does it need?</h3>
+        <p>Free and open source, under Apache 2.0. It needs a Mac with Apple silicon and macOS 14 or later. The local model takes 1.6 GB of disk and about 1.7 GB of memory while it runs; with the rules alone, neither.</p>
+      </div>
+    </div>
     </div>
   </section>
 </main>

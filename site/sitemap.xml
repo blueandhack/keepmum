@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- keepmum.app's pages, for search engines. A new page goes here too (and in robots.txt's Sitemap). -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">
+  <url>
+    <loc>https://keepmum.app/</loc>
+    <video:video>
+      <video:thumbnail_loc>https://keepmum.app/img/flow-poster.webp</video:thumbnail_loc>
+      <video:title>How a request travels through keepmum</video:title>
+      <video:description>A request from a coding agent goes through keepmum on a Mac: secrets are detected and masked, the request is sent with placeholders only, and the real values are restored in the answer. 67 seconds, no sound.</video:description>
+      <video:content_loc>https://keepmum.app/video/keepmum-flow-1b4b44f951.mp4</video:content_loc>
+      <video:duration>67</video:duration>
+      <video:publication_date>2026-11-09</video:publication_date>
+    </video:video>
+  </url>
+  <url>
+    <loc>https://keepmum.app/privacy</loc>
+  </url>
+</urlset>

@@ -1,0 +1,11 @@
+# keepmum.app. Every page may be crawled and indexed, by search engines and AI crawlers alike.
+# The paths below are the Worker's (worker/): redirects to a .dmg, the update feed and a private
+# dashboard, with nothing to index.
+User-agent: *
+Allow: /
+Disallow: /download
+Disallow: /update/
+Disallow: /appcast.xml
+Disallow: /stats
+
+Sitemap: https://keepmum.app/sitemap.xml
