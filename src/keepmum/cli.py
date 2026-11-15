@@ -2432,13 +2432,22 @@ def _reviews_call(cfg, method: str, path: str = "", body: dict | None = None):
 
 
 def _show_review(r: dict) -> None:
-    what = (f"hand-back after the local model's answer to what {r['source'] or 'a tool'} returned"
+    what = ("the local model's rewrite of what you typed, the harm check's flagged part taken out" if r.get("check") == "harm"
+            else f"hand-back after the local model's answer to what {r['source'] or 'a tool'} returned"
             if r["strategy"] == "answer" else f"the local model's {r['strategy']} of what {r['source'] or 'a tool'} returned")
     typer.echo(f"\n{r['id']}: {what} ({r['seconds_left']} s left), from {r['model']}")
     if r.get("answer") is not None:
         typer.echo("--- the local answer (the cloud model sees it as that turn's reply) ---\n" + r["answer"][:1500])
-    typer.echo("--- it would send ---\n" + r["proposed"] + "\n--- in place of the flagged result ---\n"
+    typer.echo("--- it would send ---\n" + r["proposed"] + ("\n--- in place of what you typed ---\n" if r.get("check") == "harm" else "\n--- in place of the flagged result ---\n")
                + (r["flagged"][:1500] + ("\n…" if len(r["flagged"]) > 1500 else "")) + "\n---")
+
+
+def _review_actions(r: dict) -> list[str]:
+    """The answers a review takes, edit last (it needs a text): no withhold for what was typed."""
+    from .review import ACTIONS
+
+    allowed = r.get("actions") or ACTIONS
+    return [a for a in ("send", "withhold", "local", "edit") if a in allowed]
 
 
 @app.command()
@@ -2483,7 +2492,7 @@ def review(rid: str = typer.Argument(None, help="A review's id, to answer it."),
             typer.echo("nothing waiting for review")
         for r in data["reviews"]:
             _show_review(r)
-            typer.echo(f"answer: keepmum review {r['id']} send | withhold | local | edit --text-file FILE")
+            typer.echo(f"answer: keepmum review {r['id']} {' | '.join(_review_actions(r))} --text-file FILE")
         return
     typer.echo("watching for hand-backs to review (Ctrl-C stops); keepmum holds them only while something watches", err=True)
     answered: set[str] = set()
@@ -2493,8 +2502,9 @@ def review(rid: str = typer.Argument(None, help="A review's id, to answer it."),
                 if r["id"] in answered:
                     continue
                 _show_review(r)
-                choice = typer.prompt("send, edit, withhold or local", default="send")
-                if choice not in ACTIONS:
+                actions = _review_actions(r)
+                choice = typer.prompt(", ".join(actions), default="send")
+                if choice not in actions:
                     typer.echo("not one of them: left waiting", err=True)
                     continue
                 text = None

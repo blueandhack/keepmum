@@ -16,6 +16,11 @@ A result too long for the local model (its context) gets no summary or rewrite. 
 asks about its notice instead (strategy "withhold", with the reason): send the notice, send the
 user's own text, or keep the turn local. Without review, the turn stays local, as before.
 
+The harm check's rewrite of what the user typed ([guard] local_handback_harm "rewrite") is reviewed
+the same way once the harm check passes it (check "harm"): send the rewrite, send the user's own text,
+or keep the turn local. Withholding is no answer there: it would send nothing of the message. A
+rewrite the harm check still flags stays local without review, as a flagged tool-result rewrite does.
+
 Someone has to be there to answer: the Mac app (or `keepmum review --watch`) asks for pending
 reviews every second or so, and keepmum holds a request only while someone asked within PRESENT_S.
 With nobody there, a hand-back goes as it would without review.
@@ -70,16 +75,21 @@ class Review:
     wait: int
     answer: str | None = None  # "answer": the local model's answer, which the cloud model sees as that turn's reply
     reason: str | None = None  # "withhold": why the local model wrote nothing (the result is too long for it)
+    check: str = "injection"  # "harm": a rewrite of what the user typed, not of a tool result
     id: str = field(default_factory=lambda: secrets.token_hex(6))
     created: float = field(default_factory=time.time)
     decision: Decision | None = None
     done: anyio.Event = field(default_factory=anyio.Event)
 
+    @property
+    def actions(self) -> tuple[str, ...]:
+        return tuple(a for a in ACTIONS if a != "withhold") if self.check == "harm" else ACTIONS
+
     def public(self) -> dict:
         return {"id": self.id, "strategy": self.strategy, "source": self.source, "path": self.path,
                 # The app shows the first few hundred lines: a 237,646-character result need not go every second.
                 "flagged": self.flagged[:FLAGGED_SHOWN], "proposed": self.proposed, "answer": self.answer,
-                "model": self.model, "reason": self.reason,
+                "model": self.model, "reason": self.reason, "check": self.check, "actions": list(self.actions),
                 "created": self.created,
                 "deadline": self.created + self.wait, "seconds_left": max(0, round(self.created + self.wait - time.time()))}
 
@@ -118,8 +128,9 @@ class Reviews:
         review = self._pending.get(rid)
         if review is None:
             return "no such review: it was answered, or ran out of time"
-        if action not in ACTIONS:
-            return f"action must be one of {', '.join(ACTIONS)}"
+        if action not in review.actions:
+            why = "withhold would send nothing of what was typed; " if action == "withhold" else ""
+            return f"{why}action must be one of {', '.join(review.actions)}"
         if action == "edit" and not (text or "").strip():
             return "an edit needs its text"
         review.decision = Decision(action, text.strip() if action == "edit" and text else None)

@@ -19,12 +19,16 @@ from keepmum.redact import Redactor
 from keepmum.vault import Vault
 
 WRITTEN = "README: install with `make install`."
+ASKED = "Sort the list in utils.py by date. "
+KEPT = ASKED + "[removed by keepmum]"  # the harm check's rewrite of what was typed: the flagged part out
 AUTH = {"authorization": "Bearer t"}
 
 
-def run(answer_with=None, mode="all", wait=30, timeout="stay", strategy="rewrite", reviewer=True, too_long=False):
+def run(answer_with=None, mode="all", wait=30, timeout="stay", strategy="rewrite", reviewer=True, too_long=False,
+        harm=False):
     """One flagged turn through a proxy that hands back with `strategy`; while it waits, a reviewer
-    (if any) answers with `answer_with` ({"action": ..., "text": ...}) or not at all."""
+    (if any) answers with `answer_with` ({"action": ..., "text": ...}) or not at all. With `harm`, the
+    harm check flags what was typed and the local model's rewrite takes the flagged part out."""
     seen = {"upstream": [], "sent": [], "reviews": []}
 
     def handler(request):
@@ -34,7 +38,8 @@ def run(answer_with=None, mode="all", wait=30, timeout="stay", strategy="rewrite
                 if too_long:  # Splash at 64k context, given a 237,646-character result
                     return httpx.Response(400, json={"error": {"message": "prompt exceeds the context window",
                                                                "code": "context_length_exceeded"}})
-                return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": WRITTEN}}]})
+                return httpx.Response(200, json={"choices": [{"message": {"role": "assistant",
+                                                                          "content": KEPT if harm else WRITTEN}}]})
             return answer(body, body["model"])
         seen["upstream"].append(request.url.path)
         seen["sent"].append(json.loads(request.content))
@@ -42,19 +47,21 @@ def run(answer_with=None, mode="all", wait=30, timeout="stay", strategy="rewrite
 
     async def go():
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        checks = [guard.Guard("local", Flags(), name="injection")]
+        checks = [guard.Guard("local", Flags(), name="harm" if harm else "injection")]
         proxy = Proxy(Redactor(Pipeline(RulesDetector(), None), Vault(secrets.token_bytes(32))), upstream="http://up",
                       client=client, stats_token="t", guards=checks, gemini_upstream="http://up",
                       local=lambda check: servers_for([Server("http://localhost:11434", "m")], check),
                       local_skills=lambda check: skills_for([], check), handback=lambda: (strategy, ""),
-                      review=lambda: (mode, wait, timeout))
+                      review=lambda: (mode, wait, timeout), handback_harm=lambda: "rewrite" if harm else "stay")
         agent = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
         if reviewer:
             await agent.get("/_keepmum/reviews", headers=AUTH)  # the app is there
         result = {}
 
         async def send():
-            result["r"] = await agent.post("/v1/messages", json=conversation(ATTACK),
+            body = ({"model": "claude-x", "max_tokens": 50, "messages": [{"role": "user", "content": ASKED + ATTACK}]}
+                    if harm else conversation(ATTACK))
+            result["r"] = await agent.post("/v1/messages", json=body,
                                            headers={"x-api-key": "sk-ant-x", "anthropic-version": "2023-06-01"})
             tg.cancel_scope.cancel()  # the turn is over: no review is coming
 
@@ -129,6 +136,54 @@ def test_nobody_there_it_goes_without_a_pause():
 def test_which_hand_backs_wait(mode, strategy, asked):
     r, seen, proxy = run({"action": "send"} if asked else None, mode=mode, strategy=strategy)
     assert bool(seen["reviews"]) is asked and r.json()["id"] == "up"
+
+
+# --- The harm check's rewrite of what was typed ([guard] local_handback_harm "rewrite") ------------
+
+def test_a_harm_rewrite_waits_for_review_and_goes_as_approved():
+    r, seen, proxy = run({"action": "send"}, harm=True)
+    sent = seen["sent"][0]["messages"][0]["content"]
+    assert r.json()["id"] == "up" and sent.endswith(KEPT) and ATTACK not in json.dumps(seen["sent"])
+    rv = seen["reviews"][0]
+    assert rv["check"] == "harm" and rv["strategy"] == "rewrite" and rv["source"] is None
+    assert rv["proposed"] == KEPT and rv["flagged"] == ASKED + ATTACK and "withhold" not in rv["actions"]
+    assert handed(proxy)["review"] == "approved"
+
+
+def test_a_harm_rewrite_edited_goes_as_the_user_wrote_it():
+    r, seen, proxy = run({"action": "edit", "text": "Sort utils.py by date, newest first."}, harm=True)
+    sent = seen["sent"][0]["messages"][0]["content"]
+    assert sent.startswith("[keepmum: its harm check") and sent.endswith("Sort utils.py by date, newest first.")
+    assert KEPT not in sent and handed(proxy)["review"] == "edited"
+
+
+def test_a_harm_rewrite_kept_local_reaches_no_cloud():
+    r, seen, proxy = run({"action": "local"}, harm=True)
+    assert seen["upstream"] == [] and r.json()["id"] == "local"
+    assert handed(proxy)["review"] == "kept local" and handed(proxy)["kept"] == "you kept it on this Mac"
+
+
+def test_a_harm_rewrite_cannot_be_withheld():
+    async def go():
+        reviews = review.Reviews()
+        rv = review.Review("rewrite", None, "/v1/messages", ASKED + ATTACK, KEPT, "m", 30, check="harm")
+        reviews._pending[rv.id] = rv
+        assert "withhold" in reviews.decide(rv.id, "withhold") and rv.decision is None
+        assert reviews.decide(rv.id, "send") is None
+
+    anyio.run(go)
+
+
+@pytest.mark.parametrize("timeout, upstream", [("stay", []), ("send", ["/v1/messages"])])
+def test_a_harm_rewrite_with_no_answer_does_what_the_timeout_says(monkeypatch, timeout, upstream):
+    monkeypatch.setattr(review, "MIN_WAIT", 0)
+    r, seen, proxy = run(None, wait=0.05, timeout=timeout, harm=True)
+    assert seen["upstream"] == upstream and handed(proxy)["review"].startswith("no answer in")
+
+
+def test_a_harm_rewrite_with_nobody_there_goes_without_a_pause():
+    r, seen, proxy = run(None, reviewer=False, harm=True)
+    assert r.json()["id"] == "up" and seen["reviews"] == [] and "review" not in handed(proxy)
 
 
 def test_the_endpoints_need_the_token_and_a_real_answer():

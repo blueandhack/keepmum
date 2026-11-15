@@ -506,6 +506,8 @@ enum Snapshotter {
                to: "\(dir)/review-answer-light.png", dark: false)
         render(ReviewCard(center: .shared, review: .sampleTooLong).frame(width: 560).background(Theme.canvas),
                to: "\(dir)/review-too-long-light.png", dark: false)
+        render(ReviewCard(center: .shared, review: .sampleTyped).frame(width: 560).background(Theme.canvas),
+               to: "\(dir)/review-typed-light.png", dark: false)
         ReviewCenter.shared.inject([], mode: "off")
         // The menu bar icon, plain and with the dot that points at Settings › Tools.
         for (name, image) in [("menubar", Brand.menuBarActive), ("menubar-attention", Brand.menuBarAttention)] {

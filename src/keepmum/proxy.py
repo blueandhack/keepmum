@@ -806,7 +806,9 @@ class Proxy:
         """[guard] local_handback_harm "rewrite" (handback.py): what the user typed, with what the harm
         check flagged taken out by the local model, in place of what they typed, so the turn can go to
         the cloud. Removal only: what the local model wrote is checked by the harm check, and if it is
-        still flagged, or nothing is left, the turn stays local. None leaves it to the local model."""
+        still flagged, or nothing is left, the turn stays local. No skills go with it (see below). Under review ([guard]
+        local_handback_review), a rewrite the check passed waits for the user first (review.py).
+        None leaves it to the local model."""
         if self._handback_harm() != "rewrite":
             return None
         flagged = self._flagged_texts(route, texts)
@@ -814,14 +816,16 @@ class Proxy:
         if not flagged or any(self.harm_handbacks.kept(text) for text in flagged):
             return None
         guard = next((g for g in self.guards if g.name == "harm"), None)
-        skills = self.local_skills("handback") if callable(self.local_skills) else []
-        skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
-        done, server = [], None
+        done, server, reviews = [], None, []
         for text in flagged:
             full = whole.get(text)
             if not full or text not in full:  # what was typed is not one piece of its message: kept local
                 return None
-            got = await self._write_locally("rewrite", text, None, None, "", skills, path, check="harm")
+            # keepmum's instruction alone, no skills: a skill for answering or for tool results can turn
+            # the model against the user's own task. Qwen3.6 35B, given the jailbreak-then-task message of
+            # Nov 15, 2026 with keepmum-local-turns after the instruction, kept the jailbreak and took the
+            # task out in 2 of 4 runs; with the instruction alone, 1 miss in 30 over five such messages.
+            got = await self._write_locally("rewrite", text, None, None, "", "", path, check="harm")
             if got is None:
                 return None
             out, server = got
@@ -841,6 +845,22 @@ class Proxy:
                        else "nothing was left once the flagged part was out")
                 log.info("%s: %s; answered locally", path, why)
                 return {"strategy": "rewrite", "model": server.model, "url": server.url, "kept": why}
+            mode, wait, timeout = self._review()
+            if review_applies(mode, "rewrite") and self.reviews.present():
+                log.info("%s: holding the rewrite of what was typed for the user's review (up to %d s)", path, wait)
+                decision = await self.reviews.ask(Review("rewrite", None, path, text, out, server.model, wait,
+                                                         check="harm"), timeout)
+                reviews.append(_reviewed(decision, wait))
+                if decision.action not in ("send", "edit"):  # local, or no answer under "stay"
+                    for t in flagged:
+                        self.harm_handbacks.keep_local(t)
+                    log.info("%s: the rewrite of what was typed was kept on this Mac (%s)", path, reviews[-1])
+                    return {"strategy": "rewrite", "model": server.model, "url": server.url, "review": reviews[-1],
+                            "kept": "you kept it on this Mac" if not decision.timed_out else f"no answer in {wait} s"}
+                if decision.action == "edit":
+                    out = decision.text
+                    if await self._edit_flagged(guard, out):  # the user's own words: noted if flagged, theirs to send
+                        reviews[-1] = "edited; the check flagged the edit, sent as you approved it"
             mine = harm_wrap(out)
             done.append((full, full.replace(text, mine, 1), mine))
         for full, replacement, mine in done:
@@ -848,7 +868,8 @@ class Proxy:
             self.harm_handbacks.mark_made(mine)
         log.info("%s: the local model %s at %s took the flagged part out of what was typed, and the harm check passed the rest", path,
                  server.model, server.url)
-        return {"strategy": "rewrite", "model": server.model, "url": server.url}
+        return {"strategy": "rewrite", "model": server.model, "url": server.url,
+                **({"review": "; ".join(reviews)} if reviews else {})}
 
     @staticmethod
     def _flagged_texts(route: LocalRoute, texts: dict | None) -> dict[str, str | None]:
@@ -868,7 +889,11 @@ class Proxy:
         for server in servers:
             data = {"model": server.model, "stream": False, "max_tokens": LOCAL_MAX_TOKENS,
                     "messages": (harm_messages(text, skills) if check == "harm"
-                                 else handback_messages(strategy, text, source, prompt, instructions, skills)), **NO_THINKING}
+                                 else handback_messages(strategy, text, source, prompt, instructions, skills)), **NO_THINKING,
+                    # Taking words out of what was typed has one right answer: the model's most likely one. Sampled,
+                    # Qwen3.6 35B kept the jailbreak about 1 run in 10, and the turn stayed local; at 0, 24 of 24
+                    # right over eight messages (Nov 15, 2026).
+                    **({"temperature": 0} if check == "harm" else {})}
             try:
                 resp = await self.client.post(server.url + LOCAL_CHAT_PATH, json=data)
                 # A server that refuses the fields that turn thinking off: ask again without them. Not

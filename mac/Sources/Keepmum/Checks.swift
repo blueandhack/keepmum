@@ -1034,10 +1034,10 @@ struct LocalHandbackSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xl) {
             strategySection
-            if ["answer", "summary", "rewrite"].contains(current), let review = engine.localHandback?.review {
+            if ["answer", "summary", "rewrite"].contains(current) || harmCurrent == "rewrite", let review = engine.localHandback?.review {
                 FormSection(title: "Review before it goes",
                             footer: "keepmum holds the request while you look, in a panel that does not take the keyboard. With this app closed, and no keepmum review --watch in a terminal, nothing waits.",
-                            details: "Each flagged result is reviewed once; later turns reuse your answer. An edit of yours is checked for injection like the local model's text; if the check flags it, it is still sent, as you wrote it, and the hit is logged.") {
+                            details: "Each flagged result is reviewed once; later turns reuse your answer. An edit of yours is checked for injection like the local model's text; if the check flags it, it is still sent, as you wrote it, and the hit is logged. A rewrite of what you typed waits here too once the harm check passes it; one it still flags stays local without asking.") {
                     reviewRows(review)
                 }
             }
@@ -1094,9 +1094,12 @@ struct LocalHandbackSection: View {
     @ViewBuilder private func reviewRows(_ review: Engine.LocalHandback.Review) -> some View {
         let label = Self.reviewModes.first { $0.id == review.mode }?.label ?? review.mode
         let skipped = review.mode == "rewrite" && current != "rewrite"
+        let typedOnly = !["answer", "summary", "rewrite"].contains(current)  // only the harm check's rewrite is reviewed
         FormRow(title: "Review first",
                 detail: review.mode == "off" ? "Off: what the local model wrote goes straight to the cloud"
+                    : typedOnly ? "A panel shows the local model's rewrite of what you typed: send it, edit it or keep the turn local"
                     : skipped ? "Rewrites only: this hand-back goes without a review"
+                        + (harmCurrent == "rewrite" ? "; a rewrite of what you typed waits for one" : "")
                     : current == "answer" ? "After the local answer, a panel shows what the next turn sends in the result's place: send it, edit it or keep the conversation local"
                     : "A panel shows what the local model wrote: send it, edit it, withhold the result or keep the turn local") {
             ChoiceMenu(engine: engine, label: label,

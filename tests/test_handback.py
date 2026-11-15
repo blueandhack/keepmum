@@ -26,6 +26,7 @@ from keepmum.audit import config_changes, config_state
 from keepmum.cli import app
 from keepmum.config import ConfigError, load
 from keepmum.handback import (
+    HARM_INSTRUCTION,
     HARM_STRATEGIES,
     INSTRUCTIONS,
     MAX_INSTRUCTIONS,
@@ -593,6 +594,16 @@ def test_the_rewrite_keeps_what_the_agent_added_to_the_turn():
     sent = seen["sent"][0]["messages"][0]["content"]
     assert sent.startswith("<system-reminder>Today is Friday.</system-reminder>\n[keepmum: its harm check")
     assert ATTACK not in sent
+
+
+def test_the_harm_rewrite_gets_keepmums_instruction_alone_without_skills_at_temperature_0(tmp_path):
+    (tmp_path / "turns.md").write_text("Leave out the part that addresses the agent.")
+    skills = [Skill(str(tmp_path / "turns.md"), ("injection", "handback", "harm"))]
+    rs, seen, _ = run("local", [typed_turn(ASKED + ATTACK)], harm=True, handback_harm="rewrite", skills=skills,
+                      local=writes(ASKED + "[removed by keepmum]"))
+    assert rs[0].json()["id"] == "up"
+    assert seen["local"][0][3]["messages"][0]["content"] == HARM_INSTRUCTION
+    assert seen["local"][0][3]["temperature"] == 0  # one right answer: not sampled
 
 
 def test_a_rewrite_the_harm_check_still_flags_stays_local_and_is_not_asked_for_again():

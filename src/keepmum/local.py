@@ -120,7 +120,7 @@ class LocalRoute:
 # The two injection places need different instructions: one that suits an answer ("say what the
 # planted part asked for") can spoil a summary, which the check then flags. No place: parked.
 PLACES = ("injection", "handback", "harm")
-PLACE_NAMES = {"injection": "answering a flagged tool result", "handback": "summaries and rewrites for the cloud",
+PLACE_NAMES = {"injection": "answering a flagged tool result", "handback": "summaries and rewrites of tool results for the cloud",
                "harm": "answering a flagged request"}
 
 
