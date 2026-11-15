@@ -18,7 +18,9 @@ What the local model gets:
   - its own model name in place of the agent's.
   - no tools. A flagged request is the one most likely to carry instructions planted for the
     agent, and a small local model follows them more readily than a cloud one; without tools it
-    can only answer in text, never run a command or edit a file.
+    can only answer in text, never run a command or edit a file. A model can still write a tool
+    call unasked, which a server may parse and return as one (Ollama did with Gemma 4, and Claude
+    Code ran it): keepmum makes any tool call in the answer a note that nothing ran (NativeFilter).
   - a note, first in its instructions, that says why this turn came to it, then the user's skills
     for that check, if any (`[guard] local_skills`: Claude Code's SKILL.md format), then the
     agent's own instructions.
@@ -43,6 +45,7 @@ import json
 import logging
 import secrets
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -884,6 +887,141 @@ class ChatStream:
                       + self._event("response.content_part.done", item_id=self._mid, output_index=0, content_index=0, part=part)
                       + self._event("response.output_item.done", output_index=0, item=done["output"][0])
                       + self._event("response.completed", response=done))
+
+
+# What a local answer in the agent's own API may hold: text and thinking. keepmum offers a local model
+# no tools, but a model can write a tool call anyway, and a server that parses it (Ollama, with Gemma
+# 4) returns it as one; the agent would then run it. Anything else becomes a note that it did not run.
+_MESSAGE_BLOCKS = ("text", "thinking", "redacted_thinking")
+_RESPONSE_ITEMS = ("message", "reasoning")
+
+
+def tool_note(name: str | None) -> str:
+    what = f"the tool `{name}`" if name else "a tool"
+    return (f"\n\n(keepmum: the local model asked to use {what}. A local turn has no tools, so nothing ran.)\n")
+
+
+def _call_name(item: dict) -> str | None:
+    """A call's tool: its name, or what a built-in call does (a local_shell_call's action: exec)."""
+    name = item.get("name")
+    if not name and isinstance(item.get("action"), dict):
+        name = item["action"].get("type")
+    return name if isinstance(name, str) else None
+
+
+def _note_item(name: str | None, iid: str, status: str = "completed") -> dict:
+    return {"type": "message", "id": iid, "status": status, "role": "assistant",
+            "content": [{"type": "output_text", "text": tool_note(name), "annotations": []}]}
+
+
+def without_tool_calls(reply, api: str):
+    """A whole answer (Messages or Responses JSON) with each tool call in it replaced by a note."""
+    if not isinstance(reply, dict):
+        return reply
+    if api == "messages" and isinstance(reply.get("content"), list):
+        changed = False
+        content = []
+        for block in reply["content"]:
+            if isinstance(block, dict) and block.get("type") not in _MESSAGE_BLOCKS:
+                content.append({"type": "text", "text": tool_note(block.get("name"))})
+                changed = True
+            else:
+                content.append(block)
+        if changed:
+            reply = {**reply, "content": content}
+            if reply.get("stop_reason") == "tool_use":
+                reply["stop_reason"] = "end_turn"
+        return reply
+    if api == "responses" and isinstance(reply.get("output"), list):
+        if all(not isinstance(o, dict) or o.get("type") in _RESPONSE_ITEMS for o in reply["output"]):
+            return reply
+        output = [o if not isinstance(o, dict) or o.get("type") in _RESPONSE_ITEMS
+                  else _note_item(_call_name(o), "msg_" + str(o.get("id") or o.get("call_id") or uuid.uuid4().hex))
+                  for o in reply["output"]]
+        return {**reply, "output": output}
+    return reply
+
+
+@dataclass
+class NativeFilter:
+    """A local server's stream in the agent's own API (Messages or Responses events), passed on as it
+    arrives except for tool calls, which become a note: feed() each piece, then end() once."""
+    api: str
+    _buf: bytes = b""
+    _calls: dict = field(default_factory=dict)  # a call's index (Messages) or output index (Responses) -> its name
+    _ids: set = field(default_factory=set)  # Responses: the item ids of calls
+
+    def feed(self, chunk: bytes) -> bytes:
+        self._buf += chunk.replace(b"\r\n", b"\n")
+        out = b""
+        while b"\n\n" in self._buf:
+            block, self._buf = self._buf.split(b"\n\n", 1)
+            out += self._block(block)
+        return out
+
+    def end(self) -> bytes:
+        rest, self._buf = self._buf, b""
+        return self._block(rest) if rest.strip() else b""
+
+    def _block(self, block: bytes) -> bytes:
+        raw = block + b"\n\n"
+        data = b"".join(line[5:].strip() for line in block.split(b"\n") if line.startswith(b"data:"))
+        try:
+            event = json.loads(data) if data else None
+        except ValueError:
+            return raw
+        if not isinstance(event, dict):
+            return raw
+        kind = event.get("type")
+        name = next((line[6:].strip().decode("utf-8", "replace") for line in block.split(b"\n")
+                     if line.startswith(b"event:")), kind)
+        out = self._messages(event, kind) if self.api == "messages" else self._responses(event, kind)
+        if out is None:
+            return raw
+        return b"".join(f"event: {e.get('type', name)}\ndata: {json.dumps(e, ensure_ascii=False)}\n\n".encode() for e in out)
+
+    def _messages(self, event: dict, kind) -> list[dict] | None:
+        index = event.get("index")
+        if kind == "content_block_start":
+            block = event.get("content_block") or {}
+            if block.get("type") in _MESSAGE_BLOCKS:
+                return None
+            self._calls[index] = block.get("name")
+            return [{**event, "content_block": {"type": "text", "text": ""}}]
+        if kind == "content_block_delta" and index in self._calls:
+            return []
+        if kind == "content_block_stop" and index in self._calls:
+            note = {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": tool_note(self._calls[index])}}
+            return [note, event]
+        if kind == "message_delta" and (event.get("delta") or {}).get("stop_reason") == "tool_use":
+            return [{**event, "delta": {**event["delta"], "stop_reason": "end_turn"}}]
+        return None
+
+    def _responses(self, event: dict, kind) -> list[dict] | None:
+        item = event.get("item") if isinstance(event.get("item"), dict) else None
+        at = event.get("output_index")
+        if kind in ("response.output_item.added", "response.output_item.done") and item is not None:
+            if item.get("type") in _RESPONSE_ITEMS:
+                return None
+            name = self._calls.setdefault(at, _call_name(item))
+            self._ids.add(item.get("id"))
+            iid = "msg_" + str(item.get("id") or item.get("call_id") or at)
+            seq = {"sequence_number": event["sequence_number"]} if "sequence_number" in event else {}
+            if kind == "response.output_item.added":
+                return [{**event, "item": {**_note_item(name, iid, "in_progress"), "content": []}}]
+            part = {"type": "output_text", "text": tool_note(name), "annotations": []}
+            where = {"item_id": iid, "output_index": at, "content_index": 0}
+            return [{"type": "response.content_part.added", **seq, **where, "part": {**part, "text": ""}},
+                    {"type": "response.output_text.delta", **seq, **where, "delta": part["text"]},
+                    {"type": "response.output_text.done", **seq, **where, "text": part["text"]},
+                    {"type": "response.content_part.done", **seq, **where, "part": part},
+                    {**event, "item": _note_item(name, iid)}]
+        if at in self._calls or event.get("item_id") in self._ids:
+            return []  # the call's arguments as they come
+        if isinstance(event.get("response"), dict) and isinstance(event["response"].get("output"), list):
+            fixed = without_tool_calls(event["response"], "responses")
+            return None if fixed is event["response"] else [{**event, "response": fixed}]
+        return None
 
 
 # --- What a server has -------------------------------------------------------------------------

@@ -70,7 +70,7 @@ from .review import applies as review_applies
 from .local import DEFAULT_MAX_TOKENS as LOCAL_MAX_TOKENS
 from .local import NO_THINKING
 from .local import keep_alive, thinking_fields, without_thinking
-from .local import ChatStream, answer_text, from_chat, skills_text, to_chat
+from .local import ChatStream, NativeFilter, answer_text, from_chat, skills_text, to_chat, without_tool_calls
 from .local import LocalRoute
 from .local import prepare as prepare_local
 from .redact import Redactor
@@ -210,6 +210,16 @@ def too_long(raw: bytes) -> bool:
     text = raw[:2000].decode("utf-8", "replace").lower()
     return any(k in text for k in ("context_length", "context window", "context length", "exceeds the context",
                                    "maximum context", "too many tokens", "n_ctx"))
+
+
+def _without_tool_calls(content: bytes, api: str) -> bytes:
+    """A local model's whole answer in the agent's API, with any tool call in it made a note."""
+    try:
+        reply = json.loads(content)
+    except ValueError:
+        return content
+    fixed = without_tool_calls(reply, api)
+    return content if fixed is reply else json.dumps(fixed, ensure_ascii=False).encode()
 
 
 def _error_text(raw: bytes, limit: int = 160) -> str:
@@ -1013,7 +1023,7 @@ class Proxy:
                     data, target = prepare_local(body, t.api, server.model, route, skills), server.url + LOCAL_PATHS[t.api]
                 else:
                     data, target = to_chat(body, t.api, server.model, route, skills, stream), server.url + LOCAL_CHAT_PATH
-                headers = {"content-type": "application/json"}
+                headers = {"content-type": "application/json", "accept-encoding": "identity"}  # NativeFilter reads it
                 if t.api == "messages" and way == "native":
                     headers["anthropic-version"] = request.headers.get("anthropic-version", "2023-06-01")
                 api = "chat" if way == "chat" else t.api
@@ -1083,7 +1093,10 @@ class Proxy:
         if way == "chat":
             headers = {k: v for k, v in headers.items() if k.lower() not in ("content-type", "content-length")}
         if content is None:
-            translate = ChatStream(api, server.model, wrapped=bool((shape or {}).get("wrapped"))) if way == "chat" else None
+            if way == "chat":
+                translate = ChatStream(api, server.model, wrapped=bool((shape or {}).get("wrapped")))
+            else:  # the agent's own API: passed on as it comes, but never a tool call (local.NativeFilter)
+                translate = NativeFilter(api) if api in ("messages", "responses") else None
 
             async def body():
                 sent, size = [], 0
@@ -1116,6 +1129,9 @@ class Proxy:
             except (ValueError, AttributeError, TypeError, IndexError):
                 pass  # not JSON: passed back as it is
             headers["content-type"] = "application/json"
+        elif api in ("messages", "responses"):
+            content = _without_tool_calls(content, api)
+            headers.pop("content-length", None)
         self._record(path, "local", resp.status_code, origin=origin, guard=hits)
         log.info("%s -> local model %s at %s%s: %d", path, server.model, server.url, how, resp.status_code)
         if after:
