@@ -30,6 +30,12 @@ base URL becomes keepmum's route for the gateway, and `off` maps the route back.
 URL keepmum did not write is otherwise never edited. Codex on a local model (ollama, lmstudio, oss)
 needs no protection: nothing leaves this Mac.
 
+Codex reads config.toml only when a process starts, so one already running when keepmum is switched
+on still goes around it (seen Nov 15, 2026 with Codex 0.169: a VS Code window and the app-server
+daemon kept their old provider for hours). keepmum's block notes when it was switched on, and while
+Codex is on, status warns about any `codex` process started before then and says how to restart it.
+Codex rewrites config.toml itself (project trust, notices), so the file's own mtime cannot say this.
+
 All three get an `x-keepmum-client` header, so the dashboard can tell clients apart; the proxy drops
 it before forwarding. Only what keepmum added is ever removed, and a different base URL the user
 already set is left alone and reported.
@@ -43,6 +49,7 @@ import shutil
 import re
 import subprocess
 import tomllib
+from datetime import datetime
 from pathlib import Path
 
 from .gateway import find, is_ours, name_for, origin, parse_route, route_url, unroute
@@ -51,6 +58,8 @@ from .protect import ProtectError, _gateways, _read, _write, keepmum_url
 CODEX_MARK = "# keepmum protect"
 CODEX_BEGIN = "# >>> keepmum protect: routes Codex through keepmum; `keepmum protect off` removes this block"
 CODEX_END = "# <<< keepmum protect"
+CODEX_SINCE = "# keepmum protect: on since "  # + ISO time; Codex processes started earlier go around keepmum
+_CODEX_SINCE = re.compile(r"^\s*" + re.escape(CODEX_SINCE) + r"(\S+)", re.M)
 
 
 # --- Codex --------------------------------------------------------------------------
@@ -203,7 +212,56 @@ def codex_status(port: int, gateways: dict[str, str] | None = None) -> dict:
         out["warning"] = ("its gateway is no longer in keepmum's config; run `keepmum protect on --client codex`"
                           if parse_route(base, port) else
                           "Codex login mode or keepmum port changed; run `keepmum protect on --client codex` to update its URL")
+    elif on and (since := _codex_on_since(text)) and (fixes := _codex_restarts(since)):
+        out["warning"] = "Codex started before keepmum was switched on still goes around it; " + "; ".join(fixes)
     return out
+
+
+def _codex_on_since(text: str) -> datetime | None:
+    m = _CODEX_SINCE.search(text)
+    try:
+        return datetime.fromisoformat(m.group(1)) if m else None
+    except ValueError:
+        return None
+
+
+def _codex_processes() -> list[tuple[datetime, str]]:
+    """(start time, command line) of every process on this machine; empty if `ps` cannot say."""
+    try:
+        res = subprocess.run(["ps", "-A", "-o", "lstart=,args="], capture_output=True, text=True, timeout=5,
+                             env={**os.environ, "LC_ALL": "C"})
+    except (OSError, subprocess.SubprocessError):
+        return []
+    out = []
+    for line in res.stdout.splitlines():
+        parts = line.split(None, 5)  # lstart is "Sat Nov 14 21:44:07 2026"
+        if len(parts) < 6:
+            continue
+        try:
+            out.append((datetime.strptime(" ".join(parts[:5]), "%a %b %d %H:%M:%S %Y").astimezone(), parts[5]))
+        except ValueError:
+            continue
+    return out
+
+
+def _codex_restarts(since: datetime) -> list[str]:
+    """How to restart each kind of Codex process started before `since`, which still has the provider
+    it read at start. Skipped: the daemon's own management commands and `keepmum codex` runs, whose
+    `-c` overrides already send them through keepmum."""
+    fixes = []
+    for started, args in _codex_processes():
+        m = re.match(r"(?:.*?/)?codex(?=\s|$)", args)
+        if not m or started >= since or 'model_provider="keepmum"' in args:
+            continue
+        rest = args[m.end():].split()
+        if rest[:2] in (["app-server", "daemon"], ["app-server", "proxy"]):
+            continue
+        fix = ("run `codex app-server daemon restart`" if "--managed-daemon" in rest else
+               "reload editor windows that use the Codex extension" if "/extensions/" in args else
+               "restart `codex` in your terminals")
+        if fix not in fixes:
+            fixes.append(fix)
+    return fixes
 
 
 def _set_top_key(text: str, key: str, new: str) -> str:
@@ -249,7 +307,10 @@ def codex_enable(port: int, adopt=None) -> dict:
         provider = _codex_in_front(table, adopt(table["base_url"], "Codex"))
     else:
         provider = codex_provider(port)
-    block = [CODEX_BEGIN, "[model_providers.keepmum]"]
+    # Already on with this same provider: processes started since the earlier switch-on have it too.
+    unchanged = parsed.get("model_provider") == "keepmum" and (parsed.get("model_providers") or {}).get("keepmum") == provider
+    since = (unchanged and _codex_on_since(text)) or datetime.now().astimezone().replace(microsecond=0)
+    block = [CODEX_BEGIN, CODEX_SINCE + since.isoformat(), "[model_providers.keepmum]"]
     block += [f"{k} = {_toml(v)}" for k, v in provider.items()]
     block.append(CODEX_END)
     line = 'model_provider = "keepmum"  ' + CODEX_MARK + (f' (was "{source}")' if source else "")

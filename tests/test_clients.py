@@ -199,3 +199,59 @@ def test_codex_warning_on_port_or_login_change_and_claude_other_gateway(homes, m
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
     st = clients.protect_clients("status", PORT, ["claude"])["claude"]
     assert not st["on"] and st["other"] == "https://gateway.corp.internal"
+
+
+def test_codex_warns_about_processes_started_before_it_was_switched_on(homes, monkeypatch):
+    from datetime import timedelta
+
+    cfg = homes / "codex" / "config.toml"
+    clients.codex_enable(PORT)
+    since = clients._codex_on_since(cfg.read_text())
+    assert since is not None
+    before, after = since - timedelta(hours=6), since + timedelta(seconds=5)
+    ext = "/Users/me/.vscode/extensions/openai.chatgpt-26.1111-darwin-arm64/bin/macos-aarch64/codex"
+    daemon = "/Users/me/.codex/packages/app-server-daemon/releases/0.169.0/bin/codex"
+    procs = [
+        (before, f"{ext} -c features.code_mode_host=true app-server --analytics-default-enabled"),
+        (before, f"{daemon} app-server --listen unix:// --managed-daemon"),
+        (before, f"{daemon} app-server daemon pid-update-loop"),  # the daemon's supervisor: no model calls
+        (before, f"{daemon}-code-mode-host --listen grpc+stdio://"),  # not codex itself
+        (before, 'codex -c model_provider="keepmum" -c model_providers.keepmum.name="keepmum"'),  # keepmum codex
+        (after, "/opt/homebrew/bin/codex"),  # started after: already through keepmum
+    ]
+    monkeypatch.setattr(clients, "_codex_processes", lambda: procs)
+    warning = clients.codex_status(PORT)["warning"]
+    assert warning.startswith("Codex started before keepmum was switched on still goes around it")
+    assert "reload editor windows" in warning and "codex app-server daemon restart" in warning
+    assert "terminals" not in warning
+    procs.append((before, "/opt/homebrew/bin/codex resume"))
+    assert "restart `codex` in your terminals" in clients.codex_status(PORT)["warning"]
+
+    # On again with the same provider keeps the earlier time; a new provider URL starts a new one.
+    clients.codex_enable(PORT)
+    assert clients._codex_on_since(cfg.read_text()) == since
+    (homes / "codex" / "auth.json").write_text(json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": "x"}))
+    monkeypatch.setattr(clients, "datetime", type("D", (), {
+        "now": staticmethod(lambda: after), "fromisoformat": clients.datetime.fromisoformat}))
+    clients.codex_enable(PORT)
+    assert clients._codex_on_since(cfg.read_text()) == after
+
+    # Off removes the line with the rest of keepmum's block; no processes, no warning.
+    clients.codex_disable(PORT)
+    assert clients.CODEX_SINCE not in cfg.read_text()
+    monkeypatch.setattr(clients, "_codex_processes", lambda: [])
+    clients.codex_enable(PORT)
+    assert "warning" not in clients.codex_status(PORT)
+
+
+def test_codex_process_reader_parses_ps_output(monkeypatch):
+    import subprocess
+
+    monkeypatch.undo()  # conftest stubs the reader for every test; this one checks the real one
+    out = "Sat Nov 14 21:44:07 2026     /path with space/codex app-server\nnot a ps line\n"
+    monkeypatch.setattr(clients.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, out, ""))
+    (started, args), = clients._codex_processes()
+    assert (started.year, started.month, started.day, started.hour) == (2026, 11, 14, 21)
+    assert args == "/path with space/codex app-server"
+    monkeypatch.setattr(clients.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError("no ps")))
+    assert clients._codex_processes() == []
