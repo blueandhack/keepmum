@@ -115,7 +115,7 @@ struct Finding: Decodable, Sendable, Identifiable {
     func matches(_ query: String) -> Bool {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         if q.isEmpty { return true }
-        return [preview ?? "", type, Theme.label(type), foundBy, clientName, outcome].contains { $0.lowercased().contains(q) }
+        return [preview ?? "", type, Theme.label(type), foundBy, clientName, outcome, before ?? "", after ?? ""].contains { $0.lowercased().contains(q) }
     }
 
     /// Synthetic rows for preview mode, clearly not real values.
@@ -174,64 +174,65 @@ func agentName(_ client: String?) -> String {
 }
 
 /// What the optional checks flagged, newest first: the check, where (a tool, or what was typed),
-/// the categories, the score and the length. Never the text.
+/// the categories, the score and the length. Never the text. Its details show beside or in place of it.
 struct ChecksCard: View {
     var store: StatsStore
-    @Environment(\.isSnapshot) private var isSnapshot
+    var hits: [Snapshot.GuardHit]
+    /// The selected hit's id.
+    @Binding var selection: String?
 
     var body: some View {
-        let s = store.snapshot
-        let hits = s.guardHits.sorted { $0.ts > $1.ts }
-        let r = s.guard?.requests ?? [:]
+        let r = store.snapshot.guard?.requests ?? [:]
         Card(title: "Checks", subtitle: hits.isEmpty ? "Nothing flagged since keepmum started"
-                 : "\(hits.count) flagged: \(r["blocked"] ?? 0) stopped, \(r["local"] ?? 0) answered on this Mac, \(r["warned"] ?? 0) sent with a warning. Click one for details.") {
-            VStack(spacing: 0) {
-                ColumnHeader {
-                    Text("Time").frame(width: Stamp.width, alignment: .leading)
-                    Text("Agent").frame(width: 92, alignment: .leading)
-                    Text("Check").frame(width: 100, alignment: .leading)
-                    Text("Flagged").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Score").frame(width: 50, alignment: .trailing)
-                    Text("Length").frame(width: 60, alignment: .trailing)
-                    Text("Outcome").frame(width: 80, alignment: .leading).padding(.leading, Space.s)
-                }
-                .padding(.horizontal, Space.xs)
-                if hits.isEmpty {
-                    EmptyNote(text: "Turned-on checks flag here. Click one for what was flagged, what you had asked, and what keepmum did.")
-                } else if isSnapshot {
-                    ForEach(hits.prefix(4)) { row($0) }
-                } else {
-                    ScrollView { LazyVStack(spacing: 0) { ForEach(hits) { row($0) } } }.frame(maxHeight: 200)
-                }
+                 : "\(hits.count) flagged: \(r["blocked"] ?? 0) stopped, \(r["local"] ?? 0) answered on this Mac, \(r["warned"] ?? 0) sent with a warning") {
+            DataTable(key: "checks", columns: Self.columns, items: hits, selection: $selection,
+                      empty: "Turned-on checks flag here. Select one for what was flagged, what you had asked, and what keepmum did.",
+                      snapshotRows: 6) { h, column in
+                CheckCell(hit: h, column: column)
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
     }
 
-    @State private var selected: String?
+    static let columns: [DataColumn] = [
+        DataColumn(id: "time", title: "Time", width: 118, min: 70, hideable: false),
+        DataColumn(id: "agent", title: "Agent", width: 106, min: 50),
+        DataColumn(id: "check", title: "Check", width: 104, min: 50),
+        DataColumn(id: "flagged", title: "Flagged", width: 220, min: 80, flexible: true),
+        DataColumn(id: "score", title: "Score", width: 58, min: 40, alignment: .trailing),
+        DataColumn(id: "length", title: "Length", width: 66, min: 40, alignment: .trailing),
+        DataColumn(id: "mode", title: "Mode", width: 64, min: 40, hiddenByDefault: true),
+        DataColumn(id: "model", title: "Model", width: 160, min: 50, hiddenByDefault: true),
+        DataColumn(id: "provider", title: "Sent to", width: 84, min: 50, hiddenByDefault: true),
+        DataColumn(id: "endpoint", title: "Endpoint", width: 170, min: 60, hiddenByDefault: true),
+        DataColumn(id: "outcome", title: "Outcome", width: 96, min: 60),
+    ]
+}
 
-    private func row(_ h: Snapshot.GuardHit) -> some View {
-        CheckRow(hit: h, texts: h.seq.flatMap { store.checkTexts[$0] }, contextOn: store.contextOn,
-                 selected: Binding(get: { selected == h.id }, set: { selected = $0 ? h.id : nil })) {
-            Stamp(date: h.date)
-            HStack(spacing: Space.s - Space.xxs) {
-                Circle().fill(clientColor(h.client ?? "claude-code")).frame(width: 7, height: 7)
-                Text(agentName(h.client)).lineLimit(1)
-            }
-            .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 92, alignment: .leading)
+private struct CheckCell: View {
+    var hit: Snapshot.GuardHit
+    var column: String
+
+    var body: some View {
+        let h = hit
+        switch column {
+        case "time": TimeCell(date: h.date)
+        case "agent": AgentCell(client: h.client)
+        case "check":
             HStack(spacing: Space.s - Space.xxs) {
                 Image(systemName: h.checkIcon).font(.km(.caption)).foregroundStyle(Theme.textSecondary).frame(width: 14)
                 Text(h.checkName)
             }
-            .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 100, alignment: .leading)
-            Text(h.flagged).font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(h.isRule ? "—" : String(format: "%.2f", h.score)).font(.km(.callout)).monospacedDigit()
-                .foregroundStyle(Theme.textSecondary).frame(width: 50, alignment: .trailing)
-                .help(h.isRule ? "A rule matched: rules have no score" : "")
-            Text(h.chars.formatted()).font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
-                .frame(width: 60, alignment: .trailing)
-            CheckOutcome(hit: h).frame(width: 80, alignment: .leading).padding(.leading, Space.s)
+            .font(.km(.callout)).foregroundStyle(Theme.text)
+        case "flagged": Text(h.flagged).font(.km(.callout)).foregroundStyle(Theme.text).truncationMode(.tail)
+        case "score":
+            Text(h.isRule ? "—" : String(format: "%.2f", h.score)).font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
+        case "length": Text(h.chars.formatted()).font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
+        case "mode": Text((h.mode ?? "—").capitalized).font(.km(.callout)).foregroundStyle(Theme.textSecondary)
+        case "model": Text(h.model ?? "—").font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary).truncationMode(.middle)
+        case "provider": Text(h.providerName).font(.km(.callout)).foregroundStyle(Theme.text)
+        case "endpoint": Text(h.path ?? "—").font(.km(.monoSmall)).foregroundStyle(Theme.text).truncationMode(.middle)
+        case "outcome": CheckOutcome(hit: h)
+        default: EmptyView()
         }
     }
 }
@@ -356,42 +357,14 @@ struct CheckOutcome: View {
     }
 }
 
-/// A Checks row: hover to highlight, click for its details in a popover.
-private struct CheckRow<Cells: View>: View {
-    var hit: Snapshot.GuardHit
-    var texts: StatsStore.CheckText?
-    var contextOn: Bool
-    @Binding var selected: Bool
-    @ViewBuilder var cells: Cells
-    @State private var hovering = false
-
-    var body: some View {
-        Button { selected.toggle() } label: {
-            VStack(spacing: 0) {
-                HStack(spacing: Space.m) { cells }
-                    .padding(.vertical, Space.s - 1).padding(.horizontal, Space.xs)
-                    .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
-                        .fill(selected ? Theme.accentSoft : hovering ? Theme.fill : .clear))
-                    .contentShape(Rectangle())
-                Hairline()
-            }
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .popover(isPresented: $selected, arrowEdge: .bottom) {
-            CheckDetail(hit: hit, texts: texts, contextOn: contextOn).frame(width: 540).background(Theme.canvas)
-                .presentationBackground(Theme.canvas)
-        }
-        .accessibilityHint("Shows what the check found and what keepmum did")
-    }
-}
-
 /// One check's hit in full: what it found and where, how sure, what keepmum did, and what to do.
 struct CheckDetail: View {
     var hit: Snapshot.GuardHit
     /// The flagged text and the user's prompt, masked values as types; nil: not kept.
     var texts: StatsStore.CheckText? = nil
     var contextOn = true
+    /// In the Logs page's details, which scroll as a whole: the texts are shown in full, on the canvas.
+    var inPane = false
     @Environment(\.isSnapshot) private var isSnapshot
 
     var body: some View {
@@ -403,7 +376,15 @@ struct CheckDetail: View {
                 Spacer()
                 CheckOutcome(hit: h)
             }
+            DetailColumns { left(h) } right: { right(h) }
+        }
+        .padding(Space.l + Space.xs)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private func left(_ h: Snapshot.GuardHit) -> some View {
             Text(h.whatHappened).font(.km(.body)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Space.l, verticalSpacing: Space.s) {
                 field("Found in", found(h))
                 if !h.cats.isEmpty { field(h.isRule ? "Rule" : "Categories", h.cats.joined(separator: ", ")) }
@@ -426,8 +407,16 @@ struct CheckDetail: View {
                     }
                 }
                 if let path = h.path { field("Request", path, mono: true) }
-                field("Time", h.date.formatted(date: .abbreviated, time: .standard))
+                if h.earlier == true { field("Flagged before", "On an earlier request; still in the conversation, so every request that carries it is checked again") }
+                field("Time", isSnapshot ? h.date.formatted(date: .abbreviated, time: .standard) : detailTime(h.date))
             }
+            VStack(alignment: .leading, spacing: Space.xs) {
+                Text("What to do").eyebrow()
+                Text(h.advice).font(.km(.callout)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
+            }
+    }
+
+    @ViewBuilder private func right(_ h: Snapshot.GuardHit) -> some View {
             if h.check != "harm", let prompt = texts?.prompt {
                 block("What you asked", prompt, maxHeight: 90)
             }
@@ -441,15 +430,8 @@ struct CheckDetail: View {
                         .font(.km(.callout)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            VStack(alignment: .leading, spacing: Space.xs) {
-                Text("What to do").eyebrow()
-                Text(h.advice).font(.km(.callout)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
-            }
             Text("The text is as keepmum saw it, with every masked value shown as its type, like ‹SECRET›. It is kept in keepmum's memory only, never in the audit log or on disk, and goes when keepmum exits or text around values is turned off.")
                 .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(Space.l + Space.xs)
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func flaggedTitle(_ h: Snapshot.GuardHit) -> String {
@@ -468,9 +450,9 @@ struct CheckDetail: View {
             let body = Text(typesTinted(text)).font(.km(.mono)).lineSpacing(3).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading).padding(Space.m)
             Group {
-                if isSnapshot { body } else { ScrollView { body }.frame(maxHeight: maxHeight).fixedSize(horizontal: false, vertical: true) }
+                if isSnapshot || inPane { body } else { ScrollView { body }.frame(maxHeight: maxHeight).fixedSize(horizontal: false, vertical: true) }
             }
-            .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.surface))
+            .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(inPane ? Theme.canvas : Theme.surface))
         }
     }
 
@@ -517,60 +499,105 @@ struct LogsPage: View {
     @State private var query = ""
     @State private var type = "ALL"
     @State private var source = Finding.Source.all
-    /// The row whose details are open.
-    @State private var selected: String?
+    /// Which list shows: what the checks flagged, or the masked values.
+    @AppStorage("logs.tab") private var tab = Tab.checks
+    @State private var selectedHit: String?
+    @State private var selectedFinding: String?
     @Environment(\.isSnapshot) private var isSnapshot
+
+    enum Tab: String { case checks, masked }
+
+    init(store: StatsStore, selectedHit: String? = nil) {
+        self.store = store
+        _selectedHit = State(initialValue: selectedHit)
+    }
 
     var body: some View {
         let all = store.sampleMode ? Finding.samples : store.findings
         let shown = all.filter { (type == "ALL" || $0.type == type) && $0.found(by: source) && $0.matches(query) }
+        let hits = store.snapshot.guardHits.sorted { $0.ts > $1.ts }
+        let showChecks = store.snapshot.checking || !hits.isEmpty
+        let current = showChecks ? tab : .masked
         VStack(spacing: Space.l) {
-            PageHeader(title: "Logs", subtitle: store.snapshot.checking || !store.snapshot.guardHits.isEmpty
+            PageHeader(title: "Logs", subtitle: showChecks
                        ? "What the checks flagged and what keepmum masked in new text, newest first. Kept in memory until keepmum exits."
-                       : "What keepmum masked in new text, newest first. Click a row for its details. Kept in memory until keepmum exits.")
-            if store.snapshot.checking || !store.snapshot.guardHits.isEmpty { ChecksCard(store: store) }
-            Card(title: "Masked values", subtitle: all.isEmpty ? "Nothing masked since keepmum started" : "\(shown.count) of \(all.count)") {
-                HStack(spacing: Space.s) {
-                    search
-                    typePicker
-                    sourcePicker
+                       : "What keepmum masked in new text, newest first. Kept in memory until keepmum exits.") {
+                if showChecks {
+                    Segmented(options: [(Tab.checks, "Checks · \(hits.count.formatted())"),
+                                        (Tab.masked, "Masked values · \(all.count.formatted())")], selection: $tab)
                 }
-            } content: {
-                VStack(spacing: 0) {
-                    if !store.previewsOn {
-                        Text("Previews are off (Settings › General › Logs page): types and rules only.")
-                            .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, Space.s)
+            }
+            switch current {
+            case .checks:
+                ListDetail(key: "checks", ids: hits.map(\.id), selection: $selectedHit, back: "Checks",
+                             hint: "Click a check, or use ↑ ↓ and Return, for what was flagged, what you had asked, and what keepmum did.") {
+                    ChecksCard(store: store, hits: hits, selection: $selectedHit)
+                } detail: {
+                    if let h = hits.first(where: { $0.id == selectedHit }) {
+                        CheckDetail(hit: h, texts: h.seq.flatMap { store.checkTexts[$0] }, contextOn: store.contextOn, inPane: true)
                     }
-                    ColumnHeader {
-                        Text("Time").frame(width: Stamp.width, alignment: .leading)
-                        Text("Agent").frame(width: 92, alignment: .leading)
-                        Text("Type").frame(width: 100, alignment: .leading)
-                        Text("Value").frame(width: 168, alignment: .leading)
-                        Text("Length").frame(width: 50, alignment: .trailing)
-                        Text("Found by").frame(maxWidth: .infinity, alignment: .leading).padding(.leading, Space.s)
-                        Text("Outcome").frame(width: 80, alignment: .leading)
+                }
+            case .masked:
+                ListDetail(key: "logs", ids: shown.map(\.id), selection: $selectedFinding, back: "Masked values",
+                             hint: "Click a value, or use ↑ ↓ and Return, for everything keepmum knows about it.") {
+                    maskedCard(all, shown)
+                } detail: {
+                    if let f = shown.first(where: { $0.id == selectedFinding }) {
+                        FindingDetail(finding: f,
+                                      related: all.filter { $0.id != f.id && $0.type == f.type && $0.masked == f.masked && $0.chars == f.chars },
+                                      request: matchedEvent(f, findings: all, events: store.snapshot.recent + store.history),
+                                      previewsOn: store.previewsOn)
                     }
-                    .padding(.horizontal, Space.xs)  // in line with the rows' highlight inset
-                    if isSnapshot {
-                        ForEach(shown.prefix(14)) { row($0) }
-                    } else if !shown.isEmpty {
-                        ScrollView { LazyVStack(spacing: 0) { ForEach(shown) { row($0) } } }
-                    }
-                    if shown.isEmpty {
-                        EmptyNote(text: all.isEmpty ? "Nothing yet. Values masked in new text appear here; the list starts empty each time keepmum starts."
-                                                    : "No match")
-                    }
-                    Spacer(minLength: 0)
                 }
             }
         }
         .task(id: store.sampleMode) {
-            while !Task.isCancelled {
+            while !Task.isCancelled && !isSnapshot {
                 await store.loadFindings()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+    }
+
+    private func maskedCard(_ all: [Finding], _ shown: [Finding]) -> some View {
+        Card(title: "Masked values", subtitle: maskedSubtitle(all, shown)) {
+            HStack(spacing: Space.s) {
+                search
+                typePicker
+                sourcePicker
+            }
+        } content: {
+            VStack(spacing: 0) {
+                if !store.previewsOn {
+                    Text("Previews are off (Settings › General › Logs page): types and rules only.")
+                        .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, Space.s)
+                }
+                DataTable(key: "logs", columns: Self.columns, items: shown, selection: $selectedFinding,
+                          empty: all.isEmpty ? "Nothing yet. Values masked in new text appear here; the list starts empty each time keepmum starts."
+                                             : "No match", pageKey: "\(type)|\(source)|\(query)") { f, column in
+                    FindingCell(finding: f, column: column)
+                }
+            }
+        }
+    }
+
+    static let columns: [DataColumn] = [
+        DataColumn(id: "time", title: "Time", width: 118, min: 70, hideable: false),
+        DataColumn(id: "agent", title: "Agent", width: 106, min: 50),
+        DataColumn(id: "type", title: "Type", width: 100, min: 50),
+        DataColumn(id: "value", title: "Value", width: 172, min: 60),
+        DataColumn(id: "length", title: "Length", width: 56, min: 40, alignment: .trailing),
+        DataColumn(id: "foundBy", title: "Found by", width: 180, min: 60),
+        DataColumn(id: "context", title: "Context", width: 240, min: 120, flexible: true),
+        DataColumn(id: "provider", title: "Sent to", width: 80, min: 50, hiddenByDefault: true),
+        DataColumn(id: "outcome", title: "Outcome", width: 96, min: 60, hiddenByDefault: true),
+    ]
+
+    private func maskedSubtitle(_ all: [Finding], _ shown: [Finding]) -> String {
+        if all.isEmpty { return "Nothing masked since keepmum started" }
+        let observed = all.filter { $0.outcome == "observed" }.count
+        return "\(shown.count) of \(all.count)" + (observed > 0 ? " · \(observed) sent unmasked in observe mode" : "")
     }
 
     private var search: some View {
@@ -579,12 +606,16 @@ struct LogsPage: View {
             if isSnapshot {
                 Text("Search").font(.km(.callout)).foregroundStyle(Theme.textTertiary)
             } else {
-                TextField("Search", text: $query, prompt: Text("Search: g…w, email, github-token, Codex"))
+                TextField("Search", text: $query, prompt: Text("Search: g…w, email, github-token, Codex, text around"))
                     .textFieldStyle(.plain).font(.km(.callout))
             }
             Spacer(minLength: 0)
+            if !query.isEmpty && !isSnapshot {
+                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.textTertiary) }
+                    .buttonStyle(.plain).accessibilityLabel("Clear the search")
+            }
         }
-        .padding(.horizontal, Space.s).frame(width: 260, height: 26)
+        .padding(.horizontal, Space.s).frame(minWidth: 150, idealWidth: 260, maxWidth: 260).frame(height: 26)
         .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.fill))
     }
 
@@ -614,72 +645,48 @@ struct LogsPage: View {
             .labelsHidden().frame(width: 150)
         }
     }
+}
 
-    private func row(_ f: Finding) -> some View {
-        FindingRow(finding: f, selected: Binding(get: { selected == f.id }, set: { selected = $0 ? f.id : nil })) {
-            cells(f)
-        }
-    }
+private struct FindingCell: View {
+    var finding: Finding
+    var column: String
 
-    @ViewBuilder private func cells(_ f: Finding) -> some View {
-            Stamp(date: f.date)
-            HStack(spacing: Space.s - Space.xxs) {
-                Circle().fill(clientColor(f.client ?? "claude-code")).frame(width: 7, height: 7)
-                Text(f.clientName).lineLimit(1)
-            }
-            .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 92, alignment: .leading)
+    var body: some View {
+        let f = finding
+        switch column {
+        case "time": TimeCell(date: f.date)
+        case "agent": AgentCell(client: f.client)
+        case "type":
             HStack(spacing: Space.s - Space.xxs) {
                 Image(systemName: Theme.icon(f.type)).font(.km(.caption)).foregroundStyle(Theme.textSecondary).frame(width: 14)
                 Text(Theme.label(f.type))
             }
-            .font(.km(.callout)).foregroundStyle(Theme.text).frame(width: 100, alignment: .leading)
-            Text(f.masked).font(.km(.mono)).foregroundStyle(Theme.masked).lineLimit(1)
-                .frame(width: 168, alignment: .leading)
-                .help(f.preview == nil ? "Previews are off: only the length is shown"
-                      : f.preview == "•••" ? "Shorter than 8 characters: none of it is shown" : "First and last character only")
-            Text("\(f.chars)").font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
-                .frame(width: 50, alignment: .trailing)
-            FinderLabel(finding: f)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, Space.s)
-                .help(f.foundBy)
-            OutcomeLabel(kind: f.outcome == "observed" ? .observed : .masked)
-                .help(f.outcome == "observed" ? "Observe mode: sent unmasked, only counted" : "")
-                .frame(width: 80, alignment: .leading)
-    }
-}
-
-/// A Logs row: hover to highlight, click for its details in a popover.
-private struct FindingRow<Cells: View>: View {
-    var finding: Finding
-    @Binding var selected: Bool
-    @ViewBuilder var cells: Cells
-    @State private var hovering = false
-
-    var body: some View {
-        Button { selected.toggle() } label: {
-            VStack(spacing: 0) {
-                HStack(spacing: Space.m) { cells }
-                    .padding(.vertical, Space.s - 1).padding(.horizontal, Space.xs)
-                    .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
-                        .fill(selected ? Theme.accentSoft : hovering ? Theme.fill : .clear))
-                    .contentShape(Rectangle())
-                Hairline()
+            .font(.km(.callout)).foregroundStyle(Theme.text)
+        case "value": Text(f.masked).font(.km(.mono)).foregroundStyle(Theme.masked)
+        case "length": Text("\(f.chars)").font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
+        case "foundBy": FinderLabel(finding: f)
+        case "context":
+            if f.before == nil && f.after == nil {
+                Text("—").font(.km(.callout)).foregroundStyle(Theme.textSecondary)
+            } else {
+                Text(contextLine(f, around: 14)).font(.km(.monoSmall)).truncationMode(.tail)
             }
+        case "provider": Text(f.providerName).font(.km(.callout)).foregroundStyle(Theme.text)
+        case "outcome": OutcomeLabel(kind: f.outcome == "observed" ? .observed : .masked)
+        default: EmptyView()
         }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .popover(isPresented: $selected, arrowEdge: .bottom) {
-            // Opaque, like the menu panel: the theme's colors do not adapt to a material.
-            FindingDetail(finding: finding).frame(width: 440).background(Theme.canvas)
-                .presentationBackground(Theme.canvas)
-        }
-        .accessibilityHint("Shows the details of this value")
     }
 }
 
-/// One masked value in full: everything the feed knows about it, and the text around it.
+/// One masked value in full: what happened to it, everything the feed knows about it, the request
+/// it went out in, other times it was seen, and the text around it.
 struct FindingDetail: View {
     var finding: Finding
+    /// Other rows with the same type, shape and length: most likely the same value.
+    var related: [Finding] = []
+    /// The Activity row of the request it went out in, when it is still there.
+    var request: Snapshot.Event? = nil
+    var previewsOn = true
 
     var body: some View {
         let f = finding
@@ -687,82 +694,124 @@ struct FindingDetail: View {
             HStack(spacing: Space.s) {
                 Image(systemName: Theme.icon(f.type)).foregroundStyle(Theme.textSecondary)
                 Text(Theme.label(f.type)).font(.km(.headline)).foregroundStyle(Theme.text)
-                Spacer()
+                Text(f.masked).font(.km(.mono).weight(.semibold)).foregroundStyle(Theme.masked).textSelection(.enabled)
+                Spacer(minLength: Space.s)
                 OutcomeLabel(kind: f.outcome == "observed" ? .observed : .masked)
             }
-            Text(f.masked).font(.km(.mono).weight(.semibold)).foregroundStyle(Theme.masked)
-                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Space.l, verticalSpacing: Space.s) {
-                GridRow {
-                    Text("Found by").font(.km(.callout)).foregroundStyle(Theme.textSecondary).gridColumnAlignment(.trailing)
-                    VStack(alignment: .leading, spacing: Space.xs) {
-                        FinderLabel(finding: f, wraps: true)
-                        if f.seenEarlier {
-                            Text("Masked earlier in this conversation; matched again as the same value.")
-                                .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+            DetailColumns {
+                Text(story(f)).font(.km(.body)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
+                DetailGrid {
+                    DetailField("Shape", "\(f.masked)\n\(shapeNote(f))", mono: false)
+                    DetailField("Length", "\(f.chars) characters")
+                    GridRow {
+                        Text("Found by").font(.km(.callout)).foregroundStyle(Theme.textSecondary).gridColumnAlignment(.trailing)
+                        VStack(alignment: .leading, spacing: Space.xs) {
+                            FinderLabel(finding: f, wraps: true)
+                            if f.seenEarlier {
+                                Text("Masked earlier in this conversation; matched again as the same value.")
+                                    .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+                            } else if f.finders.count > 1 {
+                                Text("Found by more than one detector: the most certain kind of find.")
+                                    .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
+                    DetailField("Agent", f.clientName)
+                    DetailField("Sent to", f.providerName)
+                    DetailField("Time", detailTime(f.date))
+                    if let e = request {
+                        DetailField("Request", "\(e.path) · \(e.status) · scanned in \(milliseconds(e.scanMs)) · "
+                                    + "\(e.new ?? 0) new value\(e.new == 1 ? "" : "s") masked in it (Activity, \(e.date.formatted(date: .omitted, time: .standard)))")
+                    }
+                    if !related.isEmpty {
+                        let times = (related + [f]).map(\.date).sorted()
+                        DetailField("Seen", "\(related.count + 1) times on this page, likely the same value (same type, shape and length): "
+                                    + "first \(times.first!.formatted(date: .abbreviated, time: .standard)), "
+                                    + "last \(times.last!.formatted(date: .abbreviated, time: .standard))")
+                    }
                 }
-                field("Length", "\(f.chars) characters")
-                field("Agent", f.clientName)
-                field("Sent to", f.providerName)
-                field("Time", f.date.formatted(date: .abbreviated, time: .standard))
-            }
-            VStack(alignment: .leading, spacing: Space.s) {
-                Text("Context").eyebrow()
-                if f.before != nil || f.after != nil {
-                    Text(contextText(f)).font(.km(.mono)).lineSpacing(3)
-                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(Space.m)
-                        .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.surface))
-                    Text(f.outcome == "observed"
-                         ? "Observe mode sent this text unmasked; here every masked value is shown as its type, like ‹SECRET›."
-                         : "As the provider received it, with every masked value shown as its type, like ‹SECRET›.")
-                        .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text("Not kept. Text around values is off (Settings › General › Logs page), or this value was masked before it was turned on.")
-                        .font(.km(.callout)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+            } right: {
+                DetailSection(title: "Context") {
+                    if f.before != nil || f.after != nil {
+                        Text(contextText(f)).font(.km(.mono)).lineSpacing(3)
+                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(Space.m)
+                            .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.canvas))
+                        let others = otherValues(f)
+                        Text((f.outcome == "observed"
+                              ? "Observe mode sent this text unmasked; here every masked value is shown as its type, like ‹SECRET›."
+                              : "As the provider received it, with every masked value shown as its type, like ‹SECRET›.")
+                             + (others.isEmpty ? "" : " Also masked in this text: \(others)."))
+                            .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Not kept. Text around values is off (Settings › General › Logs page), or this value was masked before it was turned on.")
+                            .font(.km(.callout)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                DetailSection(title: "What happens next") {
+                    Text(next(f)).font(.km(.callout)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
         .padding(Space.l + Space.xs)
     }
 
-    private func field(_ key: String, _ value: String, mono: Bool = false) -> some View {
-        GridRow {
-            Text(key).font(.km(.callout)).foregroundStyle(Theme.textSecondary).gridColumnAlignment(.trailing)
-            Text(value).font(mono ? .km(.mono) : .km(.callout)).foregroundStyle(Theme.text).textSelection(.enabled)
+    private func story(_ f: Finding) -> String {
+        if f.outcome == "observed" {
+            return "Observe mode: \(f.providerName) got this \(singular(f.type)) as \(f.clientName) wrote it. keepmum only counted it."
         }
+        return "keepmum took this \(f.chars)-character \(singular(f.type)) out of what \(f.clientName) sent: \(f.providerName) got "
+            + "‹\(f.type)› in its place, never the value."
+    }
+
+    private func next(_ f: Finding) -> String {
+        if f.outcome == "observed" { return "Nothing was masked. Turn observe mode off to have values like this one masked." }
+        return "Where the reply uses its placeholder, keepmum puts the real value back on this Mac before \(f.clientName) sees it. "
+            + "Tools that run on this Mac get the real value; network tools get it only as their setting allows (Settings › Tools)."
+    }
+
+    private func shapeNote(_ f: Finding) -> String {
+        if f.preview == nil { return previewsOn ? "Only its length was kept" : "Previews are off: only its length is shown" }
+        if f.preview == "•••" { return "Shorter than 8 characters: none of it is shown" }
+        return "Its first and last character; a star per hidden character, at most \(Finding.maxStars)"
+    }
+
+    private func singular(_ type: String) -> String {
+        switch type {
+        case "SECRET": "secret"
+        case "ACCOUNT": "account number"
+        case "PERSON": "name"
+        case "EMAIL": "email address"
+        case "PHONE": "phone number"
+        case "ADDRESS": "address"
+        case "URL": "URL"
+        case "DATE": "date"
+        default: type.lowercased()
+        }
+    }
+
+    /// The other masked values in the text around it, by type: "2 secrets, 1 URL".
+    private func otherValues(_ f: Finding) -> String {
+        let text = (f.before ?? "") + (f.after ?? "")
+        var counts: [String: Int] = [:]
+        var rest = Substring(text)
+        while let open = rest.firstIndex(of: "‹"), let close = rest[open...].firstIndex(of: "›") {
+            counts[String(rest[rest.index(after: open)..<close]), default: 0] += 1
+            rest = rest[rest.index(after: close)...]
+        }
+        return Theme.ordered(counts).map { typeCount($0.1, $0.0) }.joined(separator: ", ")
     }
 
     /// Before and after in the secondary color, the value itself highlighted, other values (‹TYPE›) tinted.
     private func contextText(_ f: Finding) -> AttributedString {
-        var out = plain(f.before ?? "")
+        var out = quietTinted(f.before ?? "")
         var value = AttributedString(f.masked)
         value.foregroundColor = Theme.masked
         value.backgroundColor = Theme.soft(Theme.masked)
         value.font = .km(.mono).weight(.semibold)
         out += value
-        out += plain(f.after ?? "")
-        return out
-    }
-
-    private func plain(_ s: String) -> AttributedString {
-        var out = AttributedString()
-        var rest = Substring(s)
-        while let open = rest.firstIndex(of: "‹"), let close = rest[open...].firstIndex(of: "›") {
-            var text = AttributedString(String(rest[..<open]))
-            text.foregroundColor = Theme.textSecondary
-            var mark = AttributedString(String(rest[open...close]))
-            mark.foregroundColor = Theme.masked
-            out += text
-            out += mark
-            rest = rest[rest.index(after: close)...]
-        }
-        var tail = AttributedString(String(rest))
-        tail.foregroundColor = Theme.textSecondary
-        out += tail
+        out += quietTinted(f.after ?? "")
         return out
     }
 }

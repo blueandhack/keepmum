@@ -449,10 +449,27 @@ enum Snapshotter {
         let rulesEngine = Engine.preview()
         rulesEngine.previewRules()
         render(AllRulesSheet(engine: rulesEngine).background(Theme.canvas), to: "\(dir)/rules-sheet-light.png", dark: false)
-        // A Logs row's details, as its popover shows them.
+        // A Logs row's details and an Activity row's, as they show beside the table.
         for dark in [false, true] {
-            render(FindingDetail(finding: Finding.samples[0]).frame(width: 440).background(Theme.canvas),
+            let f = Finding.samples[0]
+            render(FindingDetail(finding: f, related: [Finding.samples[8]]).frame(width: 900).background(Theme.surface),
                    to: "\(dir)/logs-detail-\(dark ? "dark" : "light").png", dark: dark)
+            if let e = store.snapshot.recent.last(where: { !($0.tools ?? []).isEmpty }) ?? store.snapshot.recent.last {
+                render(ActivityDetail(event: e, findings: nil).frame(width: 900).background(Theme.surface),
+                       to: "\(dir)/activity-detail-\(dark ? "dark" : "light").png", dark: dark)
+            }
+        }
+        // Logs and Activity with a row selected: its details beside the table on a wide window, in
+        // its place on a narrow one.
+        for (name, width, height) in [("wide", 1700.0, 1000.0), ("narrow", 900.0, 720.0)] {
+            if let hit = store.snapshot.guardHits.max(by: { $0.ts < $1.ts }) {
+                render(LogsPage(store: store, selectedHit: hit.id).padding(Space.xl).frame(width: width, height: height).background(Theme.canvas),
+                       to: "\(dir)/logs-\(name)-light.png", dark: false)
+            }
+            if let e = store.snapshot.recent.last(where: { !($0.tools ?? []).isEmpty }) {
+                render(ActivityPage(store: store, selected: e.id).padding(Space.xl).frame(width: width, height: height).background(Theme.canvas),
+                       to: "\(dir)/activity-\(name)-light.png", dark: false)
+            }
         }
         // A Checks row's details: one per outcome in the preview data.
         for (i, hit) in store.snapshot.guardHits.enumerated() {
