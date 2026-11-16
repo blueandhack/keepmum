@@ -101,8 +101,10 @@ private struct TurnWindowRoot: View {
 
     var body: some View {
         Group {
-            if let turn = center.turns.first {
+            if let turn = center.turns.first ?? center.demoTurn {
                 TurnReviewView(center: center, turn: turn, more: center.turns.count - 1).id(turn.id)
+            } else if let outcome = center.demoOutcome, outcome.window {
+                DemoOutcomeView(center: center, outcome: outcome)
             } else {
                 Text("Nothing waiting").font(.km(.callout)).foregroundStyle(Theme.textSecondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -172,6 +174,7 @@ struct TurnReviewView: View {
     var body: some View {
         VStack(spacing: 0) {
             bar
+            if ReviewCenter.isDemo(turn.id) { DemoBanner().padding(.horizontal, Space.l).padding(.top, Space.m) }
             HStack(spacing: 0) {
                 sidebar.frame(width: 300)
                 Hairline(vertical: true)

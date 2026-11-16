@@ -72,6 +72,11 @@ final class ReviewCenter {
     private(set) var turns: [PendingTurn] = []
     /// The turn window was hidden on these: it does not come back for them by itself.
     private(set) var hiddenTurns: Set<String> = []
+    /// A made-up review, to try the panel or the turn window (ReviewDemo.swift): never sent to keepmum;
+    /// once answered, what a real one would have done, in its place.
+    var demoReview: PendingReview?
+    var demoTurn: PendingTurn?
+    var demoOutcome: DemoOutcome?
     /// off, rewrite (rewrites only), all (summaries and rewrites) or turn (whole turns, in one window).
     private(set) var mode = "off"
     /// What keepmum does with a review that gets no answer: stay (local) or send (as written).
@@ -150,11 +155,12 @@ final class ReviewCenter {
             ReviewNotifier.shared.post(turn: t, timeout: timeout)
         }
         if !new.isEmpty { TurnWindow.show(self) }
-        if turns.allSatisfy({ hiddenTurns.contains($0.id) }) { TurnWindow.hide() }
+        if turns.allSatisfy({ hiddenTurns.contains($0.id) }) && !demoInWindow { TurnWindow.hide() }
     }
 
     /// Answer turn `id`: "send" with each piece's answer (action, and text for a rewrite or summary), or "local".
     func decideTurn(_ id: String, _ action: String, pieces: [String: [String: String]] = [:]) async {
+        if Self.isDemo(id) { return finishDemoTurn(action, pieces: pieces) }
         var body: [String: Any] = ["action": action]
         if !pieces.isEmpty { body["pieces"] = pieces }
         guard let r = jsonRequest("/\(id)", body: body) else {
@@ -173,6 +179,7 @@ final class ReviewCenter {
     /// A new draft of piece `piece` of turn `id` (`kind`: rewrite or summary); with `request`, `text`
     /// changed as it says. The piece as it is then. The turn's time stands still meanwhile.
     func draft(_ id: String, piece: String, kind: String, request: String? = nil, text: String? = nil) async -> Result<PendingTurn.Piece, EngineError> {
+        if Self.isDemo(id) { return await demoDraft(piece: piece, kind: kind, request: request, text: text) }
         var body: [String: Any] = ["piece": piece, "kind": kind]
         if let request { body["request"] = request; body["text"] = text ?? "" }
         guard var r = jsonRequest("/\(id)/draft", body: body) else { return .failure(EngineError("keepmum is not running")) }
@@ -199,6 +206,7 @@ final class ReviewCenter {
     /// The turn window's Hide: the turns wait on, in the menu bar, until their time runs out.
     func hideTurns() {
         hiddenTurns.formUnion(turns.map(\.id))
+        endDemo(window: true)
         TurnWindow.hide()
     }
 
@@ -216,11 +224,12 @@ final class ReviewCenter {
             ReviewNotifier.shared.post(r, timeout: timeout)
         }
         if !fresh.isEmpty { ReviewPanel.show(self) }
-        if pending.allSatisfy({ dismissed.contains($0.id) }) { ReviewPanel.hide() }
+        if pending.allSatisfy({ dismissed.contains($0.id) }) && !demoInPanel { ReviewPanel.hide() }
     }
 
     /// Answer review `id`: send, edit (with `text`), withhold or local.
     func decide(_ id: String, _ action: String, text: String? = nil) async {
+        if Self.isDemo(id) { return finishDemoPanel(action, text: text) }
         guard let r = request("/\(id)", method: "POST", body: ["action": action, "text": text]) else {
             error = "keepmum is not running"
             return
@@ -235,6 +244,7 @@ final class ReviewCenter {
     /// Asks the check's local model to change `text` as `request` says (POST /_keepmum/reviews/<id>/assist):
     /// the changed text and the model, or why not. The review's time stands still meanwhile.
     func assist(_ id: String, text: String, request: String) async -> Result<(text: String, model: String), EngineError> {
+        if Self.isDemo(id) { return await demoAssist(text: text, request: request) }
         guard var r = self.request("/\(id)/assist", method: "POST", body: ["text": text, "request": request]) else {
             return .failure(EngineError("keepmum is not running"))
         }
@@ -270,6 +280,7 @@ final class ReviewCenter {
     /// The panel's close button: the review keeps waiting, listed in the menu, until it runs out of time.
     func dismissAll() {
         dismissed.formUnion(pending.map(\.id))
+        endDemo(window: false)
         ReviewPanel.hide()
     }
 
@@ -352,9 +363,11 @@ private struct ReviewPanelRoot: View {
 
     var body: some View {
         Group {
-            if let review = center.pending.first {
+            if let review = center.pending.first ?? center.demoReview {
                 ReviewCard(center: center, review: review, more: center.pending.count - 1)
                     .id(review.id)
+            } else if let outcome = center.demoOutcome, !outcome.window {
+                DemoOutcomeView(center: center, outcome: outcome)
             } else {
                 Text("Nothing waiting").font(.km(.callout)).foregroundStyle(Theme.textSecondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -563,6 +576,7 @@ struct ReviewCard: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: Space.m) {
+            if ReviewCenter.isDemo(review.id) { DemoBanner() }
             header
             VStack(alignment: .leading, spacing: Space.xs) {
                 HStack(spacing: Space.m) {

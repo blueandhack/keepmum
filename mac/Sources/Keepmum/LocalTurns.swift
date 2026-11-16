@@ -291,6 +291,14 @@ struct LocalHandbackSection: View {
             ChoiceMenu(engine: engine, label: label,
                        items: Self.reviewModes.map { m in (m.label, { await engine.setLocalHandbackReview(mode: m.id) }) })
         }
+        Hairline()
+        FormRow(title: "See how it looks",
+                detail: "A demo on made-up text: the review panel, or the whole-turn window. Try every answer; nothing is sent") {
+            HStack(spacing: Space.s) {
+                PillButton(title: "Try the Panel", icon: "rectangle.portrait") { if !isSnapshot { ReviewCenter.shared.showDemoPanel() } }
+                PillButton(title: "Try the Window", icon: "macwindow") { if !isSnapshot { ReviewCenter.shared.showDemoTurn() } }
+            }
+        }
         if review.mode != "off" {
             Hairline()
             FormRow(title: "Wait", detail: "The agent waits too, up to this long; not while the local model changes the text for you") {

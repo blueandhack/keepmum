@@ -32,15 +32,19 @@ enum MapPart: String, CaseIterable {
 
 /// A made-up request sent along the map, routed by the settings as they are. Nothing is sent.
 enum MapSample: String, CaseIterable, Identifiable {
-    case injection, mcp, harm, secret, email, command, wipe, keys
+    case injection, mcp, harm, jailbreak, falseAlarm, both, secret, email, fileSecret, command, wipe, keys
     var id: String { rawValue }
     var title: String {
         switch self {
         case .injection: "Planted in a web page"
         case .mcp: "Planted in an MCP reply"
         case .harm: "Harmful request"
+        case .jailbreak: "Jailbreak, then your task"
+        case .falseAlarm: "Role-play prompt (a false alarm)"
+        case .both: "Typed and in a page, one turn"
         case .secret: "API key in a prompt"
         case .email: "Emails in a pasted log"
+        case .fileSecret: "Password in a file it read"
         case .command: "curl | sh in a reply"
         case .wipe: "rm -rf ~ in a reply"
         case .keys: "~/.ssh sent by curl"
@@ -70,6 +74,8 @@ struct MapSettings {
     var harmSafe: Double?
     var harmModel = "small"
     var localServers = 0
+    /// Review before a hand-back goes (review.py): off, rewrite, all or turn.
+    var review = "off"
 
     init() {}
 
@@ -97,6 +103,7 @@ struct MapSettings {
         handback = engine.localHandback?.handback ?? g.local?.handback ?? "stay"
         harmHandback = engine.localHandback?.harm ?? g.local?.handbackHarm ?? "stay"
         localServers = engine.localServers?.servers.count ?? g.local?.servers.count ?? 0
+        review = engine.localHandback?.review?.mode ?? "off"
     }
 
     /// The injection check's mode as it acts: paused checks nothing.
@@ -105,6 +112,15 @@ struct MapSettings {
     /// A hand-back to the cloud that applies now: the injection check's, or the harm check's rewrite.
     var injectionHandsBack: Bool { injectionActs == "local" && handback != "stay" }
     var harmHandsBack: Bool { harm == "local" && harmHandback == "rewrite" }
+    /// What a review adds to a sample's story, when one would hold its turn (with the app open).
+    func reviewNote(_ strategy: String) -> String {
+        switch review {
+        case "turn": return " With review on, the whole turn waited in one window first, for you to pick what went."
+        case "all" where ["answer", "summary", "rewrite"].contains(strategy), "rewrite" where strategy == "rewrite":
+            return " With review on, it waited in the review panel first, for you to send, change or keep it."
+        default: return ""
+        }
+    }
 }
 
 /// Where everything sits, and the bands' split from the traffic.
@@ -396,6 +412,14 @@ struct SampleRun {
         case .mcp:
             self = Self.injection(p, s, title: "An MCP server returned an issue with an instruction planted for the agent", what: "the reply")
         case .harm: self = Self.harm(p, s)
+        case .jailbreak:
+            self = Self.harm(p, s, title: "You typed \u{201C}ignore your rules\u{201D}, then asked for a fix in sync.py",
+                             rewrote: "took the jailbreak out of what you typed and kept your sync.py task word for word")
+        case .falseAlarm: self = Self.falseAlarm(p, s)
+        case .both: self = Self.both(p, s)
+        case .fileSecret:
+            self = Self.masked(p, s, title: "\(p.agent) read a .env file with a database password in it", what: "the password",
+                               personal: false, fromTool: true)
         case .secret:
             self = Self.masked(p, s, title: "You pasted an API key into your prompt", what: "the key", personal: false)
         case .email:
@@ -452,7 +476,8 @@ struct SampleRun {
                            "rewrite": "took out what \(what) said to the agent, and the rest went to \(provider)",
                            "withhold": "was not asked: a notice took its place, and the turn went to \(provider)"][s.handback] ?? ""
                 return SampleRun(route: route, dots: [MapDot(path: route, duration: 4.4, colors: [(0, grey), (0.42, Theme.restored)])],
-                                 title: title, story: "Local, then the cloud: the check flagged \(what) before it left. Your local model \(did). \(what.prefix(1).uppercased() + what.dropFirst()) itself never left this Mac.")
+                                 title: title, story: "Local, then the cloud: the check flagged \(what) before it left. Your local model \(did). \(what.prefix(1).uppercased() + what.dropFirst()) itself never left this Mac."
+                                     + s.reviewNote(s.handback))
             }
         default:
             return SampleRun(route: p.toolOn.path, dots: [MapDot(path: p.toolOn.path, colors: [(0, grey)])], title: title,
@@ -461,9 +486,10 @@ struct SampleRun {
         }
     }
 
-    private static func harm(_ p: Places, _ s: MapSettings) -> SampleRun {
+    private static func harm(_ p: Places, _ s: MapSettings,
+                             title: String = "You asked for something a policy may not allow, beside your coding task",
+                             rewrote: String = "took the flagged part out of what you typed, kept your coding task as written") -> SampleRun {
         let l = p.l, provider = p.provider
-        let title = "You asked for something a policy may not allow, beside your coding task"
         switch s.harm {
         case "warn":
             return SampleRun(route: p.typedOn.path,
@@ -480,30 +506,82 @@ struct SampleRun {
                 local.addLine(to: CGPoint(x: l.gateRight, y: 364))
                 local.addPath(p.handedBack.path)
                 return SampleRun(route: local, dots: [MapDot(path: local, duration: 4.4, colors: [(0, grey), (0.4, Theme.restored)])],
-                                 title: title, story: "Local rewrite, then the cloud: your local model took the flagged part out of what you typed, kept your coding task as written, and the harm check passed the rest, which went to \(provider). Had it still been flagged, or had nothing been left, the turn would have stayed on this Mac.")
+                                 title: title, story: "Local rewrite, then the cloud: your local model \(rewrote), and the harm check passed the rest, which went to \(provider). Had it still been flagged, or had nothing been left, the turn would have stayed on this Mac." + s.reviewNote("rewrite"))
             }
             local.addLine(to: CGPoint(x: l.gateX, y: 346))
             local.addPath(p.answer.path)
             return SampleRun(route: local, dots: [MapDot(path: local, duration: 4, colors: [(0, grey), (0.45, Theme.restored)])],
-                             title: title, story: "Local: your local model answered on this Mac, and the conversation stays there. With After a local turn › What you typed set to a rewrite, the rest of the request would go to the cloud instead.")
+                             title: title, story: "Local: your local model answered on this Mac, and the conversation stays there. With After a local turn › What you typed set to a rewrite, the rest of the request would go to the cloud instead."
+                                 + (s.review == "turn" ? s.reviewNote("stay") : ""))
         default:
             return SampleRun(route: p.typedOn.path, dots: [MapDot(path: p.typedOn.path, colors: [(0, grey)])], title: title,
                              story: "The harm check is off, so your request went to \(provider) as you typed it.")
         }
     }
 
-    private static func masked(_ p: Places, _ s: MapSettings, title: String, what: String, personal: Bool) -> SampleRun {
+    private static func masked(_ p: Places, _ s: MapSettings, title: String, what: String, personal: Bool,
+                               fromTool: Bool = false) -> SampleRun {
         let l = p.l
+        let out = fromTool ? p.toolOn : p.typedOn
         let back = Route(l.providerX, p.providerBackY).flow(l.commandsCard.maxX, 444).line(l.restoreCard.minX, 444).flow(118, p.backY - 8)
         let skipped = personal && !s.pii
         let found = s.observe || skipped ? Theme.warning : Theme.masked
         let story = skipped ? "Personal data is off (Settings › Masking), so the emails went to \(p.provider) as they were. Secrets in the log were still masked."
             : s.observe ? "Observe only: masking found \(what) and logged it, but the request went to \(p.provider) with the real value in it."
-            : "Masking swapped \(what) for a placeholder before the request left. The reply used the placeholder, and Restore put the real value back before \(p.agent) saw it."
-        return SampleRun(route: p.typedOn.path,
-                         dots: [MapDot(path: p.typedOn.path, colors: [(0, grey), (0.6, found)]),
+            : "Masking swapped \(what) for a placeholder before the request left"
+                + (fromTool ? ", though it came from a file, not from you" : "")
+                + ". The reply used the placeholder, and Restore put the real value back before \(p.agent) saw it."
+        return SampleRun(route: out.path,
+                         dots: [MapDot(path: out.path, colors: [(0, grey), (0.6, found)]),
                                 MapDot(path: back.path, delay: 3.5, duration: 2.8, colors: [(0, found), (s.observe || skipped ? 2 : 0.62, Theme.restored)])],
                          title: title, story: story)
+    }
+
+    /// A prompt the harm check can flag although it asks for nothing harmful: a role to play.
+    private static func falseAlarm(_ p: Places, _ s: MapSettings) -> SampleRun {
+        let title = "\u{201C}Act as a security specialist\u{2026}\u{201D}, then a real question: a common false alarm"
+        let base = harm(p, s, title: title)
+        let provider = p.provider
+        let story: String
+        switch s.harm {
+        case "warn":
+            story = "Warn: it went to \(provider) at once, and the harm check logged the hit afterwards. Nothing was lost, but it shows how a role-play line can score: at a high sensitivity, \u{201C}act as a cyber security specialist\u{201D} alone crossed the threshold."
+        case "block":
+            story = "Block: the harm check refused it, over the role-play line. If this happens to you, a lower sensitivity (Checks › Harmful requests) flags fewer prompts like it."
+        case "local" where s.harmHandback == "rewrite":
+            story = "Local rewrite, then the cloud: the local model may take out the wrong part (in keepmum\u{2019}s test it kept the role-play line and dropped the question). Then keepmum scores each sentence itself, takes out only the one the check flags, and your question goes to \(provider) whole." + s.reviewNote("rewrite")
+        case "local":
+            story = "Local: your local model answered it on this Mac. With What you typed set to a rewrite, keepmum would take out only the flagged role-play line and send your question on."
+                + (s.review == "turn" ? s.reviewNote("stay") : "")
+        default:
+            story = "The harm check is off, so it went to \(provider) as you typed it."
+        }
+        return SampleRun(route: base.route, dots: base.dots, title: title, story: story)
+    }
+
+    /// What you typed and a tool's result, both flagged in one turn: both checks read it before keepmum decides.
+    private static func both(_ p: Places, _ s: MapSettings) -> SampleRun {
+        let typed = harm(p, s)
+        let tool = injection(p, s, title: "", what: "the page")
+        var route = typed.route
+        route.addPath(tool.route)
+        let dots = typed.dots + tool.dots.map { var d = $0; d.delay += 0.3; return d }
+        let title = "You asked for something risky, and the page \(p.agent) fetched had an instruction planted in it"
+        let story: String
+        if s.harm == "block" || s.injectionActs == "block" {
+            story = "Both checks read the turn before keepmum decided. One is set to Block, so the request was refused, with both reasons. Nothing reached \(p.provider)."
+        } else if s.harm == "local" && s.injectionActs == "local" {
+            let goes = s.harmHandsBack && s.injectionHandsBack
+            story = "Both checks read the turn before keepmum decided, and each kept its part on this Mac. "
+                + (s.review == "turn" ? "It waited in one review window, every piece side by side, for you to pick what went. "
+                   : goes ? "What you typed was handed back first, then the page; the turn went to \(p.provider) only once both parts were replaced. "
+                   : "Since one of them stays local, the whole turn stayed on this Mac, answered by your local model. ")
+                + "Neither the flagged request nor the planted line left this Mac."
+        } else {
+            story = "Each check acted as it is set. What you typed: " + typed.story.prefix(1).lowercased() + typed.story.dropFirst()
+                + " The page: " + tool.story.prefix(1).lowercased() + tool.story.dropFirst()
+        }
+        return SampleRun(route: route, dots: dots, title: title, story: story)
     }
 
     private static func command(_ p: Places, _ s: MapSettings, title: String, rule: String) -> SampleRun {
@@ -625,6 +703,18 @@ struct ProtectionMapPage: View {
                 .buttonStyle(.plain)
                 .help("Sends a made-up request along the map, routed by your settings. Nothing leaves this Mac.")
             }
+            let turn = engine.localHandback?.review?.mode == "turn"
+            Button {
+                if !isSnapshot { if turn { ReviewCenter.shared.showDemoTurn() } else { ReviewCenter.shared.showDemoPanel() } }
+            } label: {
+                Label(turn ? "Try a review: the turn window" : "Try a review: the panel", systemImage: "sparkles")
+                    .font(.km(.caption).weight(.medium)).lineLimit(1).fixedSize()
+                    .foregroundStyle(Theme.masked)
+                    .padding(.horizontal, Space.s + Space.xxs).padding(.vertical, Space.xs + 1)
+                    .background(Capsule().strokeBorder(Theme.masked.opacity(0.5)))
+            }
+            .buttonStyle(.plain)
+            .help("Opens a demo review on made-up text, as your Review first setting shows it. Try every answer; nothing is sent.")
         }
     }
 
