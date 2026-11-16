@@ -363,8 +363,11 @@ class Guard:
         for what the user typed), the score, the length and any categories, and `at`, the item it is
         for; never the text."""
         hits = []
+        hit_keys: set[bytes] = set()  # the same text twice in one request (typed again, resent) is one hit
         for at, (source, text, new) in enumerate(items):
             key = _key(text)
+            if key in hit_keys:
+                continue
             with self._lock:
                 seen = self._flagged.get(key)
             if seen is not None and seen["score"] < self.threshold_for(seen["chars"]):
@@ -372,6 +375,7 @@ class Guard:
             if seen is not None:
                 if earlier:
                     hits.append({**seen, "source": source, "earlier": True, "at": at})
+                    hit_keys.add(key)
                 continue
             if not new or len(text) < self.min_chars:
                 continue
@@ -400,6 +404,7 @@ class Guard:
                 if self.carry and carried is None:
                     self._sources = [*self._sources[-(CARRIED - 1):], ("\n".join(_flat(text)), hit)]
             hits.append({**hit, "at": at})  # which of the items: the Logs page shows its text
+            hit_keys.add(key)
         return hits
 
     def _carried(self, text: str) -> dict | None:

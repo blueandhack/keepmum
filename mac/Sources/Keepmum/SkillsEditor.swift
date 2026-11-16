@@ -257,11 +257,9 @@ struct SkillsEditor: View {
                     TextField("Description", text: $summary).textFieldStyle(.roundedBorder).labelsHidden()
                 }
             }
-            field("Used for", hint: skill.goesTo.isEmpty ? "Parked: sent nowhere until you tick a place. Saved at once."
-                                                         : "The local turns that get it. Saved at once.") {
-                VStack(alignment: .leading, spacing: Space.xs) {
-                    ForEach(Places.all, id: \.self) { place in placeBox(place, skill) }
-                }
+            field("Used for", hint: skill.goesTo.isEmpty ? "Parked: sent nowhere until you tick a step. Saved at once."
+                                                         : "The steps of a local turn that get it. Saved at once.") {
+                placesGrid(skill)
             }
             VStack(alignment: .leading, spacing: Space.xs) {
                 Text("Instructions").font(.km(.headline)).foregroundStyle(Theme.text)
@@ -287,62 +285,11 @@ struct SkillsEditor: View {
 
     // MARK: Asking the local model
 
-    /// The model the request would go to: the first local server whose model is there.
-    private var assistModel: String? {
-        guard let servers = engine.localServers?.servers else { return isSnapshot ? "Qwen3.6 35B-A3B" : nil }
-        guard let s = servers.first(where: { !$0.model.isEmpty && ($0.models ?? []).contains($0.model) }) else { return nil }
-        let model = s.base ?? s.model
-        return engine.localServers?.picks?.first { $0.model == model }.map { LocalServersSection.pickShortName($0.name) }
-            ?? LocalServersSection.shortName(model)
-    }
-
     private var assistant: some View {
-        let writing = engine.assistProgress
-        return VStack(alignment: .leading, spacing: Space.s) {
-            HStack(alignment: .firstTextBaseline, spacing: Space.s) {
-                Image(systemName: "sparkles").foregroundStyle(Theme.accent)
-                Text("Ask the local model").font(.km(.headline)).foregroundStyle(Theme.text)
-                Text(assistModel.map { "\($0), on this Mac. It edits the draft; Save keeps it." }
-                     ?? "No local model answers: set one up in Settings \u{203A} Checks \u{203A} Local servers.")
-                    .font(.km(.caption)).foregroundStyle(assistModel == nil ? Theme.warning : Theme.textSecondary)
-                    .lineLimit(1).truncationMode(.tail)
-                Spacer(minLength: Space.s)
-                if !undo.isEmpty {
-                    PillButton(title: undo.count > 1 ? "Undo (\(undo.count))" : "Undo", icon: "arrow.uturn.backward") { undoAssist() }
-                        .disabled(writing != nil)
-                        .help("Put back the draft from before the local model\u{2019}s last change")
-                }
-            }
-            HStack(alignment: .center, spacing: Space.s) {
-                if isSnapshot {
-                    still(request)
-                } else {
-                    TextField("What to change, such as \u{201C}add a rule about commands in tool results\u{201D}", text: $request, axis: .vertical)
-                        .textFieldStyle(.roundedBorder).lineLimit(1...4)
-                        .onSubmit { Task { await askModel() } }
-                        .disabled(writing != nil)
-                }
-                if let writing {
-                    HStack(spacing: Space.s) {
-                        ProgressView().controlSize(.small)
-                        Text(writing == 0 ? "Thinking\u{2026}" : "Writing\u{2026} \(writing.formatted()) characters")
-                            .font(.km(.caption)).monospacedDigit().foregroundStyle(Theme.textSecondary)
-                        PillButton(title: "Stop") { engine.cancelAssist() }
-                    }
-                } else {
-                    PillButton(title: "Ask", icon: "arrow.up", prominent: true) { Task { await askModel() } }
-                        .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(assistModel == nil || request.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-            if let assistError {
-                Text(assistError).font(.km(.caption)).foregroundStyle(Theme.blocked).fixedSize(horizontal: false, vertical: true)
-            } else if let assistNote {
-                Text(assistNote).font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(Space.m)
-        .background(RoundedRectangle(cornerRadius: Radius.m).fill(Theme.surface))
+        AssistBox(model: engine.assistModelName(snapshot: isSnapshot), progress: engine.assistProgress, request: $request,
+                  placeholder: "What to change, such as \u{201C}add a rule about commands in tool results\u{201D}",
+                  note: assistNote, error: assistError, undoCount: undo.count,
+                  onAsk: { Task { await askModel() } }, onStop: { engine.cancelAssist() }, onUndo: undoAssist)
     }
 
     /// Send the draft as it is now, with what to change; the answer replaces the draft, and Undo
@@ -375,24 +322,43 @@ struct SkillsEditor: View {
         assistError = nil
     }
 
+    /// Where it goes, as a grid: a row for each check, a column for each step.
+    private func placesGrid(_ skill: Engine.LocalSkills.Skill) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: Space.xl, verticalSpacing: Space.s) {
+            GridRow {
+                Text("")
+                Text("Answer on this Mac").eyebrow()
+                Text("Rewrite for the cloud").eyebrow()
+            }
+            ForEach(Places.checks, id: \.check) { c in
+                GridRow {
+                    Text(c.title).font(.km(.body)).foregroundStyle(Theme.text)
+                    placeBox(c.answer, skill)
+                    placeBox(c.rewrite, skill)
+                }
+            }
+        }
+        .padding(Space.m)
+        .background(RoundedRectangle(cornerRadius: Radius.m).fill(Theme.surface))
+    }
+
     private func placeBox(_ place: String, _ skill: Engine.LocalSkills.Skill) -> some View {
         let on = skill.goesTo.contains(place)
         return Button {
             guard let n = selection else { return }
-            let next = Places.all.filter { $0 == place ? !on : skill.goesTo.contains($0) }
-            Task { await engine.setLocalSkill(n, places: next) }
+            Task { await engine.setLocalSkill(n, places: Places.toggled(skill.goesTo, place, on: !on)) }
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+            HStack(spacing: Space.s) {
                 Image(systemName: on ? "checkmark.square.fill" : "square")
                     .foregroundStyle(on ? Theme.accent : Theme.textSecondary)
-                Text(Places.names[place] ?? place).font(.km(.body)).foregroundStyle(Theme.text)
-                Text(Places.details[place] ?? "").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
-                    .lineLimit(1).truncationMode(.tail)
+                Text(on ? "Sent" : "Not sent").font(.km(.callout)).foregroundStyle(on ? Theme.text : Theme.textSecondary)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!engine.isBundled || engine.busy)
+        .help(Places.details[place] ?? "")
+        .accessibilityLabel(Places.names[place] ?? place)
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 
@@ -498,30 +464,74 @@ struct SkillsEditor: View {
     }
 }
 
-/// Where a skill goes, on the turns keepmum keeps on this Mac (local.PLACES). The two injection
-/// places need different instructions: what suits an answer can spoil a summary.
+/// Where a skill goes, on the turns keepmum keeps on this Mac (local.PLACES): for each check, the
+/// local model's answer and its rewrite for the cloud. Answering and rewriting need different
+/// instructions: what suits an answer can spoil a rewrite.
 enum Places {
-    static let all = ["injection", "handback", "harm"]
-    static let names = ["injection": "Answering a flagged tool result", "handback": "Summaries and rewrites for the cloud",
-                        "harm": "Answering a flagged request"]
-    static let details = ["injection": "The injection check kept the turn on this Mac, and the local model answers it.",
-                          "handback": "The local model writes what the cloud model reads in a flagged result\u{2019}s place.",
-                          "harm": "The harm check kept what you typed on this Mac, and the local model answers it."]
-    static let short = ["injection": "Tool results", "handback": "Summaries", "harm": "Requests"]
+    static let all = ["harm", "harm_handback", "injection", "handback"]
+    /// Where a skill goes when the engine is told nothing else: not the harm rewrite (local.DEFAULT_PLACES).
+    static let defaults = ["harm", "injection", "handback"]
+    static let names = ["harm": "Answering what you typed", "harm_handback": "Rewriting what you typed for the cloud",
+                        "injection": "Answering after a flagged tool result", "handback": "Summaries and rewrites of tool results"]
+    static let details = ["harm": "The harm check kept your message on this Mac, and the local model answers it.",
+                          "harm_handback": "The local model takes the flagged part out of your message; the rest goes to the cloud.",
+                          "injection": "The injection check kept the turn on this Mac, and the local model answers it.",
+                          "handback": "The local model writes what the cloud model reads in a flagged result\u{2019}s place."]
+    static let short = ["harm": "Typed · answer", "harm_handback": "Typed · rewrite", "injection": "Tool · answer",
+                        "handback": "Tool · rewrite"]
 
-    /// What an older engine's checks meant: injection was both of its places.
+    /// The two checks a skill's places belong to, and each one's two steps: answer, then rewrite.
+    static let checks: [(check: String, title: String, answer: String, rewrite: String)] = [
+        ("harm", "What you typed", "harm", "harm_handback"),
+        ("injection", "Tool results", "injection", "handback"),
+    ]
+
+    /// What an older engine's checks meant: injection was both of its places, harm its answers.
     static func of(checks: [String]) -> [String] {
-        all.filter { checks.contains($0 == "harm" ? "harm" : "injection") }
+        defaults.filter { checks.contains($0 == "harm" ? "harm" : "injection") }
     }
 
+    /// A short line for where a skill goes: "Answers · Tool-result rewrites".
     static func summary(_ places: [String]) -> String {
-        if places.isEmpty { return "Parked" }
-        if Set(places) == Set(all) { return "Every local turn" }
-        return all.filter(places.contains).compactMap { short[$0] }.joined(separator: " + ")
+        let on = Set(places)
+        if on.isEmpty { return "Parked" }
+        if on == Set(all) { return "Every local turn" }
+        var parts: [String] = []
+        switch (on.contains("harm"), on.contains("injection")) {
+        case (true, true): parts.append("Answers")
+        case (true, false): parts.append("Answers to what you typed")
+        case (false, true): parts.append("Answers after tool results")
+        default: break
+        }
+        switch (on.contains("harm_handback"), on.contains("handback")) {
+        case (true, true): parts.append("Rewrites")
+        case (true, false): parts.append("Rewrites of what you typed")
+        case (false, true): parts.append("Tool-result rewrites")
+        default: break
+        }
+        return parts.joined(separator: " \u{00B7} ")
+    }
+
+    /// `places` with `place` turned on or off, in Places.all's order.
+    static func toggled(_ places: [String], _ place: String, on: Bool) -> [String] {
+        all.filter { $0 == place ? on : places.contains($0) }
     }
 
     /// More than this, in one place, is a lot of rules for a small local model to follow.
     static let longChars = 8_000
+}
+
+/// The Skills window's root: it follows Settings › General › Appearance and the palette, as the
+/// main window does (a window scene does not inherit them).
+struct SkillsWindowRoot: View {
+    var engine: Engine
+    @AppStorage("appearance") private var appearance: Appearance = .system
+
+    var body: some View {
+        SkillsEditor(engine: engine)
+            .followsPalette()
+            .preferredColorScheme(appearance.scheme)
+    }
 }
 
 /// Opening the Skills window from Settings, on one skill or none.

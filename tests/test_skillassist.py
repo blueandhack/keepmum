@@ -139,3 +139,51 @@ def test_the_cli_says_when_no_local_model_answers(cli, monkeypatch):
     r = cli.invoke(app, ["guard", "local", "skill", "assist", "--request", "x"])
     assert r.exit_code == 1 and "no local server" in r.stderr
     assert cli.invoke(app, ["guard", "local", "skill", "assist", "--request", "x", "--save"]).exit_code == 2
+
+
+def test_an_instruction_is_revised_for_its_job_and_told_what_keepmum_checks():
+    from keepmum.skillassist import INSTRUCTION_SCHEMA, ask_instruction
+
+    reply = json.dumps({"instruction": "Take out only the jailbreak. [removed by keepmum] where you did.", "note": "Narrowed it."})
+    lines = [f"data: {json.dumps({'choices': [{'delta': {'content': p}}]})}" for p in _pieces(reply)] + ["data: [DONE]"]
+    seen = []
+    srv, url = _server(lines, seen)
+    out = ask_instruction(Server(url, "m"), "llama.cpp", "harm", "Remove harmful parts.", "Only the jailbreak.")
+    srv.shutdown()
+    assert out == {"text": "Take out only the jailbreak. [removed by keepmum] where you did.", "note": "Narrowed it."}
+    body = seen[0][1]
+    assert body["response_format"]["json_schema"] == {"name": "instruction", "schema": INSTRUCTION_SCHEMA}
+    system, user = body["messages"][0]["content"], body["messages"][1]["content"]
+    assert "word for word" in system and "harm check" in system and "removal only" in system
+    assert "Remove harmful parts." in user and "Only the jailbreak." in user
+
+
+def test_an_instruction_reply_that_is_not_json_is_the_instruction():
+    from keepmum.skillassist import parse_instruction
+
+    assert parse_instruction("Keep code.")["text"] == "Keep code."
+    assert parse_instruction('```json\n{"instruction": "A", "note": "B"}\n```') == {"text": "A", "note": "B"}
+    with pytest.raises(AssistError):
+        parse_instruction("  ")
+
+
+def test_the_cli_asks_for_an_instruction_from_the_one_in_use(tmp_path, monkeypatch):
+    from keepmum.handback import INSTRUCTIONS
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reply = json.dumps({"instruction": "Summarise briefly.", "note": "Shorter."})
+    lines = [f"data: {json.dumps({'choices': [{'delta': {'content': reply}}]})}", "data: [DONE]"]
+    seen = []
+    srv, url = _server(lines, seen)
+    cfg = tmp_path / ".config" / "keepmum" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(f'[guard]\nlocal_servers = [{{ url = "{url}", model = "m" }}]\n')
+    monkeypatch.setattr(local, "models", lambda u: ["m"])
+    monkeypatch.setattr(local, "kind", lambda u: "llama.cpp")
+    r = CliRunner().invoke(app, ["guard", "local", "assist-instructions", "--for", "summary", "--request", "Shorter.", "--json"])
+    srv.shutdown()
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["text"] == "Summarise briefly."
+    assert INSTRUCTIONS["summary"] in seen[0][1]["messages"][1]["content"]
+    bad = CliRunner().invoke(app, ["guard", "local", "assist-instructions", "--for", "answer", "--request", "x"])
+    assert bad.exit_code == 2

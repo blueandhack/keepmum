@@ -37,7 +37,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .checks: "Checks"
         case .extensions: "Extensions"
         case .localModels: "Local models"
-        case .handback: "Hand-back"
+        case .handback: "Local turns"
         case .skills: "Skills"
         case .general: "General"
         case .doctor: "Check this Mac"
@@ -52,7 +52,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .checks: "checkmark.shield"
         case .extensions: "puzzlepiece.extension"
         case .localModels: "cpu"
-        case .handback: "arrow.uturn.up"
+        case .handback: "arrow.triangle.branch"
         case .skills: "text.book.closed"
         case .general: "slider.horizontal.3"
         case .doctor: "stethoscope"
@@ -67,8 +67,8 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .checks: "Optional checks on what tools return, what you type, and the commands in replies"
         case .extensions: "The plugins, hooks and MCP servers in your coding agents' settings, and what other apps added"
         case .localModels: "The models on this Mac that answer what a check keeps local, and how fast they answer"
-        case .handback: "What the cloud model gets after a turn a check kept on this Mac, and whether you look first"
-        case .skills: "Your own instructions for the local model on the turns keepmum keeps on this Mac"
+        case .handback: "What the local model does with a turn a check keeps on this Mac, what it reads, and whether you look first"
+        case .skills: "Your own guidance for the local model, written once and picked for each step in Local turns"
         case .general: "Appearance, updates, and what the Logs page shows"
         case .doctor: "The same checks as keepmum doctor, and this app's connection to keepmum"
         }
@@ -140,7 +140,7 @@ struct SettingsPage: View {
         case .handback:
             localOff
             MapLink(engine: engine, text: "See a hand-back's route back to the cloud on the Protection map.")
-            LocalHandbackSection(engine: engine)
+            LocalHandbackSection(engine: engine) { pane = $0 }
         case .skills:
             localOff
             LocalSkillsSection(engine: engine)
@@ -280,7 +280,7 @@ private struct SettingsRail: View {
             if (g.local?.servers ?? []).isEmpty { return ("To do", Theme.warning) }
             return !servers.isEmpty && servers.allSatisfy({ $0.problem != nil }) ? ("Down", Theme.warning) : nil
         case .handback:
-            let waiting = ReviewCenter.shared.pending.count
+            let waiting = ReviewCenter.shared.pending.count + ReviewCenter.shared.turns.count
             return waiting == 0 ? nil : ("\(waiting)", Theme.accent)
         case .skills:
             return nil

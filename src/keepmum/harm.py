@@ -77,6 +77,10 @@ CATEGORIES = ("Violent", "Non-violent Illegal Acts", "Sexual Content or Sexual A
 INJECTED = re.compile(r"<(system-reminder|environment_context|user_instructions|INSTRUCTIONS|local-command-stdout|"
                       r"command-message|command-name|command-args|user-prompt-submit-hook)\b[^>]*>.*?</\1>", re.S)
 AGENTS_MD = re.compile(r"^# AGENTS\.md instructions for .*", re.S)
+# Codex asks for a new task's title in a request of its own, the user's prompt inside its wording
+# (as of Nov 2026). What the user typed in it is that prompt: the turn it comes with is checked
+# for it already.
+TITLE_ASIDE = re.compile(r"\AGenerate a concise, single-line task title\b.*?\n\nUser prompt:\n", re.S)
 
 
 class HarmError(RuntimeError):
@@ -84,8 +88,14 @@ class HarmError(RuntimeError):
 
 
 def typed(text: str) -> str:
-    """The part of a user message the user typed: agent-injected blocks removed."""
-    return AGENTS_MD.sub("", INJECTED.sub("", text)).strip()
+    """The part of a user message the user typed: agent-injected blocks removed, and the agent's
+    own wording around it in a request it makes aside (`aside`)."""
+    return AGENTS_MD.sub("", INJECTED.sub("", TITLE_ASIDE.sub("", text, count=1))).strip()
+
+
+def aside(text: str) -> bool:
+    """Whether a user message is an agent's request aside the turn: Codex asking for a task title."""
+    return TITLE_ASIDE.match(text) is not None
 
 
 def model_dir(size: str = "0.6b") -> Path:

@@ -213,6 +213,8 @@ class Redactor:
         # Each of those texts -> the whole string it came from, as the request holds it (a harm
         # hand-back replaces the typed part inside it). Reset with `user_texts`.
         self.typed_in: dict[str, str] = {}
+        # Whether the request is one an agent makes aside the turn (harm.aside): Codex's task title.
+        self.aside = False
         # With [log] context on: each of those texts as the Logs page may show it, every masked value
         # in it as its type (as_types). Per request, in memory only.
         self.shown: dict[str, str] = {}
@@ -281,8 +283,9 @@ class Redactor:
             if self.context:
                 self.shown[text] = as_types(text, spans)
         elif self._role == "user":
-            from .harm import typed
+            from .harm import aside, typed
 
+            self.aside = self.aside or aside(text)
             if mine := typed(text):
                 self.user_texts.append((None, mine, not seen))
                 self.typed_in[mine] = text

@@ -44,19 +44,23 @@
     # the first of these that answers; checks: only for those (default both); api: "auto", "native" or "chat"
     local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
                      { url = "http://localhost:1234", model = "qwen/qwen3-8b", checks = ["harm"] }]
-    # skills for those local turns, after keepmum's note: a SKILL.md, or a folder holding one, and its places (default all):
+    # skills for those local turns, after keepmum's note: a SKILL.md, or a folder holding one, and its places:
     # "injection" (answering a flagged tool result), "handback" (a summary or rewrite of it for the cloud), "harm"
-    # (answering a flagged request); [] parks it. The older `checks` is read too. `keepmum guard local skill new`
-    # and `add` keep them in ~/.config/keepmum/skills
+    # (answering a flagged request), "harm_handback" (the rewrite of what you typed); default: all but harm_handback,
+    # which gets only the skills that list it. [] parks it. The older `checks` is read too. `keepmum guard local
+    # skill new` and `add` keep them in ~/.config/keepmum/skills
     local_skills = [{ path = "~/.config/keepmum/skills/careful-answers", places = ["injection", "harm"] },
                     { path = "~/.config/keepmum/skills/summaries", places = ["handback"] }]
     # after a local turn of the injection check (handback.py): "stay" on the local model, or back to the cloud
     # with the flagged result replaced: "answer" (after the local answer), "summary", "rewrite" or "withhold"
     local_handback = "stay"
     local_handback_instructions = ""  # your own instruction for summary and rewrite, in place of keepmum's
+    local_handback_instructions_off = false  # true: keep yours, use keepmum's
     # after a local turn of the harm check: "stay", or "rewrite": the local model takes what the check
     # flagged out of what you typed, and the rest goes to the cloud; still flagged, or nothing left: stays local
     local_handback_harm = "stay"
+    local_handback_harm_instructions = ""  # your own instruction for that rewrite, in place of keepmum's; checked the same
+    local_handback_harm_instructions_off = false
     # look at a hand-back before it goes to the cloud (review.py): "off", "rewrite" or "all"
     # (answers and summaries too), the seconds to wait for an answer, and then "stay" (on this Mac) or "send"
     local_handback_review = "off"
@@ -71,6 +75,7 @@
     level = "info"
     previews = true        # the Logs page shows the first and last character of masked values (in memory only)
     context = true         # and the text around each, and what the checks flagged, every masked value shown as its type (in memory only)
+    keep_days = 30         # the Logs page's rows (no text, no previews) kept on disk across restarts this long; 0: memory only
 """
 
 from __future__ import annotations
@@ -90,11 +95,12 @@ _SCHEMA = {
     "detect": {"pii": bool, "model": bool, "observe": bool, "pass": list},
     "allowlist": {"strings": list, "patterns": list},
     "rules": {"mask": list, "off": list},
-    "log": {"level": str, "previews": bool, "context": bool},
+    "log": {"level": str, "previews": bool, "context": bool, "keep_days": int},
     "audit": {"keep_days": int},
     "guard": {"injection": str, "injection_threshold": float, "harm": str, "harm_model": str, "harm_sensitivity": str, "commands": str, "local_url": str, "local_model": str,
               "local_servers": list, "local_skills": list, "local_handback": str, "local_handback_instructions": str,
-              "local_handback_harm": str,
+              "local_handback_instructions_off": bool, "local_handback_harm": str, "local_handback_harm_instructions": str,
+              "local_handback_harm_instructions_off": bool,
               "local_handback_review": str, "local_handback_review_wait": int, "local_handback_review_timeout": str,
               "local_keep_loaded": str, "local_answer_thinking": bool},
 }
@@ -146,6 +152,8 @@ class Config:
     log_level: str = "info"
     log_previews: bool = True
     log_context: bool = True
+    # How long the Logs page's rows are kept on disk (stats.LogStore): days, 0 for memory only.
+    log_keep_days: int = 30
     audit_keep_days: int = 90
     guard_injection: str = "off"
     guard_injection_threshold: float = 0.222  # guard.THRESHOLD
@@ -160,8 +168,13 @@ class Config:
     # What follows a local turn of the injection check (handback.py), and the user's own instruction.
     guard_local_handback: str = "stay"
     guard_local_handback_instructions: str = ""
-    # What follows a local turn of the harm check: stay, or rewrite (handback.py).
+    # The user's instruction kept, but keepmum's used.
+    guard_local_handback_instructions_off: bool = False
+    # What follows a local turn of the harm check: stay, or rewrite (handback.py); the user's own
+    # instruction for that rewrite, and whether it is kept but not used.
     guard_local_handback_harm: str = "stay"
+    guard_local_handback_harm_instructions: str = ""
+    guard_local_handback_harm_instructions_off: bool = False
     # Whether the user reviews a hand-back before it goes (review.py): off, rewrite or all;
     # how long to wait for them; and what happens when they do not answer: stay or send.
     guard_local_handback_review: str = "off"
@@ -285,6 +298,9 @@ def load(path: Path | None = None) -> Config:
     cfg.log_level = log.get("level", cfg.log_level)
     cfg.log_previews = log.get("previews", cfg.log_previews)
     cfg.log_context = log.get("context", cfg.log_context)
+    cfg.log_keep_days = log.get("keep_days", cfg.log_keep_days)
+    if not 0 <= cfg.log_keep_days <= 365:
+        raise ConfigError(f"{path}: log.keep_days must be 0 (memory only) to 365")
     if cfg.log_level not in LOG_LEVELS:
         raise ConfigError(f"{path}: log.level must be one of {', '.join(LOG_LEVELS)}")
     cfg.audit_keep_days = audit.get("keep_days", cfg.audit_keep_days)
@@ -327,12 +343,17 @@ def load(path: Path | None = None) -> Config:
         raise ConfigError(f"{path}: {e}")
     from .handback import parse as parse_handback
     from .handback import parse_harm as parse_harm_handback
+    from .handback import parse_instructions as parse_handback_instructions
 
     try:
         cfg.guard_local_handback, cfg.guard_local_handback_instructions = parse_handback(
             guard.get("local_handback", cfg.guard_local_handback),
             guard.get("local_handback_instructions", cfg.guard_local_handback_instructions))
         cfg.guard_local_handback_harm = parse_harm_handback(guard.get("local_handback_harm", cfg.guard_local_handback_harm))
+        cfg.guard_local_handback_harm_instructions = parse_handback_instructions(
+            guard.get("local_handback_harm_instructions", ""), "local_handback_harm_instructions")
+        cfg.guard_local_handback_instructions_off = guard.get("local_handback_instructions_off", False)
+        cfg.guard_local_handback_harm_instructions_off = guard.get("local_handback_harm_instructions_off", False)
     except ValueError as e:
         raise ConfigError(f"{path}: {e}")
     from .review import parse as parse_review

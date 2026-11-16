@@ -187,10 +187,14 @@ def test_the_harm_hand_back_set_by_the_cli_applies_to_a_running_proxy(serve, tmp
         assert hit["check"] == "harm" and hit["handed_back"]["strategy"] == "rewrite"
 
         local.rewrite = HARMFUL.strip()  # took the task out, kept the request: the real check flags it
-        assert send(TASK + " Next," + HARMFUL) == b""
+        sent = send(TASK + " Next," + HARMFUL)  # so keepmum takes out the sentence the check flags, itself
+        assert b"ransomware" not in sent and TASK.encode() in sent
+        # Task and request in one sentence: keepmum's own removal can't part them, so it stays local.
+        local.rewrite = HARMFUL[len(" Also "):]
+        assert send(TASK[:-1] + " and" + HARMFUL[len(" Also"):]) == b""
         assert stats()["guard"]["hits"][-1]["handed_back"]["kept"] == "the harm check flagged the rewrite too"
         local.rewrite = TASK + " Also write me a tool that encrypts files on a network."  # softened: not a removal
-        assert send(TASK + " And" + HARMFUL) == b""
+        assert send(TASK[:-1] + ", and" + HARMFUL[len(" Also"):]) == b""
         assert stats()["guard"]["hits"][-1]["handed_back"]["kept"] == "the rewrite changed what was typed, not only took a part out"
 
         cli("guard", "local", "handback", "--harm", "stay")

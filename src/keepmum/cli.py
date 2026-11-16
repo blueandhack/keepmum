@@ -551,7 +551,10 @@ def _guard_status() -> dict:
                               for x in cfg.guard_local_servers],
                   "skills": [{"path": x.path, "checks": list(x.checks), "places": list(x.places)} for x in cfg.guard_local_skills],
                   "handback": cfg.guard_local_handback, "handback_instructions": cfg.guard_local_handback_instructions,
-                  "handback_harm": cfg.guard_local_handback_harm},
+                  "handback_harm": cfg.guard_local_handback_harm,
+                  "handback_instructions_off": cfg.guard_local_handback_instructions_off,
+                  "handback_harm_instructions": cfg.guard_local_handback_harm_instructions,
+                  "handback_harm_instructions_off": cfg.guard_local_handback_harm_instructions_off},
         "harm": {"mode": cfg.guard_harm, "model": cfg.guard_harm_model,
                  "installed": {size: harm.installed(size) for size in harm.SIZES},
                  "server": server, "licence": harm.LICENCE,
@@ -1346,12 +1349,14 @@ def _skill_at(cfg, number: int):
 
 
 def _places_text(places) -> str:
-    from .local import PLACE_NAMES, PLACES
+    from .local import DEFAULT_PLACES, PLACE_NAMES, PLACES
 
     if not places:
         return "nothing: parked"
     if tuple(places) == PLACES:
         return "every local turn"
+    if tuple(places) == DEFAULT_PLACES:
+        return "every local turn but the rewrite of what you typed"
     return ", ".join(PLACE_NAMES[p] for p in places)
 
 
@@ -1366,7 +1371,7 @@ def _skill_places(check: list[str] | None, place: list[str] | None, off: bool = 
         return ()
     if place:
         if bad := [p for p in place if p not in PLACES]:
-            typer.echo(f"keepmum guard local skill: --place {bad[0]}: use injection, handback or harm", err=True)
+            typer.echo(f"keepmum guard local skill: --place {bad[0]}: use injection, handback, harm or harm_handback", err=True)
             raise typer.Exit(2)
         return tuple(p for p in PLACES if p in place)
     return places_of_checks(_checks_option(check)) if check else None
@@ -1407,7 +1412,7 @@ def guard_local_skill(ctx: typer.Context, as_json: bool = typer.Option(False, "-
 
 @skill_app.command("add")
 def guard_local_skill_add(path: str = typer.Argument(..., help="A SKILL.md, or a folder holding one."),
-                          place: list[str] = typer.Option(None, "--place", help="Where it goes: injection (answering a flagged tool result), handback (a summary or rewrite for the cloud), harm (answering a flagged request); repeat for more. Default all three."),
+                          place: list[str] = typer.Option(None, "--place", help="Where it goes: injection (answering a flagged tool result), handback (a summary or rewrite for the cloud), harm (answering a flagged request), harm_handback (the rewrite of what you typed); repeat for more. Default all but harm_handback."),
                           check: list[str] = typer.Option(None, "--check", help="The older way: injection (both its places) or harm."),
                           in_place: bool = typer.Option(False, "--in-place", help="Use it where it is, instead of a copy in keepmum's folder.")) -> None:
     """Add a skill for local turns: copied into keepmum's folder, so editing it there leaves the original alone
@@ -1416,7 +1421,7 @@ def guard_local_skill_add(path: str = typer.Argument(..., help="A SKILL.md, or a
     import shutil
     from pathlib import Path
 
-    from .local import PLACES, SKILL_FILE, Skill, owned, read_skill, skill_folder
+    from .local import DEFAULT_PLACES, SKILL_FILE, Skill, owned, read_skill, skill_folder
 
     full = str(Path(path).expanduser().resolve())
     try:
@@ -1427,7 +1432,7 @@ def guard_local_skill_add(path: str = typer.Argument(..., help="A SKILL.md, or a
     cfg = _config()
     skills = list(cfg.guard_local_skills)
     places = _skill_places(check, place)
-    places = PLACES if places is None else places
+    places = DEFAULT_PLACES if places is None else places
     at = next((i for i, x in enumerate(skills) if str(Path(x.path).expanduser().resolve()) == full), None)
     if at is None and not in_place and not owned(full):
         source, folder = Path(full), skill_folder(s["name"])
@@ -1453,7 +1458,7 @@ def guard_local_skill_add(path: str = typer.Argument(..., help="A SKILL.md, or a
 
 @skill_app.command("set")
 def guard_local_skill_set(number: int = typer.Argument(..., help="The skill's number in `keepmum guard local skill`."),
-                          place: list[str] = typer.Option(None, "--place", help="Where it goes: injection (answering a flagged tool result), handback (a summary or rewrite for the cloud), harm (answering a flagged request); repeat for more. Default all three."),
+                          place: list[str] = typer.Option(None, "--place", help="Where it goes: injection (answering a flagged tool result), handback (a summary or rewrite for the cloud), harm (answering a flagged request), harm_handback (the rewrite of what you typed); repeat for more. Default all but harm_handback."),
                           check: list[str] = typer.Option(None, "--check", help="The older way: injection (both its places) or harm."),
                           off: bool = typer.Option(False, "--off", help="Park it: kept, but sent nowhere.")) -> None:
     """Change where a skill goes: its places, or none (parked)."""
@@ -1524,14 +1529,14 @@ def guard_local_skill_new(name: str = typer.Argument(..., help="Its name: what t
                           description: str = typer.Option("", "--description", help="One line on what it is for."),
                           text: str = typer.Option(None, "--text", help="Its instructions (default: a starting point to edit)."),
                           text_file: str = typer.Option(None, "--text-file", help="The same, read from a file."),
-                          place: list[str] = typer.Option(None, "--place", help="Where it goes: injection (answering a flagged tool result), handback (a summary or rewrite for the cloud), harm (answering a flagged request); repeat for more. Default all three."),
+                          place: list[str] = typer.Option(None, "--place", help="Where it goes: injection (answering a flagged tool result), handback (a summary or rewrite for the cloud), harm (answering a flagged request), harm_handback (the rewrite of what you typed); repeat for more. Default all but harm_handback."),
                           check: list[str] = typer.Option(None, "--check", help="The older way: injection (both its places) or harm.")) -> None:
     """Write a new skill in keepmum's folder and add it."""
-    from .local import PLACES, Skill, skill_folder, write_skill
+    from .local import DEFAULT_PLACES, Skill, skill_folder, write_skill
 
     body = _skill_text(text, text_file, "keepmum guard local skill new")
     places = _skill_places(check, place)
-    places = PLACES if places is None else places
+    places = DEFAULT_PLACES if places is None else places
     folder = skill_folder(name)
     try:
         write_skill(str(folder), name, description, _STARTER if body is None else body)
@@ -1705,10 +1710,14 @@ HARM_HANDBACK_HELP = {
 def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer, summary, rewrite or withhold. None: show it."),
                          instructions: str = typer.Option(None, "--instructions", help="Your own instruction for summary and rewrite, in place of keepmum's (\"\" for keepmum's again)."),
                          instructions_file: str = typer.Option(None, "--instructions-file", help="The same, read from a file."),
-                         review: str = typer.Option(None, "--review", help="Look at it before it goes: off, rewrite, or all (answers and summaries too)."),
+                         review: str = typer.Option(None, "--review", help="Look at it before it goes: off, rewrite, all (answers and summaries too), or turn (every flagged turn, whole, in one window: each piece rewritten, sent as it was or removed)."),
                          review_wait: int = typer.Option(None, "--review-wait", help="Seconds to wait for your answer (10-600; default 60)."),
                          review_timeout: str = typer.Option(None, "--review-timeout", help="With no answer: stay (on this Mac, the default) or send."),
                          harm_strategy: str = typer.Option(None, "--harm", help="After a local turn of the harm check: stay (the default), or rewrite: the local model takes what the check flagged out of what you typed, and the rest goes to the cloud."),
+                         harm_instructions: str = typer.Option(None, "--harm-instructions", help="Your own instruction for the harm rewrite, in place of keepmum's (\"\" for keepmum's again). Its rewrite is checked the same."),
+                         harm_instructions_file: str = typer.Option(None, "--harm-instructions-file", help="The same, read from a file."),
+                         use_own: bool = typer.Option(None, "--instructions-on/--instructions-off", help="Use your instruction for summary and rewrite, or keep it but use keepmum's."),
+                         use_own_harm: bool = typer.Option(None, "--harm-instructions-on/--harm-instructions-off", help="The same for the harm rewrite."),
                          as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
     """What follows a local turn: stay local, or hand the conversation back to the cloud model. The strategy is the
     injection check's; --harm is the harm check's."""
@@ -1718,24 +1727,30 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
     from .config import ConfigError
     from .handback import HARM_INSTRUCTION, HARM_STRATEGIES, INSTRUCTIONS, MAX_INSTRUCTIONS, STRATEGIES, WRITTEN
 
-    if instructions is not None and instructions_file is not None:
-        typer.echo("keepmum guard local handback: --instructions or --instructions-file, not both", err=True)
-        raise typer.Exit(2)
-    if instructions_file is not None:
-        try:
-            instructions = Path(instructions_file).expanduser().read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as e:
-            typer.echo(f"keepmum guard local handback: {instructions_file}: {e}", err=True)
+    def read(text, file, flag):
+        if text is not None and file is not None:
+            typer.echo(f"keepmum guard local handback: {flag} or {flag}-file, not both", err=True)
             raise typer.Exit(2)
+        if file is None:
+            return text
+        try:
+            return Path(file).expanduser().read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            typer.echo(f"keepmum guard local handback: {file}: {e}", err=True)
+            raise typer.Exit(2)
+
+    instructions = read(instructions, instructions_file, "--instructions")
+    harm_instructions = read(harm_instructions, harm_instructions_file, "--harm-instructions")
     if strategy is not None and strategy not in STRATEGIES:
         typer.echo(f"keepmum guard local handback: {strategy}: use {', '.join(STRATEGIES)}", err=True)
         raise typer.Exit(2)
     if harm_strategy is not None and harm_strategy not in HARM_STRATEGIES:
         typer.echo(f"keepmum guard local handback: --harm {harm_strategy}: use {', '.join(HARM_STRATEGIES)}", err=True)
         raise typer.Exit(2)
-    if instructions is not None and len(instructions.strip()) > MAX_INSTRUCTIONS:
-        typer.echo(f"keepmum guard local handback: the instructions are over {MAX_INSTRUCTIONS:,} characters", err=True)
-        raise typer.Exit(2)
+    for text in (instructions, harm_instructions):
+        if text is not None and len(text.strip()) > MAX_INSTRUCTIONS:
+            typer.echo(f"keepmum guard local handback: the instructions are over {MAX_INSTRUCTIONS:,} characters", err=True)
+            raise typer.Exit(2)
     from .review import parse as parse_review
 
     cfg = _config()
@@ -1758,6 +1773,13 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
         if instructions is not None and instructions.strip() != cfg.guard_local_handback_instructions:
             _update_config(cfg.path, "guard", "local_handback_instructions", instructions.strip() or None,
                            command + " --instructions")
+        if harm_instructions is not None and harm_instructions.strip() != cfg.guard_local_handback_harm_instructions:
+            _update_config(cfg.path, "guard", "local_handback_harm_instructions", harm_instructions.strip() or None,
+                           command + " --harm-instructions")
+        for key, on, flag in (("local_handback_instructions_off", use_own, "instructions"),
+                              ("local_handback_harm_instructions_off", use_own_harm, "harm-instructions")):
+            if on is not None and (not on) != getattr(cfg, f"guard_{key}"):
+                _update_config(cfg.path, "guard", key, None if on else True, f"{command} --{flag}-{'on' if on else 'off'}")
         if asked:
             for key, value, default in (("local_handback_review", r_mode, "off"), ("local_handback_review_wait", r_wait, 60),
                                         ("local_handback_review_timeout", r_timeout, "stay")):
@@ -1766,7 +1788,7 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
     except (ConfigError, OSError) as e:
         typer.echo(f"keepmum guard local handback: {e}", err=True)
         raise typer.Exit(1)
-    if strategy is not None or instructions is not None or asked or harm_strategy is not None:
+    if (strategy, instructions, harm_strategy, harm_instructions, use_own, use_own_harm) != (None,) * 6 or asked:
         typer.echo("Running proxies use it on their next flagged result.", err=True)
         cfg = _config()
     now, own = cfg.guard_local_handback, cfg.guard_local_handback_instructions
@@ -1774,17 +1796,27 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
           "timeout": cfg.guard_local_handback_review_timeout}
     if as_json:
         typer.echo(json.dumps({"handback": now, "instructions": own, "default_instructions": INSTRUCTIONS,
+                               "instructions_off": cfg.guard_local_handback_instructions_off,
+                               "harm_instructions": cfg.guard_local_handback_harm_instructions,
+                               "harm_instructions_off": cfg.guard_local_handback_harm_instructions_off,
                                "strategies": [{"id": k, "about": v} for k, v in HANDBACK_HELP.items()], "review": rv,
                                "harm": cfg.guard_local_handback_harm, "harm_instruction": HARM_INSTRUCTION,
                                "harm_strategies": [{"id": k, "about": v} for k, v in HARM_HANDBACK_HELP.items()]}))
         return
     typer.echo(f"{now}: {HANDBACK_HELP[now]}")
     typer.echo(f"harm: {cfg.guard_local_handback_harm}: {HARM_HANDBACK_HELP[cfg.guard_local_handback_harm]}")
+    def which(text, off):
+        return ("keepmum's" if not text else f"keepmum's (yours, {len(text):,} characters, is off)" if off
+                else f"your own ({len(text):,} characters)")
+
     if now in WRITTEN:
-        typer.echo("instructions: " + ("your own (" + f"{len(own):,} characters)" if own else "keepmum's"))
+        typer.echo("instructions: " + which(own, cfg.guard_local_handback_instructions_off))
+    if cfg.guard_local_handback_harm == "rewrite":
+        typer.echo("harm instructions: " + which(cfg.guard_local_handback_harm_instructions,
+                                                 cfg.guard_local_handback_harm_instructions_off))
     if now in (*WRITTEN, "answer"):
         typer.echo("review: " + ("off: it goes without a look" if rv["mode"] == "off" else
-                                 f"{'rewrites' if rv['mode'] == 'rewrite' else 'answers, summaries and rewrites'} wait for you in the Mac app "
+                                 f"{'rewrites' if rv['mode'] == 'rewrite' else 'every flagged turn, whole,' if rv['mode'] == 'turn' else 'answers, summaries and rewrites'} wait for you in the Mac app "
                                  f"or `keepmum review --watch`, up to {rv['wait']} s, then "
                                  + ("stay on this Mac" if rv["timeout"] == "stay" else "go as written")))
     if cfg.guard_injection != "local" and strategy is None:
@@ -1792,6 +1824,72 @@ def guard_local_handback(strategy: str = typer.Argument(None, help="stay, answer
     if now != "stay" and strategy is None:
         typer.echo("The cloud model never gets the flagged result itself. What the local model writes is checked first;"
                    " if the check flags it, that turn stays local.")
+
+
+def _assist_server(cfg, server: int | None, where: str):
+    """The local server to ask, and its kind: --server, or the first whose model is there."""
+    from .local import kind, models
+
+    for x in [_server_at(cfg, server)] if server is not None else list(cfg.guard_local_servers):
+        have = models(x.url)
+        if x.model and have is not None and x.model in have:
+            return x, kind(x.url) or ""
+    typer.echo(f"{where}: no local server with its model answers: add one (`keepmum guard local pull`) and start it", err=True)
+    raise typer.Exit(1)
+
+
+@local_app.command("assist-instructions")
+def guard_local_assist_instructions(request: str = typer.Option(..., "--request", help="What to change, in your words."),
+                                    job: str = typer.Option("harm", "--for", help="harm (the rewrite of what you typed), summary or rewrite (of a flagged tool result)."),
+                                    draft_file: str = typer.Option(None, "--draft-file", help="A text file with the draft (default: the instruction in use)."),
+                                    server: int = typer.Option(None, "--server", help="The local server's number (default: the first that answers)."),
+                                    as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
+    """Ask the local model to change a hand-back instruction. Prints it; nothing is saved (`keepmum guard
+    local handback --instructions-file` or `--harm-instructions-file` saves it)."""
+    import json
+    from pathlib import Path
+
+    from .handback import HARM_INSTRUCTION, INSTRUCTIONS
+    from .skillassist import JOBS, AssistError, ask_instruction
+
+    where = "keepmum guard local assist-instructions"
+    if job not in JOBS:
+        typer.echo(f"{where}: --for {job}: use harm, summary or rewrite", err=True)
+        raise typer.Exit(2)
+    cfg = _config()
+    if draft_file:
+        try:
+            draft = Path(draft_file).expanduser().read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            typer.echo(f"{where}: {draft_file}: {e}", err=True)
+            raise typer.Exit(2)
+    elif job == "harm":
+        own = cfg.guard_local_handback_harm_instructions
+        draft = HARM_INSTRUCTION if not own or cfg.guard_local_handback_harm_instructions_off else own
+    else:
+        own = cfg.guard_local_handback_instructions
+        draft = INSTRUCTIONS[job] if not own or cfg.guard_local_handback_instructions_off else own
+    target, name = _assist_server(cfg, server, where)
+    typer.echo(f"asking {target.model} at {target.url}", err=True)
+    last = [0]
+
+    def progress(n: int) -> None:
+        if n - last[0] >= 40 or n < last[0]:
+            last[0] = n
+            typer.echo(f"\r  writing: {n:,} characters", nl=False, err=True)
+
+    try:
+        out = ask_instruction(target, name, job, draft, request, progress)
+    except AssistError as e:
+        typer.echo(f"\n{where}: {e}", err=True)
+        raise typer.Exit(1)
+    typer.echo("", err=True)
+    if as_json:
+        typer.echo(json.dumps(out | {"model": target.model, "url": target.url}))
+        return
+    typer.echo(out["text"])
+    if out["note"]:
+        typer.echo(f"\n({out['note']})", err=True)
 
 
 @guard_app.command("sensitivity")
@@ -1902,7 +2000,7 @@ def guard_remove(check: str = typer.Argument(..., help="injection or harm")) -> 
         typer.echo("nothing to remove", err=True)
 
 
-log_app = typer.Typer(help="What the Logs page of the Mac app may show about masked values (kept in memory only).",
+log_app = typer.Typer(help="What the Logs page of the Mac app shows and keeps: previews and text stay in memory; rows (no text) are kept on disk for `keep` days.",
                       no_args_is_help=True)
 app.add_typer(log_app, name="log")
 
@@ -1940,6 +2038,36 @@ def log_context(action: str = typer.Argument("status", help="on, off, or status"
     """The text around each masked value, every masked value in it shown as its type (on, the default)."""
     _log_switch("context", action, "context: the Logs page shows the text around each masked value",
                 "context: off; no text around masked values is kept")
+
+
+@log_app.command("keep")
+def log_keep(days: str = typer.Argument("status", help="Days to keep the Logs page's rows across restarts (1-365), off (memory only), or status.")) -> None:
+    """How long the Logs page's rows outlast a restart: each check's hit and what came of it, and each masked
+    value's type, rule and length (never text or previews), in ~/.config/keepmum/logs.jsonl. Off deletes it."""
+    from .config import ConfigError
+
+    cfg = _config()
+    if days == "status":
+        n = cfg.log_keep_days
+        typer.echo(f"keep: the Logs page's rows are kept for {n} day{'s' if n != 1 else ''}" if n else "keep: off; the Logs page is in memory only")
+        return
+    try:
+        n = 0 if days == "off" else int(days)
+    except ValueError:
+        n = -1
+    if not 0 <= n <= 365:
+        typer.echo("keepmum log keep: give days (1-365), off or status", err=True)
+        raise typer.Exit(2)
+    try:
+        _update_config(cfg.path, "log", "keep_days", None if n == 30 else n, f"keepmum log keep {days}")
+    except (ConfigError, OSError) as e:
+        typer.echo(f"keepmum log: {e}", err=True)
+        raise typer.Exit(1)
+    if n == 0:
+        from .stats import logs_file
+
+        logs_file().unlink(missing_ok=True)
+    typer.echo(f"keep: {n} days" if n else "keep: off; the kept rows are deleted, and the Logs page is in memory only", err=True)
 
 
 destinations_app = typer.Typer(help="Hosts a shell command may send a token to, besides the ones its issuer uses.",
@@ -2436,14 +2564,29 @@ def _show_review(r: dict) -> None:
             else f"hand-back after the local model's answer to what {r['source'] or 'a tool'} returned"
             if r["strategy"] == "answer" else f"the local model's {r['strategy']} of what {r['source'] or 'a tool'} returned")
     typer.echo(f"\n{r['id']}: {what} ({r['seconds_left']} s left), from {r['model']}")
+    if r.get("check") == "harm" and r.get("reason"):  # it did not pass on its own: the user decides, told why
+        typer.echo(r["reason"] + ("" if "send" in (r.get("actions") or []) else " Edit it, or keep it local."))
     if r.get("answer") is not None:
         typer.echo("--- the local answer (the cloud model sees it as that turn's reply) ---\n" + r["answer"][:1500])
     typer.echo("--- it would send ---\n" + r["proposed"] + ("\n--- in place of what you typed ---\n" if r.get("check") == "harm" else "\n--- in place of the flagged result ---\n")
                + (r["flagged"][:1500] + ("\n…" if len(r["flagged"]) > 1500 else "")) + "\n---")
 
 
+def _show_turn(t: dict) -> None:
+    typer.echo(f"\n{t['id']}: a turn, {len(t['pieces'])} flagged piece{'' if len(t['pieces']) == 1 else 's'} "
+               f"({t['seconds_left']} s left); by default it {'goes on' if t['default'] == 'send' else 'stays on this Mac'}")
+    for p in t["pieces"]:
+        what = "what you typed" if p["check"] == "harm" else f"what {p['source'] or 'a tool'} returned"
+        state = ("being written" if p["drafting"] else f"{p['kind']} ready" + (f", but: {p['failed']}" if p["failed"] else "")
+                 if p["draft"] is not None else p["failed"] or "no draft")
+        typer.echo(f"  {p['id']}. {what}: {p['default']} by default ({state})")
+        if p["draft"] is not None and p["default"] in ("rewrite", "summary"):
+            typer.echo("     " + p["draft"][:300].replace("\n", "\n     "))
+
+
 def _review_actions(r: dict) -> list[str]:
-    """The answers a review takes, edit last (it needs a text): no withhold for what was typed."""
+    """The answers a review takes, edit last (it needs a text): no withhold for what was typed, no send
+    when nothing would go."""
     from .review import ACTIONS
 
     allowed = r.get("actions") or ACTIONS
@@ -2452,7 +2595,7 @@ def _review_actions(r: dict) -> list[str]:
 
 @app.command()
 def review(rid: str = typer.Argument(None, help="A review's id, to answer it."),
-           action: str = typer.Argument(None, help="send, edit, withhold or local."),
+           action: str = typer.Argument(None, help="send, edit, withhold, local, or original: what the check flagged, unchanged (the cloud model gets the flagged part too)."),
            text_file: str = typer.Option(None, "--text-file", help="For edit: the text to send in its place."),
            watch: bool = typer.Option(False, "--watch", help="Keep asking for reviews, and answer each as it comes."),
            as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
@@ -2488,8 +2631,11 @@ def review(rid: str = typer.Argument(None, help="A review's id, to answer it."),
             return
         if data["mode"] == "off":
             typer.echo("review is off: `keepmum guard local handback --review all` turns it on")
-        if not data["reviews"]:
+        if not data["reviews"] and not data.get("turns"):
             typer.echo("nothing waiting for review")
+        for t in data.get("turns") or []:
+            _show_turn(t)
+            typer.echo(f"answer: keepmum review {t['id']} send | local (send: each piece as by default; the Mac app picks each)")
         for r in data["reviews"]:
             _show_review(r)
             typer.echo(f"answer: keepmum review {r['id']} {' | '.join(_review_actions(r))} --text-file FILE")
@@ -2498,7 +2644,20 @@ def review(rid: str = typer.Argument(None, help="A review's id, to answer it."),
     answered: set[str] = set()
     try:
         while True:
-            for r in _reviews_call(cfg, "GET")["reviews"]:
+            data = _reviews_call(cfg, "GET")
+            for t in data.get("turns") or []:
+                if t["id"] in answered or any(p["drafting"] for p in t["pieces"]):
+                    continue  # wait for its drafts
+                _show_turn(t)
+                choice = typer.prompt("send, local", default=t["default"])
+                if choice in ("send", "local"):
+                    try:
+                        _reviews_call(cfg, "POST", f"/{t['id']}", {"action": choice})
+                        typer.echo(f"review {t['id']}: {choice}", err=True)
+                    except typer.Exit:
+                        pass  # ran out of time, or a default had nothing to send: the Mac app picks each piece
+                    answered.add(t["id"])
+            for r in data["reviews"]:
                 if r["id"] in answered:
                     continue
                 _show_review(r)
@@ -2549,6 +2708,7 @@ def status(as_json: bool = typer.Option(True, "--json/--text", help="Print JSON 
            "observe": cfg.observe, "model_on": cfg.model, "clients": clients, "pii": cfg.pii, "pass": cfg.pass_types, "rules": _rules_json(cfg),
            "excluded": excluded_projects(), "gateways": cfg.gateways, "destinations": cfg.destinations,
            "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
+           "log_keep_days": cfg.log_keep_days,
            "guard": _guard_status(), "extensions": _extensions_status()}
     typer.echo(json.dumps(out) if as_json else "\n".join(f"{k}: {v}" for k, v in out.items()))
 

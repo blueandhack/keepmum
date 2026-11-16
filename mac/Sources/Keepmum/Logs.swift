@@ -173,27 +173,40 @@ func agentName(_ client: String?) -> String {
     }
 }
 
-/// What the optional checks flagged, newest first: the check, where (a tool, or what was typed),
-/// the categories, the score and the length. Never the text. Its details show beside or in place of it.
-struct ChecksCard: View {
-    var store: StatsStore
-    var hits: [Snapshot.GuardHit]
-    /// The selected hit's id.
-    @Binding var selection: String?
+/// A row of the Logs page: what a check flagged, or a value keepmum masked. Its id says which, so a
+/// selection holds when the page goes from one table to two.
+enum LogRow: Identifiable {
+    case check(Snapshot.GuardHit)
+    case value(Finding)
 
-    var body: some View {
-        let r = store.snapshot.guard?.requests ?? [:]
-        Card(title: "Checks", subtitle: hits.isEmpty ? "Nothing flagged since keepmum started"
-                 : "\(hits.count) flagged: \(r["blocked"] ?? 0) stopped, \(r["local"] ?? 0) answered on this Mac, \(r["warned"] ?? 0) sent with a warning") {
-            DataTable(key: "checks", columns: Self.columns, items: hits, selection: $selection,
-                      empty: "Turned-on checks flag here. Select one for what was flagged, what you had asked, and what keepmum did.",
-                      snapshotRows: 6) { h, column in
-                CheckCell(hit: h, column: column)
-            }
+    var id: String {
+        switch self {
+        case .check(let h): "check|" + h.id
+        case .value(let f): "value|" + f.id
         }
     }
+    var ts: Double {
+        switch self {
+        case .check(let h): h.ts
+        case .value(let f): f.ts
+        }
+    }
+}
 
-    static let columns: [DataColumn] = [
+/// The Logs page's columns: both kinds in one table, or each kind's own.
+enum LogColumns {
+    static let together: [DataColumn] = [
+        DataColumn(id: "time", title: "Time", width: 118, min: 70, hideable: false),
+        DataColumn(id: "agent", title: "Agent", width: 106, min: 50),
+        DataColumn(id: "kind", title: "Kind", width: 136, min: 60),
+        DataColumn(id: "summary", title: "What", width: 280, min: 120, flexible: true),
+        DataColumn(id: "evidence", title: "Found by", width: 190, min: 60),
+        DataColumn(id: "length", title: "Length", width: 60, min: 40, alignment: .trailing, hiddenByDefault: true),
+        DataColumn(id: "provider", title: "Sent to", width: 84, min: 50, hiddenByDefault: true),
+        DataColumn(id: "outcome", title: "Outcome", width: 96, min: 60),
+    ]
+
+    static let checks: [DataColumn] = [
         DataColumn(id: "time", title: "Time", width: 118, min: 70, hideable: false),
         DataColumn(id: "agent", title: "Agent", width: 106, min: 50),
         DataColumn(id: "check", title: "Check", width: 104, min: 50),
@@ -206,6 +219,88 @@ struct ChecksCard: View {
         DataColumn(id: "endpoint", title: "Endpoint", width: 170, min: 60, hiddenByDefault: true),
         DataColumn(id: "outcome", title: "Outcome", width: 96, min: 60),
     ]
+
+    static let masked: [DataColumn] = [
+        DataColumn(id: "time", title: "Time", width: 118, min: 70, hideable: false),
+        DataColumn(id: "agent", title: "Agent", width: 106, min: 50),
+        DataColumn(id: "type", title: "Type", width: 100, min: 50),
+        DataColumn(id: "value", title: "Value", width: 172, min: 60),
+        DataColumn(id: "length", title: "Length", width: 56, min: 40, alignment: .trailing),
+        DataColumn(id: "foundBy", title: "Found by", width: 180, min: 60),
+        DataColumn(id: "context", title: "Context", width: 240, min: 120, flexible: true),
+        DataColumn(id: "provider", title: "Sent to", width: 80, min: 50, hiddenByDefault: true),
+        DataColumn(id: "outcome", title: "Outcome", width: 96, min: 60, hiddenByDefault: true),
+    ]
+}
+
+/// A Logs row's cell. Each kind draws its own columns; the mixed table's columns (kind, what,
+/// found by, outcome) say the same thing of both in the same place.
+struct LogCell: View {
+    var row: LogRow
+    var column: String
+    /// A check's flagged text, one line, when keepmum kept it.
+    var text: String?
+
+    var body: some View {
+        switch row {
+        case .check(let h):
+            switch column {
+            case "kind": KindBadge(icon: h.checkIcon, label: "\(h.checkName) check", tone: Theme.warning)
+            case "summary":
+                if let text, !text.isEmpty {
+                    Text("\(Text(h.flagged).foregroundStyle(Theme.text))  \(Text(text).font(.km(.monoSmall)).foregroundStyle(Theme.textSecondary))")
+                        .font(.km(.callout)).truncationMode(.tail)
+                } else {
+                    Text(h.flagged).font(.km(.callout)).foregroundStyle(Theme.text).truncationMode(.tail)
+                }
+            case "evidence":
+                if h.isRule {
+                    Text("A rule").font(.km(.callout)).foregroundStyle(Theme.textSecondary)
+                } else {
+                    HStack(spacing: Space.s - Space.xxs) {
+                        Text(String(format: "%.2f", h.score)).font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.text)
+                        if let model = h.model {
+                            Text(model).font(.km(.callout)).foregroundStyle(Theme.textSecondary).truncationMode(.tail)
+                        }
+                    }
+                }
+            default: CheckCell(hit: h, column: column)
+            }
+        case .value(let f):
+            switch column {
+            case "kind":
+                let name = valueName(f.type)
+                KindBadge(icon: Theme.icon(f.type), label: name == "URL" ? name : name.prefix(1).uppercased() + name.dropFirst(), tone: Theme.masked)
+            case "summary":
+                HStack(spacing: Space.s) {
+                    Text(f.masked).font(.km(.mono)).foregroundStyle(Theme.masked).fixedSize()
+                    if f.before != nil || f.after != nil {
+                        Text(contextLine(f, around: 14)).font(.km(.monoSmall)).truncationMode(.tail)
+                    }
+                }
+            case "evidence": FinderLabel(finding: f)
+            case "outcome": OutcomeLabel(kind: f.outcome == "observed" ? .observed : .masked)
+            default: FindingCell(finding: f, column: column)
+            }
+        }
+    }
+}
+
+/// What a row is, at a glance in the mixed table: an icon on its family's tint (amber for what a
+/// check flagged, the masked color for a value) and a name.
+private struct KindBadge: View {
+    var icon: String
+    var label: String
+    var tone: Color
+
+    var body: some View {
+        HStack(spacing: Space.s - Space.xxs) {
+            Image(systemName: icon).font(.system(size: 9, weight: .semibold)).foregroundStyle(tone)
+                .frame(width: 18, height: 18)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Theme.soft(tone)))
+            Text(label).font(.km(.callout)).foregroundStyle(Theme.text)
+        }
+    }
 }
 
 private struct CheckCell: View {
@@ -425,8 +520,9 @@ struct CheckDetail: View {
             } else {
                 VStack(alignment: .leading, spacing: Space.xs) {
                     Text(flaggedTitle(h)).eyebrow()
-                    Text(contextOn ? "Not kept for this one: it was flagged before keepmum kept checks' text, or the text has since been dropped."
-                                   : "Not kept. Text around values is off (Settings › General › Logs page).")
+                    Text(h.seq == nil ? "Not kept: this row is from before keepmum last started, and text is kept in memory only. The row itself is kept on disk (Settings › General › Logs page)."
+                         : contextOn ? "Not kept for this one: it was flagged before keepmum kept checks' text, or the text has since been dropped."
+                                     : "Not kept. Text around values is off (Settings › General › Logs page).")
                         .font(.km(.callout)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -494,61 +590,80 @@ struct CheckDetail: View {
     }
 }
 
+/// Logs: what the checks flagged and the values keepmum masked, newest first. Together in one
+/// table, or split into two, one above the other; one filter bar for both, and one details pane.
 struct LogsPage: View {
     var store: StatsStore
     @State private var query = ""
-    @State private var type = "ALL"
+    /// What shows: "all"; "checks", or "check:<check>"; "masked", or "type:<TYPE>".
+    @State private var show = "all"
     @State private var source = Finding.Source.all
-    /// Which list shows: what the checks flagged, or the masked values.
-    @AppStorage("logs.tab") private var tab = Tab.checks
-    @State private var selectedHit: String?
-    @State private var selectedFinding: String?
+    /// Checks and masked values in one table, or each in its own.
+    @AppStorage("logs.layout") private var layout = Layout.together
+    /// Split: the checks table's share of the height.
+    @AppStorage("logs.split") private var share = Self.defaultShare
+    @State private var dragFrom: Double?
+    @State private var selection: String?
+    /// Snapshots: the layout to draw, whatever the user chose.
+    private var drawn: Layout?
     @Environment(\.isSnapshot) private var isSnapshot
 
-    enum Tab: String { case checks, masked }
+    enum Layout: String { case together, split }
+    private static let defaultShare = 0.42
 
-    init(store: StatsStore, selectedHit: String? = nil) {
+    init(store: StatsStore, selectedHit: String? = nil, layout: Layout? = nil) {
         self.store = store
-        _selectedHit = State(initialValue: selectedHit)
+        _selection = State(initialValue: selectedHit.map { "check|" + $0 })
+        drawn = layout
     }
 
     var body: some View {
-        let all = store.sampleMode ? Finding.samples : store.findings
-        let shown = all.filter { (type == "ALL" || $0.type == type) && $0.found(by: source) && $0.matches(query) }
+        let values = store.sampleMode ? Finding.samples : store.findings
         let hits = store.snapshot.guardHits.sorted { $0.ts > $1.ts }
-        let showChecks = store.snapshot.checking || !hits.isEmpty
-        let current = showChecks ? tab : .masked
+        let checking = store.snapshot.checking || !hits.isEmpty
+        // Checks turned off and none flagged: a check filter left over shows everything.
+        let show = checking || !show.hasPrefix("check") ? show : "all"
+        let wantsChecks = checking && (show == "all" || show.hasPrefix("check"))
+        let wantsValues = show == "all" || show == "masked" || show.hasPrefix("type:")
+        let valuesOnly = !wantsChecks
+        let shownHits = wantsChecks ? hits.filter { h in
+            (show == "all" || show == "checks" || show == "check:\(h.check)") && h.matches(query, text: text(h))
+        } : []
+        let shownValues = wantsValues ? values.filter { f in
+            (!show.hasPrefix("type:") || show == "type:\(f.type)") && (!valuesOnly || f.found(by: source)) && f.matches(query)
+        } : []
+        let both = wantsChecks && wantsValues
+        let current = drawn ?? layout
+        let checkRows = shownHits.map(LogRow.check)
+        let valueRows = shownValues.map(LogRow.value)
+        // Together, newest first; split, the checks table's rows and then the masked values', as ↑ ↓ step.
+        let rows = both && current == .together ? (checkRows + valueRows).sorted { $0.ts > $1.ts } : checkRows + valueRows
         VStack(spacing: Space.l) {
-            PageHeader(title: "Logs", subtitle: showChecks
+            PageHeader(title: "Logs", subtitle: checking
                        ? "What the checks flagged and what keepmum masked in new text, newest first. Kept in memory until keepmum exits."
                        : "What keepmum masked in new text, newest first. Kept in memory until keepmum exits.") {
-                if showChecks {
-                    Segmented(options: [(Tab.checks, "Checks · \(hits.count.formatted())"),
-                                        (Tab.masked, "Masked values · \(all.count.formatted())")], selection: $tab)
+                if checking {
+                    Segmented(options: [(Layout.together, "Together"), (Layout.split, "Split")],
+                              selection: Binding(get: { current }, set: { layout = $0 }))
+                        .disabled(!both)
+                        .help(both ? "Together: checks and masked values in one table, newest first. Split: each in a table of its own."
+                                   : "Showing one kind: choose Everything under Show to see both, together or split")
                 }
             }
-            switch current {
-            case .checks:
-                ListDetail(key: "checks", ids: hits.map(\.id), selection: $selectedHit, back: "Checks",
-                             hint: "Click a check, or use ↑ ↓ and Return, for what was flagged, what you had asked, and what keepmum did.") {
-                    ChecksCard(store: store, hits: hits, selection: $selectedHit)
-                } detail: {
-                    if let h = hits.first(where: { $0.id == selectedHit }) {
-                        CheckDetail(hit: h, texts: h.seq.flatMap { store.checkTexts[$0] }, contextOn: store.contextOn, inPane: true)
-                    }
+            filterBar(checking: checking, hits: hits, valuesOnly: valuesOnly)
+            ListDetail(key: "logs", ids: rows.map(\.id), selection: $selection, back: "Logs",
+                       hint: "Click a row, or use ↑ ↓ and Return, for everything keepmum knows about it: what was flagged or masked, where, and what keepmum did.") {
+                if both && current == .split {
+                    split(checksCard(checkRows, all: hits), checkRows.count, maskedCard(valueRows, all: values), valueRows.count)
+                } else if both {
+                    togetherCard(rows, hits: hits, values: values, shown: (checkRows.count, valueRows.count))
+                } else if wantsChecks {
+                    checksCard(checkRows, all: hits)
+                } else {
+                    maskedCard(valueRows, all: values)
                 }
-            case .masked:
-                ListDetail(key: "logs", ids: shown.map(\.id), selection: $selectedFinding, back: "Masked values",
-                             hint: "Click a value, or use ↑ ↓ and Return, for everything keepmum knows about it.") {
-                    maskedCard(all, shown)
-                } detail: {
-                    if let f = shown.first(where: { $0.id == selectedFinding }) {
-                        FindingDetail(finding: f,
-                                      related: all.filter { $0.id != f.id && $0.type == f.type && $0.masked == f.masked && $0.chars == f.chars },
-                                      request: matchedEvent(f, findings: all, events: store.snapshot.recent + store.history),
-                                      previewsOn: store.previewsOn)
-                    }
-                }
+            } detail: {
+                detail(hits: hits, values: values)
             }
         }
         .task(id: store.sampleMode) {
@@ -559,45 +674,148 @@ struct LogsPage: View {
         }
     }
 
-    private func maskedCard(_ all: [Finding], _ shown: [Finding]) -> some View {
-        Card(title: "Masked values", subtitle: maskedSubtitle(all, shown)) {
-            HStack(spacing: Space.s) {
-                search
-                typePicker
-                sourcePicker
-            }
-        } content: {
+    // MARK: Tables
+
+    private func togetherCard(_ rows: [LogRow], hits: [Snapshot.GuardHit], values: [Finding], shown: (Int, Int)) -> some View {
+        let filtered = shown.0 != hits.count || shown.1 != values.count
+        let subtitle = hits.isEmpty && values.isEmpty ? "Nothing flagged or masked since keepmum started"
+            : "\(counted(shown.0, of: hits.count, filtered, "check", "checks")) · \(counted(shown.1, of: values.count, filtered, "masked value", "masked values"))"
+        return Card(title: "Checks and masked values", subtitle: subtitle) {
             VStack(spacing: 0) {
-                if !store.previewsOn {
-                    Text("Previews are off (Settings › General › Logs page): types and rules only.")
-                        .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, Space.s)
-                }
-                DataTable(key: "logs", columns: Self.columns, items: shown, selection: $selectedFinding,
-                          empty: all.isEmpty ? "Nothing yet. Values masked in new text appear here; the list starts empty each time keepmum starts."
-                                             : "No match", pageKey: "\(type)|\(source)|\(query)") { f, column in
-                    FindingCell(finding: f, column: column)
-                }
+                previewsNote(values.isEmpty)
+                table("logs.together", LogColumns.together, rows,
+                      empty: hits.isEmpty && values.isEmpty
+                        ? "Nothing yet. What the checks flag and the values keepmum masks appear here, newest first; the list starts empty each time keepmum starts."
+                        : "No match")
             }
         }
     }
 
-    static let columns: [DataColumn] = [
-        DataColumn(id: "time", title: "Time", width: 118, min: 70, hideable: false),
-        DataColumn(id: "agent", title: "Agent", width: 106, min: 50),
-        DataColumn(id: "type", title: "Type", width: 100, min: 50),
-        DataColumn(id: "value", title: "Value", width: 172, min: 60),
-        DataColumn(id: "length", title: "Length", width: 56, min: 40, alignment: .trailing),
-        DataColumn(id: "foundBy", title: "Found by", width: 180, min: 60),
-        DataColumn(id: "context", title: "Context", width: 240, min: 120, flexible: true),
-        DataColumn(id: "provider", title: "Sent to", width: 80, min: 50, hiddenByDefault: true),
-        DataColumn(id: "outcome", title: "Outcome", width: 96, min: 60, hiddenByDefault: true),
-    ]
+    private func checksCard(_ rows: [LogRow], all: [Snapshot.GuardHit]) -> some View {
+        let r = store.snapshot.guard?.requests ?? [:]
+        let subtitle = all.isEmpty ? "Nothing flagged since keepmum started"
+            : (rows.count != all.count ? "\(rows.count) of \(all.count) · " : "")
+            + "\(all.count) flagged: \(r["blocked"] ?? 0) stopped, \(r["local"] ?? 0) answered on this Mac, \(r["warned"] ?? 0) sent with a warning"
+        return Card(title: "Checks", subtitle: subtitle) {
+            table("checks", LogColumns.checks, rows,
+                  empty: all.isEmpty ? "Turned-on checks flag here. Select one for what was flagged, what you had asked, and what keepmum did."
+                                     : "No match", snapshotRows: 6)
+        }
+    }
 
-    private func maskedSubtitle(_ all: [Finding], _ shown: [Finding]) -> String {
+    private func maskedCard(_ rows: [LogRow], all: [Finding]) -> some View {
+        Card(title: "Masked values", subtitle: maskedSubtitle(all, rows.count)) {
+            VStack(spacing: 0) {
+                previewsNote(all.isEmpty)
+                table("logs", LogColumns.masked, rows,
+                      empty: all.isEmpty ? "Nothing yet. Values masked in new text appear here; the list starts empty each time keepmum starts."
+                                         : "No match")
+            }
+        }
+    }
+
+    private func table(_ key: String, _ columns: [DataColumn], _ rows: [LogRow], empty: String, snapshotRows: Int = 14) -> some View {
+        DataTable(key: key, columns: columns, items: rows, selection: $selection, empty: empty, snapshotRows: snapshotRows,
+                  pageKey: "\(show)|\(source)|\(query)") { row, column in
+            LogCell(row: row, column: column, text: column == "summary" ? summaryText(row) : nil)
+        }
+    }
+
+    /// Two tables, the checks over the masked values, with a bar between them to drag. A table
+    /// with fewer rows than its share holds gets only the height they need; the other gets the rest.
+    private func split(_ top: some View, _ topRows: Int, _ bottom: some View, _ bottomRows: Int) -> some View {
+        GeometryReader { geo in
+            let room = max(geo.size.height - Space.m, 320)
+            let upper = Self.upper(room, share: share, topRows, bottomRows)
+            VStack(spacing: 0) {
+                top.frame(height: upper)
+                SplitHandle { t in
+                    let from = dragFrom ?? Double(upper / room)
+                    dragFrom = from
+                    share = min(max(from + Double(t / room), 0.15), 0.85)
+                } ended: {
+                    dragFrom = nil
+                } reset: {
+                    share = Self.defaultShare
+                }
+                bottom.frame(height: room - upper)
+            }
+        }
+    }
+
+    /// The checks table's height in a split of `room`: its share, or less when its rows need less,
+    /// or more when the masked values' rows do.
+    private static func upper(_ room: CGFloat, share: Double, _ topRows: Int, _ bottomRows: Int) -> CGFloat {
+        let least: CGFloat = 160
+        let upper = min(max(room * share, least), room - least)
+        if needed(topRows) < upper { return max(needed(topRows), least) }
+        if needed(bottomRows) < room - upper { return room - max(needed(bottomRows), least) }
+        return upper
+    }
+
+    /// A table card's height for this many rows (three at least, for its empty message): the card's
+    /// padding and title, the table's header, rows and pager.
+    private static func needed(_ rows: Int) -> CGFloat {
+        let card = Space.l * 2 + 34 + Space.m
+        return card + DataTable<LogRow, EmptyView>.headerHeight + 1 + DataTable<LogRow, EmptyView>.pagerHeight
+            + CGFloat(max(rows, 3)) * 31 + Space.xs
+    }
+
+    @ViewBuilder private func detail(hits: [Snapshot.GuardHit], values: [Finding]) -> some View {
+        if let s = selection {
+            if let h = hits.first(where: { LogRow.check($0).id == s }) {
+                CheckDetail(hit: h, texts: h.seq.flatMap { store.checkTexts[$0] }, contextOn: store.contextOn, inPane: true)
+            } else if let f = values.first(where: { LogRow.value($0).id == s }) {
+                FindingDetail(finding: f,
+                              related: values.filter { $0.id != f.id && $0.type == f.type && $0.masked == f.masked && $0.chars == f.chars },
+                              request: matchedEvent(f, findings: values, events: store.snapshot.recent + store.history),
+                              previewsOn: store.previewsOn)
+            }
+        }
+    }
+
+    /// A check's flagged text, kept with [log] context on, as one line for the mixed table.
+    private func text(_ h: Snapshot.GuardHit) -> String? {
+        h.seq.flatMap { store.checkTexts[$0]?.text }
+    }
+
+    private func summaryText(_ row: LogRow) -> String? {
+        guard case .check(let h) = row, let t = text(h) else { return nil }
+        return t.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    private func counted(_ n: Int, of total: Int, _ filtered: Bool, _ one: String, _ many: String) -> String {
+        filtered ? "\(n.formatted()) of \(total.formatted()) \(total == 1 ? one : many)" : "\(total.formatted()) \(total == 1 ? one : many)"
+    }
+
+    private func maskedSubtitle(_ all: [Finding], _ shown: Int) -> String {
         if all.isEmpty { return "Nothing masked since keepmum started" }
         let observed = all.filter { $0.outcome == "observed" }.count
-        return "\(shown.count) of \(all.count)" + (observed > 0 ? " · \(observed) sent unmasked in observe mode" : "")
+        return "\(shown) of \(all.count)" + (observed > 0 ? " · \(observed) sent unmasked in observe mode" : "")
+    }
+
+    @ViewBuilder private func previewsNote(_ empty: Bool) -> some View {
+        if !store.previewsOn && !empty {
+            Text("Previews are off (Settings › General › Logs page): types and rules only.")
+                .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, Space.s)
+        }
+    }
+
+    // MARK: Filters
+
+    /// One bar for both kinds: a search, what to show, and, for masked values, who found them.
+    private func filterBar(checking: Bool, hits: [Snapshot.GuardHit], valuesOnly: Bool) -> some View {
+        HStack(spacing: Space.s) {
+            search
+            showPicker(checking: checking, hits: hits)
+            if valuesOnly { sourcePicker }
+            Spacer(minLength: 0)
+            if show != "all" || source != .all || !query.isEmpty {
+                Button("Show everything") { show = "all"; source = .all; query = "" }
+                    .buttonStyle(.plain).font(.km(.callout).weight(.medium)).foregroundStyle(Theme.accent)
+            }
+        }
     }
 
     private var search: some View {
@@ -606,7 +824,7 @@ struct LogsPage: View {
             if isSnapshot {
                 Text("Search").font(.km(.callout)).foregroundStyle(Theme.textTertiary)
             } else {
-                TextField("Search", text: $query, prompt: Text("Search: g…w, email, github-token, Codex, text around"))
+                TextField("Search", text: $query, prompt: Text("Search: Jailbreak, g…w, email, Codex, text around"))
                     .textFieldStyle(.plain).font(.km(.callout))
             }
             Spacer(minLength: 0)
@@ -615,35 +833,70 @@ struct LogsPage: View {
                     .buttonStyle(.plain).accessibilityLabel("Clear the search")
             }
         }
-        .padding(.horizontal, Space.s).frame(minWidth: 150, idealWidth: 260, maxWidth: 260).frame(height: 26)
+        .padding(.horizontal, Space.s).frame(minWidth: 160, idealWidth: 300, maxWidth: 300).frame(height: 26)
         .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.fill))
     }
 
-    @ViewBuilder private var typePicker: some View {
+    /// The checks there are something of, in the order Settings lists them.
+    private func checkKinds(_ hits: [Snapshot.GuardHit]) -> [(String, String)] {
+        let names = [("injection", "Prompt injections"), ("harm", "Harmful requests"), ("commands", "Risky commands"), ("script", "Codex scripts")]
+        let there = Set(hits.map(\.check))
+        return names.filter { there.contains($0.0) || $0.0 == show.dropFirst(6) }
+    }
+
+    private func showTitle(_ hits: [Snapshot.GuardHit]) -> String {
+        if show == "all" { return "Everything" }
+        if show == "checks" { return "All checks" }
+        if show == "masked" { return "All masked values" }
+        if show.hasPrefix("check:") { return checkKinds(hits).first { "check:\($0.0)" == show }?.1 ?? "Checks" }
+        return Theme.label(String(show.dropFirst(5)))
+    }
+
+    @ViewBuilder private func showPicker(checking: Bool, hits: [Snapshot.GuardHit]) -> some View {
         if isSnapshot {
-            Text("All types").font(.km(.callout)).foregroundStyle(Theme.text)
-                .padding(.horizontal, Space.s).frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.fill))
+            standIn(showTitle(hits))
         } else {
-            Picker("Type", selection: $type) {
-                Text("All types").tag("ALL")
-                ForEach(Theme.typeOrder, id: \.self) { Text(Theme.label($0)).tag($0) }
+            Picker("Show", selection: $show) {
+                Text("Everything").tag("all")
+                if checking {
+                    Divider()
+                    Text("All checks").tag("checks")
+                    ForEach(checkKinds(hits), id: \.0) { Text("   \($0.1)").tag("check:\($0.0)") }
+                }
+                Divider()
+                Text("All masked values").tag("masked")
+                ForEach(Theme.typeOrder, id: \.self) { Text("   \(Theme.label($0))").tag("type:\($0)") }
             }
-            .labelsHidden().frame(width: 130)
+            .labelsHidden().fixedSize()
+            .onChange(of: show) { _, s in if !(s == "masked" || s.hasPrefix("type:")) { source = .all } }
         }
     }
 
     @ViewBuilder private var sourcePicker: some View {
         if isSnapshot {
-            Text(source.title).font(.km(.callout)).foregroundStyle(Theme.text)
-                .padding(.horizontal, Space.s).frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.fill))
+            standIn(source.title)
         } else {
             Picker("Found by", selection: $source) {
                 ForEach(Finding.Source.allCases, id: \.self) { Text($0.title).tag($0) }
             }
-            .labelsHidden().frame(width: 150)
+            .labelsHidden().fixedSize()
         }
+    }
+
+    private func standIn(_ title: String) -> some View {
+        Text(title).font(.km(.callout)).foregroundStyle(Theme.text)
+            .padding(.horizontal, Space.s).frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Theme.fill))
+    }
+}
+
+extension Snapshot.GuardHit {
+    /// For the Logs page's search: the check, what it flagged and where, and its text when kept.
+    func matches(_ query: String, text: String?) -> Bool {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        if q.isEmpty { return true }
+        return [checkName, checkTitle, flagged, cats.joined(separator: " "), agentName(client), providerName, model ?? "",
+                outcome.0, source ?? "", path ?? "", text ?? ""].contains { $0.lowercased().contains(q) }
     }
 }
 
@@ -745,7 +998,7 @@ struct FindingDetail: View {
                              + (others.isEmpty ? "" : " Also masked in this text: \(others)."))
                             .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Text("Not kept. Text around values is off (Settings › General › Logs page), or this value was masked before it was turned on.")
+                        Text("Not kept. Text around values is off (Settings › General › Logs page), this value was masked before it was turned on, or before keepmum last started: text is kept in memory only.")
                             .font(.km(.callout)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -777,19 +1030,7 @@ struct FindingDetail: View {
         return "Its first and last character; a star per hidden character, at most \(Finding.maxStars)"
     }
 
-    private func singular(_ type: String) -> String {
-        switch type {
-        case "SECRET": "secret"
-        case "ACCOUNT": "account number"
-        case "PERSON": "name"
-        case "EMAIL": "email address"
-        case "PHONE": "phone number"
-        case "ADDRESS": "address"
-        case "URL": "URL"
-        case "DATE": "date"
-        default: type.lowercased()
-        }
-    }
+    private func singular(_ type: String) -> String { valueName(type) }
 
     /// The other masked values in the text around it, by type: "2 secrets, 1 URL".
     private func otherValues(_ f: Finding) -> String {
@@ -846,6 +1087,21 @@ struct FinderLabel: View {
             }
             if parts.isEmpty { Text("—").foregroundStyle(Theme.textSecondary) }
         }
+    }
+}
+
+/// One value of a type, in words: "secret", "email address".
+func valueName(_ type: String) -> String {
+    switch type {
+    case "SECRET": "secret"
+    case "ACCOUNT": "account number"
+    case "PERSON": "name"
+    case "EMAIL": "email address"
+    case "PHONE": "phone number"
+    case "ADDRESS": "address"
+    case "URL": "URL"
+    case "DATE": "date"
+    default: type.lowercased()
     }
 }
 

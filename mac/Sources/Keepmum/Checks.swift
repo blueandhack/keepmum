@@ -600,7 +600,8 @@ struct LocalServersSection: View {
 
     private func detail(_ server: Engine.LocalServers.Server) -> String {
         if let problem = server.problem { return Self.plainProblem(problem, server) }
-        let checks = server.checks.count == 2 ? "both checks" : "the \(server.checks[0]) check only"
+        let checks = server.checks.count == 2 ? "what you typed and tool results"
+            : server.checks[0] == "harm" ? "what you typed only" : "tool results only"
         var out = "Answers for \(checks)" + (server.api == "chat" ? ", as Chat Completions" : "")
         if server.kind == "Ollama", let most = server.contextMax {
             out += server.context.map { ", with a \(Self.tokens($0)) context" }
@@ -825,18 +826,18 @@ struct LocalServersSection: View {
     }
 
     @ViewBuilder private func checksMenu(_ n: Int, _ server: Engine.LocalServers.Server) -> some View {
-        let label = server.checks.count == 2 ? "Both" : server.checks[0] == "harm" ? "Harm" : "Injection"
+        let label = server.checks.count == 2 ? "Both" : server.checks[0] == "harm" ? "What you typed" : "Tool results"
         if isSnapshot {
             menuLabel(label)
         } else {
             Menu(label) {
-                Button("Both checks") { Task { await engine.setLocalServer(n, checks: ["injection", "harm"]) } }
-                Button("Injection only") { Task { await engine.setLocalServer(n, checks: ["injection"]) } }
-                Button("Harm only") { Task { await engine.setLocalServer(n, checks: ["harm"]) } }
+                Button("Both: what you typed and tool results") { Task { await engine.setLocalServer(n, checks: ["injection", "harm"]) } }
+                Button("What you typed only (harm check)") { Task { await engine.setLocalServer(n, checks: ["harm"]) } }
+                Button("Tool results only (injection check)") { Task { await engine.setLocalServer(n, checks: ["injection"]) } }
             }
             .menuStyle(.borderlessButton).fixedSize()
             .disabled(!engine.isBundled || engine.busy)
-            .help("Which checks' flagged requests this server answers")
+            .help("Which flagged turns this server answers: what you typed (the harm check), tool results (the injection check), or both")
         }
     }
 
@@ -907,7 +908,7 @@ struct LocalSkillsSection: View {
     var body: some View {
         FormSection(title: "Skills for local turns",
                     footer: "Your instructions for the local model on the turns keepmum keeps on this Mac. Write and edit them in the Skills window.",
-                    details: "Your own instructions for the local model, in Claude Code's SKILL.md format, kept in keepmum's folder (~/.config/keepmum/skills): write, import, edit and delete them in the Skills window. An imported skill is copied there, so editing it leaves the original alone. Each skill goes where you choose: answering a flagged tool result, summaries and rewrites for the cloud, or answering a flagged request (none: parked). Each local turn there gets its text after keepmum's note, which says why the turn stayed on this Mac and that the model has no tools. Edits apply on the next turn; one that cannot be read, or is over 20,000 characters, is left out.") {
+                    details: "Your own instructions for the local model, in Claude Code's SKILL.md format, kept in keepmum's folder (~/.config/keepmum/skills): write, import, edit and delete them in the Skills window. An imported skill is copied there, so editing it leaves the original alone. Each skill goes where you choose, for each check: its answer on this Mac, and its rewrite for the cloud (none: parked). A new skill goes to every step but the rewrite of what you typed, which gets only the skills you pick for it. Settings › Local turns shows each step with its instruction and skills. Each local turn there gets its text after keepmum's note, which says why the turn stayed on this Mac and that the model has no tools. Edits apply on the next turn; one that cannot be read, or is over 20,000 characters, is left out.") {
             if rows.isEmpty {
                 FormRow(title: "No skills", detail: "Local models get keepmum's note and the agent's own instructions. keepmum's example says how to answer on these turns: a starting point to edit.") {
                     HStack(spacing: Space.s) {
@@ -965,13 +966,14 @@ struct LocalSkillsSection: View {
             }
         } else {
             Menu(label) {
-                ForEach(Places.all, id: \.self) { place in
-                    Toggle(Places.names[place] ?? place, isOn: Binding(
-                        get: { skill.goesTo.contains(place) },
-                        set: { on in
-                            let next = Places.all.filter { $0 == place ? on : skill.goesTo.contains($0) }
-                            Task { await engine.setLocalSkill(n, places: next) }
-                        }))
+                ForEach(Places.checks, id: \.check) { c in
+                    Section(c.title) {
+                        ForEach([c.answer, c.rewrite], id: \.self) { place in
+                            Toggle(place == c.answer ? "Answer on this Mac" : "Rewrite for the cloud", isOn: Binding(
+                                get: { skill.goesTo.contains(place) },
+                                set: { on in Task { await engine.setLocalSkill(n, places: Places.toggled(skill.goesTo, place, on: on)) } }))
+                        }
+                    }
                 }
                 Divider()
                 Button("Park It") { Task { await engine.setLocalSkill(n, places: []) } }.disabled(skill.goesTo.isEmpty)
@@ -1008,135 +1010,6 @@ struct LocalSkillsSection: View {
         } else {
             PillButton(title: "Open Skills…", icon: "square.and.pencil") { SkillsWindow.show(openWindow, engine: engine) }
                 .disabled(!engine.isBundled)
-        }
-    }
-}
-
-/// What follows a local turn of the injection check: stay on the local model, or hand the
-/// conversation back to the cloud with the flagged result replaced (handback.py).
-struct LocalHandbackSection: View {
-    var engine: Engine
-    @Environment(\.isSnapshot) private var isSnapshot
-    @State private var editing = false
-
-    static let choices: [(id: String, label: String, detail: String)] = [
-        ("stay", "Stay local", "The conversation stays on the local model until you rewind or clear it."),
-        ("answer", "Local answer, then cloud", "The local model answers the flagged turn. After that the result is withheld, and the cloud model carries on with the local answer."),
-        ("summary", "Local summary, then cloud", "The local model summarises the flagged result first; the summary goes to the cloud model in its place."),
-        ("rewrite", "Local rewrite, then cloud", "The local model takes out what the result says to the agent; the rest goes to the cloud model."),
-        ("withhold", "Withhold, then cloud", "No local model: a notice takes the result's place, and the turn goes to the cloud model."),
-    ]
-
-    private var current: String { engine.localHandback?.handback ?? engine.status?.guard?.local?.handback ?? "stay" }
-    private var own: String { engine.localHandback?.instructions ?? engine.status?.guard?.local?.handbackInstructions ?? "" }
-    private var choice: (id: String, label: String, detail: String) { Self.choices.first { $0.id == current } ?? Self.choices[0] }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.xl) {
-            strategySection
-            if ["answer", "summary", "rewrite"].contains(current) || harmCurrent == "rewrite", let review = engine.localHandback?.review {
-                FormSection(title: "Review before it goes",
-                            footer: "keepmum holds the request while you look, in a panel that does not take the keyboard. With this app closed, and no keepmum review --watch in a terminal, nothing waits.",
-                            details: "Each flagged result is reviewed once; later turns reuse your answer. An edit of yours is checked for injection like the local model's text; if the check flags it, it is still sent, as you wrote it, and the hit is logged. A rewrite of what you typed waits here too once the harm check passes it; one it still flags stays local without asking.") {
-                    reviewRows(review)
-                }
-            }
-        }
-        .task(id: engine.status?.guard?.local) { await engine.loadLocalHandback() }
-        .sheet(isPresented: $editing) {
-            HandbackInstructionsSheet(engine: engine, strategy: current, own: own,
-                                      keepmums: engine.localHandback?.defaultInstructions[current] ?? "")
-        }
-    }
-
-    static let harmChoices: [(id: String, label: String, detail: String)] = [
-        ("stay", "Stay local", "The local model answers what you typed, and the conversation stays on it."),
-        ("rewrite", "Local rewrite, then cloud",
-         "The local model takes the flagged part out of what you typed and keeps the rest; that goes to the cloud model. Still flagged, or nothing left: it stays local."),
-    ]
-
-    private var harmCurrent: String { engine.localHandback?.harm ?? engine.status?.guard?.local?.handbackHarm ?? "stay" }
-
-    private var strategySection: some View {
-        FormSection(title: "After a local turn",
-                    footer: "The cloud model never gets what a check flagged, only what takes its place.",
-                    details: "Tool results: what takes the flagged result's place is masked like the rest of the request and checked first; if the injection check flags what the local model wrote, that turn stays local. What you typed: the local model only takes the flagged part out, without rewording, softening or disguising it. What it kept must be in what you typed, word for word, and the harm check reads it whole and sentence by sentence; if anything was reworded, the check still flags it, or nothing is left, the turn stays on this Mac and is not asked for again. So the provider never gets what was flagged, in any wording.") {
-            FormRow(title: "Tool results", detail: choice.detail) { strategyMenu }
-            if current == "summary" || current == "rewrite" {
-                Hairline()
-                FormRow(title: "Instructions",
-                        detail: own.isEmpty ? "keepmum's: keep the facts, code and data; leave out what the result says to the agent"
-                                            : "Your own, \(own.count.formatted()) characters") {
-                    if isSnapshot {
-                        PillButton(title: "Edit…") {}
-                    } else {
-                        PillButton(title: "Edit…") { editing = true }
-                            .disabled(!engine.isBundled || engine.busy)
-                    }
-                }
-            }
-            Hairline()
-            let harm = Self.harmChoices.first { $0.id == harmCurrent } ?? Self.harmChoices[0]
-            FormRow(title: "What you typed", detail: harm.detail) {
-                ChoiceMenu(engine: engine, label: harm.label,
-                           items: Self.harmChoices.map { c in (c.label, { await engine.setLocalHandbackHarm(c.id) }) })
-            }
-        }
-    }
-
-    static let reviewModes: [(id: String, label: String)] = [
-        ("off", "Off"), ("rewrite", "Rewrites only"), ("all", "Answers, summaries and rewrites"),
-    ]
-    static let waits = [30, 60, 120, 300]
-
-    private func seconds(_ s: Int) -> String { s < 120 ? "\(s) s" : "\(s / 60) min" }
-
-    @ViewBuilder private func reviewRows(_ review: Engine.LocalHandback.Review) -> some View {
-        let label = Self.reviewModes.first { $0.id == review.mode }?.label ?? review.mode
-        let skipped = review.mode == "rewrite" && current != "rewrite"
-        let typedOnly = !["answer", "summary", "rewrite"].contains(current)  // only the harm check's rewrite is reviewed
-        FormRow(title: "Review first",
-                detail: review.mode == "off" ? "Off: what the local model wrote goes straight to the cloud"
-                    : typedOnly ? "A panel shows the local model's rewrite of what you typed: send it, edit it or keep the turn local"
-                    : skipped ? "Rewrites only: this hand-back goes without a review"
-                        + (harmCurrent == "rewrite" ? "; a rewrite of what you typed waits for one" : "")
-                    : current == "answer" ? "After the local answer, a panel shows what the next turn sends in the result's place: send it, edit it or keep the conversation local"
-                    : "A panel shows what the local model wrote: send it, edit it, withhold the result or keep the turn local") {
-            ChoiceMenu(engine: engine, label: label,
-                       items: Self.reviewModes.map { m in (m.label, { await engine.setLocalHandbackReview(mode: m.id) }) })
-        }
-        if review.mode != "off" {
-            Hairline()
-            FormRow(title: "Wait", detail: "The agent waits too, up to this long") {
-                ChoiceMenu(engine: engine, label: seconds(review.wait),
-                           items: (Self.waits.contains(review.wait) ? Self.waits : (Self.waits + [review.wait]).sorted())
-                               .map { w in (seconds(w), { await engine.setLocalHandbackReview(wait: w) }) })
-            }
-            Hairline()
-            FormRow(title: "If no answer",
-                    detail: review.timeout == "send" ? "What the local model wrote goes as written" : "The turn stays on this Mac, answered by the local model") {
-                ChoiceMenu(engine: engine, label: review.timeout == "send" ? "Send as written" : "Keep it local",
-                           items: [("Keep it local", { await engine.setLocalHandbackReview(timeout: "stay") }),
-                                   ("Send as written", { await engine.setLocalHandbackReview(timeout: "send") })])
-            }
-        }
-    }
-
-    @ViewBuilder private var strategyMenu: some View {
-        if isSnapshot {
-            HStack(spacing: Space.xxs) {
-                Text(choice.label).font(.km(.callout)).foregroundStyle(Theme.text)
-                Image(systemName: "chevron.down").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
-            }
-        } else {
-            Menu(choice.label) {
-                ForEach(Self.choices, id: \.id) { c in
-                    Button(c.label) { Task { await engine.setLocalHandback(c.id) } }
-                }
-            }
-            .menuStyle(.borderlessButton).fixedSize()
-            .disabled(!engine.isBundled || engine.busy)
-            .help("What follows a turn the injection check kept on this Mac")
         }
     }
 }
@@ -1221,7 +1094,9 @@ struct LocalModeSummary: View {
             row("Local models", servers == 0 ? "None set: what a check keeps local is refused"
                     : "\(servers) server\(servers == 1 ? "" : "s"), tried in order", warn: servers == 0, .localModels)
             Hairline()
-            row("Hand-back", LocalHandbackSection.choices.first { $0.id == handback }?.label ?? handback, .handback)
+            let harm = engine.localHandback?.harm ?? local?.handbackHarm ?? "stay"
+            row("Local turns", "Tool results: \(LocalHandbackSection.choices.first { $0.id == handback }?.label ?? handback). What you typed: "
+                + (LocalHandbackSection.harmChoices.first { $0.id == harm }?.label ?? harm), .handback)
             Hairline()
             row("Skills", skills == 0 ? "None" : "\(skills) skill\(skills == 1 ? "" : "s")", .skills)
         }
@@ -1231,46 +1106,5 @@ struct LocalModeSummary: View {
         FormRow(title: title, detail: detail, detailTone: warn ? Theme.warning : Theme.textSecondary) {
             PillButton(title: "Open", icon: "chevron.right") { open(pane) }
         }
-    }
-}
-
-/// The user's own instruction for the local model's summary or rewrite, in place of keepmum's.
-struct HandbackInstructionsSheet: View {
-    var engine: Engine
-    var strategy: String
-    var own: String
-    var keepmums: String
-    @Environment(\.dismiss) private var dismiss
-    @State private var text = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.m) {
-            VStack(alignment: .leading, spacing: Space.xxs) {
-                Text("Instructions for the \(strategy)").font(.km(.headline)).foregroundStyle(Theme.text)
-                Text("The local model gets these, then the flagged result and your latest message, and writes what the cloud model reads in the result's place. Say what to keep and what to leave out. Skills for the injection check follow them.")
-                    .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
-            }
-            TextEditor(text: $text)
-                .font(.km(.callout))
-                .frame(minHeight: 220)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.textSecondary.opacity(0.3)))
-            HStack {
-                PillButton(title: "Use keepmum's") { text = keepmums }
-                    .disabled(text == keepmums)
-                Spacer()
-                PillButton(title: "Cancel") { dismiss() }
-                PillButton(title: "Save", prominent: true) {
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    // keepmum's own text saved as is means keepmum's: stored as no instruction of the user's.
-                    let value = trimmed == keepmums.trimmingCharacters(in: .whitespacesAndNewlines) ? "" : trimmed
-                    Task { await engine.setLocalHandbackInstructions(value) }
-                    dismiss()
-                }
-                .disabled(text.count > 4000)
-            }
-        }
-        .padding(Space.l)
-        .frame(width: 520)
-        .onAppear { text = own.isEmpty ? keepmums : own }
     }
 }

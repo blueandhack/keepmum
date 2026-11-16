@@ -28,6 +28,16 @@ def history_file() -> Path:
     return Path.home() / ".config" / "keepmum" / "history.jsonl"
 
 
+def logs_file() -> Path:
+    """The Logs page's rows, kept across restarts for `[log] keep_days` (LogStore)."""
+    return Path.home() / ".config" / "keepmum" / "logs.jsonl"
+
+
+# What a kept masked-value row may hold: never its preview or the text around it.
+VALUE_KEPT = ("ts", "seq", "type", "detector", "rule", "by", "earlier", "chars", "outcome", "client", "provider")
+LOGS_KEEP = (2_000, 20_000)  # check rows and masked-value rows a compacted file keeps, at most
+
+
 def stats_token(path: Path | None = None) -> str:
     """A bearer token for the stats endpoint, in a file only this user can read."""
     path = path or token_file()
@@ -258,10 +268,99 @@ def event_kind(e: dict) -> str:
     return "masked" if e.get("new") else "clean"
 
 
+class LogStore:
+    """The Logs page's rows on disk (0600), so they outlast a restart: each check's hit and what
+    came of it (local answer, hand-back, review), and each masked value's type, rule and length.
+    Never text: no flagged text or prompt, no value preview, no text around a value; those stay in
+    memory. Rows older than `keep_days` are dropped when it loads; 0 keeps nothing, and deletes
+    the file. Append-only lines, like History; a hit's later facts are lines of their own."""
+
+    def __init__(self, keep_days: int = 30, path: Path | None = None):
+        self.path, self.keep_days = path or logs_file(), keep_days
+
+    def _append(self, rows: list[dict]) -> None:
+        if self.keep_days <= 0 or not rows:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a") as f:
+                f.write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows))
+        except OSError:
+            pass  # a convenience: never fail a request over it
+
+    def checks(self, hits: list[dict]) -> None:
+        self._append([{"t": "check", **{k: v for k, v in h.items() if k != "seq"}} for h in hits])
+
+    def note(self, key: str, facts: dict) -> None:
+        self._append([{"t": "note", "key": key, "facts": facts}])
+
+    def values(self, found: list[dict]) -> None:
+        self._append([{"t": "value", **{k: f.get(k) for k in VALUE_KEPT}} for f in found])
+
+    def set_keep(self, days: int) -> None:
+        self.keep_days = days
+        if days <= 0:
+            self.forget()
+
+    def forget(self) -> None:
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+
+    def load(self) -> tuple[list[dict], list[dict]]:
+        """The kept check hits (later facts merged in) and masked values, oldest first, within
+        `keep_days`; the file rewritten with only those."""
+        if self.keep_days <= 0:
+            self.forget()
+            return [], []
+        try:
+            lines = self.path.read_text().splitlines()
+        except OSError:
+            return [], []
+        since = time.time() - self.keep_days * 86400
+        checks: dict[str, dict] = {}
+        values: list[dict] = []
+        notes: list[dict] = []
+        for line in lines:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            kind = r.pop("t", None) if isinstance(r, dict) else None
+            if kind == "check" and r.get("ts", 0) >= since and r.get("key"):
+                checks[r["key"]] = r
+            elif kind == "note" and isinstance(r.get("facts"), dict):
+                notes.append(r)
+            elif kind == "value" and r.get("ts", 0) >= since:
+                values.append(r)
+        for n in notes:
+            if (hit := checks.get(n.get("key"))) is not None:
+                hit.update(n["facts"])
+        hits = sorted(checks.values(), key=lambda h: h.get("ts", 0))[-LOGS_KEEP[0]:]
+        values = values[-LOGS_KEEP[1]:]
+        try:  # compacted: notes merged, old rows gone
+            tmp = self.path.with_suffix(".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write("".join(json.dumps({"t": "check", **h}, separators=(",", ":")) + "\n" for h in hits))
+                f.write("".join(json.dumps({"t": "value", **v}, separators=(",", ":")) + "\n" for v in values))
+            tmp.replace(self.path)
+        except OSError:
+            pass
+        return hits, values
+
+
 class Stats:
-    def __init__(self, recent: int = 200, history: History | None = None, findings: int = 2000):
+    def __init__(self, recent: int = 200, history: History | None = None, findings: int = 2000,
+                 logs: LogStore | None = None):
         self._lock = threading.Lock()
         self.history = history
+        # The Logs page's rows on disk (LogStore), and this run's mark on its hits' keys: a hit's seq
+        # starts over with each run, its key does not.
+        self.logs = logs
+        self._run = secrets.token_hex(4)
         self.started = time.time()
         self.requests = Counter()  # by outcome: forwarded, blocked, rejected, upstream_error
         self.redacted = Counter()  # by type
@@ -291,6 +390,10 @@ class Stats:
         # Flights that hand a flagged result back to the cloud (handback.py): the strategy, which
         # `record` puts on the request's event. Apart from inflight, which drops a request gone stale.
         self._handed: dict[int, str] = {}
+        if logs is not None:  # the rows kept from earlier runs: no seq, so no text of this run's is theirs
+            hits, values = logs.load()
+            self.guard_hits.extend(hits)
+            self.findings.extend(values)
 
     def depart(self, origin: tuple[str, str] | None, kind: str, handed_back: str | None = None) -> int:
         """A scanned request is leaving for its provider: its number, which `record` closes.
@@ -367,8 +470,11 @@ class Stats:
         ts = round(time.time(), 6)
         client, provider = origin or (None, None)
         with self._lock:
-            for i, f in enumerate(found):
-                self.findings.append({**f, "ts": ts, "seq": i, "outcome": outcome, "client": client, "provider": provider})
+            rows = [{**f, "ts": ts, "seq": i, "outcome": outcome, "client": client, "provider": provider}
+                    for i, f in enumerate(found)]
+            self.findings.extend(rows)
+        if self.logs:
+            self.logs.values(rows)
 
     def record_flagged(self, path: str, hits: list[dict], origin: tuple[str, str] | None = None,
                        kind: str = "clean", request: str | None = None, action: str = "warned") -> None:
@@ -402,7 +508,8 @@ class Stats:
             self.guarded[action] += 1
             for i, h in enumerate(hits):
                 self._check_seq += 1
-                added.append({"ts": ts, "seq": self._check_seq, "check": h.get("check", "injection"),
+                added.append({"ts": ts, "seq": self._check_seq, "key": f"{self._run}-{self._check_seq}",
+                              "check": h.get("check", "injection"),
                               "source": h.get("source"), "score": round(h["score"], 3), "chars": h["chars"],
                               "categories": h.get("categories"), "earlier": h.get("earlier", False),
                               "action": action, "client": client, "provider": provider, **(about or {})})
@@ -411,9 +518,11 @@ class Stats:
                     self.check_texts[self._check_seq] = {"text": text, "prompt": prompt}
             self.guard_hits.extend(added)
             # The texts go with their hits: those the list no longer holds are forgotten.
-            oldest = self.guard_hits[0]["seq"] if self.guard_hits else self._check_seq + 1
+            oldest = next((h["seq"] for h in self.guard_hits if h.get("seq")), self._check_seq + 1)
             for seq in [k for k in self.check_texts if k < oldest]:
                 del self.check_texts[seq]
+        if self.logs:
+            self.logs.checks(added)
         return added
 
     def check_texts_page(self) -> dict[str, dict]:
@@ -426,6 +535,10 @@ class Stats:
         with self._lock:
             for e in entries:
                 e.update(facts)
+        if self.logs:
+            for e in entries:
+                if e.get("key"):
+                    self.logs.note(e["key"], facts)
 
     def findings_page(self, limit: int = 2000) -> list[dict]:
         with self._lock:

@@ -80,7 +80,7 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     info = {"mode": mode, "pii": pii, "detector": pipeline.name, "version": __version__, "apis": ["messages", "responses", "gemini", "antigravity"],
             "checks": {"injection": cfg.guard_injection, "harm": cfg.guard_harm, "harm_model": cfg.guard_harm_model,
                        "commands": cfg.guard_commands}}
-    from .stats import History, Stats
+    from .stats import History, LogStore, Stats
 
     from .audit import AuditLog
     from .tools import ToolRegistry
@@ -93,6 +93,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
 
     def apply(new) -> None:  # the config file changed: settings apply on the next request
         audit.keep_days = new.audit_keep_days
+        if proxy.stats.logs is not None and proxy.stats.logs.keep_days != new.log_keep_days:
+            proxy.stats.logs.set_keep(new.log_keep_days)
         audit.note_config(new, "config file")
         pipeline.apply_settings(new.pass_types, new.mask_rules, new.allow_strings, new.allow_patterns, new.off_rules,
                                 pii=None if fixed_pii else new.pii)
@@ -127,14 +129,17 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     from .local import servers_for, skills_for
 
     proxy = Proxy(Redactor(pipeline, Vault()), upstream=upstream or cfg.upstream, policy=cfg.restore,
-                  stats=Stats(history=history), stats_token=stats_token(), info=info, observe=observe,
+                  stats=Stats(history=history, logs=LogStore(cfg.log_keep_days)), stats_token=stats_token(), info=info, observe=observe,
                   previews=lambda: observe.config.log_previews,
                   context=lambda: observe.config.log_context, audit=audit, tools=ToolRegistry(), guards=[injection, harm],
                   commands=CommandsCheck(lambda: observe.config.guard_commands),
                   local=lambda check: servers_for(observe.config.guard_local_servers, check),
                   local_skills=lambda check: skills_for(observe.config.guard_local_skills, check),
-                  handback=lambda: (observe.config.guard_local_handback, observe.config.guard_local_handback_instructions),
+                  handback=lambda: (observe.config.guard_local_handback, "" if observe.config.guard_local_handback_instructions_off
+                                    else observe.config.guard_local_handback_instructions),
                   handback_harm=lambda: observe.config.guard_local_handback_harm,
+                  harm_instructions=lambda: "" if observe.config.guard_local_handback_harm_instructions_off
+                  else observe.config.guard_local_handback_harm_instructions,
                   review=lambda: (observe.config.guard_local_handback_review, observe.config.guard_local_handback_review_wait,
                                   observe.config.guard_local_handback_review_timeout),
                   speed=lambda: (observe.config.guard_local_keep_loaded, observe.config.guard_local_answer_thinking))

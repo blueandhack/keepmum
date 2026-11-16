@@ -27,8 +27,11 @@ left, the turn stays local and is not asked for again. The provider never gets w
 in any wording.
 
 `local_handback_instructions` replaces keepmum's instruction for summary and rewrite with the
-user's own (how to edit the result, what to keep). The injection check's skills (`local_skills`)
-follow it.
+user's own (how to edit the result, what to keep), and `local_handback_harm_instructions` keepmum's
+for the harm rewrite. Each `..._off = true` keeps the user's text but uses keepmum's. The skills for
+the place (`local_skills`: "handback", or "harm_handback", which no skill gets unless the user picks
+it) follow the instruction. Whatever the harm instruction says, a harm rewrite is checked as below:
+an instruction that asks for rewording only gets turns kept local.
 
 What the local model writes is checked by the injection check on its own, then masked like the rest
 of the request. keepmum's line around it, and its notices, are not checked: they are keepmum's, and
@@ -104,6 +107,15 @@ def parse(strategy, instructions, where: str = "guard") -> tuple[str, str]:
     return strategy, instructions.strip()
 
 
+def parse_instructions(value, key: str, where: str = "guard") -> str:
+    """An instruction of the user's ([guard] local_handback_harm_instructions), checked."""
+    if not isinstance(value, str):
+        raise ValueError(f"{where}.{key} must be a string")
+    if len(value) > MAX_INSTRUCTIONS:
+        raise ValueError(f"{where}.{key} is over {MAX_INSTRUCTIONS:,} characters")
+    return value.strip()
+
+
 def parse_harm(strategy, where: str = "guard") -> str:
     if strategy not in HARM_STRATEGIES:
         raise ValueError(f"{where}.local_handback_harm must be one of {', '.join(HARM_STRATEGIES)}")
@@ -148,9 +160,10 @@ def messages(strategy: str, text: str, source: str | None, prompt: str | None, i
             {"role": "user", "content": f"{asked}The {_what(source)}:\n<tool_result>\n{text}\n</tool_result>"}]
 
 
-def harm_messages(text: str, skills: str = "") -> list[dict]:
-    """The Chat Completions messages that ask the local model to take a harm hit out of what was typed."""
-    system = "\n\n".join(x for x in (HARM_INSTRUCTION, skills) if x)
+def harm_messages(text: str, skills: str = "", instructions: str = "") -> list[dict]:
+    """The Chat Completions messages that ask the local model to take a harm hit out of what was typed:
+    the user's own instruction in place of keepmum's, if any, then the skills they picked for it."""
+    system = "\n\n".join(x for x in (instructions or HARM_INSTRUCTION, skills) if x)
     return [{"role": "system", "content": system},
             {"role": "user", "content": f"The user's message:\n<message>\n{text}\n</message>"}]
 
@@ -197,6 +210,34 @@ def harm_pieces(written: str) -> list[str]:
     return [written] + [p for p in sentences if p != written]
 
 
+def sentences(typed: str) -> list[str]:
+    """What was typed, sentence by sentence (as `harm_pieces` splits it), each with what follows it,
+    so that joining them gives the text back."""
+    out, at = [], 0
+    for m in _SENTENCE.finditer(typed):
+        out.append(typed[at:m.end()])
+        at = m.end()
+    if at < len(typed):
+        out.append(typed[at:])
+    return out
+
+
+def without(parts: list[str], flagged: set[int]) -> str:
+    """`parts` (from `sentences`) with the flagged ones taken out whole, [removed by keepmum] where
+    they were, once for each run of them. Removal only, by construction."""
+    out, gap = [], False
+    for i, part in enumerate(parts):
+        if i in flagged:
+            if not gap:
+                tail = part[len(part.rstrip()):]  # keep the space or line break that followed it
+                out.append(REMOVED + (tail or " "))
+            gap = True
+        else:
+            out.append(part)
+            gap = False
+    return "".join(out).strip()
+
+
 def nothing_left(written: str) -> bool:
     """A harm rewrite with nothing of the message in it: only removals, or nothing at all."""
     return not written.replace(REMOVED, "").strip(" \n\t.,;:-")
@@ -226,6 +267,9 @@ class Handbacks:
         self._unsent: dict[bytes, str] = {}  # flagged text hash -> strategy, until first sent
         # Flagged results whose summary or rewrite the check flagged: they stay local, not asked again.
         self._kept: OrderedDict[bytes, None] = OrderedDict()
+        # What the user typed -> the rewrite that went in its place: another request carrying the same
+        # text (Codex asks for a task title with the prompt inside) takes it, not asked again.
+        self._went: OrderedDict[bytes, str] = OrderedDict()
         self._keep = keep
         self._lock = threading.Lock()
 
@@ -265,6 +309,18 @@ class Handbacks:
     def kept(self, text: str) -> bool:
         with self._lock:
             return _key(text) in self._kept
+
+    def went(self, text: str, instead: str | None = None) -> str | None:
+        """What went in place of `text` before, or None; with `instead`, note that it did."""
+        with self._lock:
+            key = _key(text)
+            if instead is None:
+                return self._went.get(key)
+            self._went[key] = instead
+            self._went.move_to_end(key)
+            while len(self._went) > self._keep:
+                self._went.popitem(last=False)
+            return instead
 
     def made(self, text: str) -> bool:
         """Whether keepmum wrote this text as a replacement."""

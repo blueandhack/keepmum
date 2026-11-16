@@ -27,7 +27,7 @@ struct KeepmumApp: App {
         .defaultSize(width: 1200, height: 780)
 
         Window("Skills for local turns", id: SkillsWindow.id) {
-            SkillsEditor(engine: engine)
+            SkillsWindowRoot(engine: engine)
                 .frame(minWidth: 760, minHeight: 640)
                 .onAppear { engine.start() }
         }
@@ -44,7 +44,7 @@ struct MenuLabel: View {
         HStack(spacing: 3) {
             let live = store.connection == .live || store.connection == .sample
             let attention = store.toolsNeedReview || engine.aroundClient != nil || store.scriptWarning != nil
-                || !ReviewCenter.shared.pending.isEmpty
+                || !ReviewCenter.shared.pending.isEmpty || !ReviewCenter.shared.turns.isEmpty
             Image(nsImage: !live ? Brand.menuBarIdle : attention ? Brand.menuBarAttention : Brand.menuBarActive)
             if unique > 0 { Text(unique.compact).monospacedDigit() }
         }
@@ -109,11 +109,13 @@ struct MenuPanel: View {
                 engine.settingsRequested = .setup
                 DashboardWindow.show(openWindow)
             }
-            if !ReviewCenter.shared.pending.isEmpty {
+            if !ReviewCenter.shared.pending.isEmpty || !ReviewCenter.shared.turns.isEmpty {
                 let waiting = ReviewCenter.shared.pending.count
+                let turns = ReviewCenter.shared.turns.count
                 HStack(spacing: Space.s) {
                     Image(systemName: "hand.raised.square").foregroundStyle(Theme.accent)
-                    Text(waiting == 1 ? "A hand-back waits for you" : "\(waiting) hand-backs wait for you")
+                    Text(turns > 0 && waiting == 0 ? (turns == 1 ? "A turn waits for your review" : "\(turns) turns wait for your review")
+                         : waiting + turns == 1 ? "A hand-back waits for you" : "\(waiting + turns) reviews wait for you")
                         .font(.km(.callout)).foregroundStyle(Theme.text)
                     Spacer(minLength: Space.s)
                     PillButton(title: "Review") { ReviewCenter.shared.reopen() }
@@ -463,8 +465,11 @@ enum Snapshotter {
         // its place on a narrow one.
         for (name, width, height) in [("wide", 1700.0, 1000.0), ("narrow", 900.0, 720.0)] {
             if let hit = store.snapshot.guardHits.max(by: { $0.ts < $1.ts }) {
-                render(LogsPage(store: store, selectedHit: hit.id).padding(Space.xl).frame(width: width, height: height).background(Theme.canvas),
-                       to: "\(dir)/logs-\(name)-light.png", dark: false)
+                for layout in [LogsPage.Layout.together, .split] {
+                    render(LogsPage(store: store, selectedHit: hit.id, layout: layout).padding(Space.xl).frame(width: width, height: height)
+                            .background(Theme.canvas),
+                           to: "\(dir)/logs-\(name)-\(layout.rawValue)-light.png", dark: false)
+                }
             }
             if let e = store.snapshot.recent.last(where: { !($0.tools ?? []).isEmpty }) {
                 render(ActivityPage(store: store, selected: e.id).padding(Space.xl).frame(width: width, height: height).background(Theme.canvas),
@@ -525,6 +530,37 @@ enum Snapshotter {
                to: "\(dir)/review-too-long-light.png", dark: false)
         render(ReviewCard(center: .shared, review: .sampleTyped).frame(width: 560).background(Theme.canvas),
                to: "\(dir)/review-typed-light.png", dark: false)
+        render(ReviewCard(center: .shared, review: .sampleTypedNothingLeft).frame(width: 560).background(Theme.canvas),
+               to: "\(dir)/review-typed-nothing-left-light.png", dark: false)
+        // The original back in the box: the caution, and Send the Original.
+        for dark in [false, true] {
+            render(ReviewCard(center: .shared, review: .sample, draft: PendingReview.sample.flagged).frame(width: 560).background(Theme.canvas),
+                   to: "\(dir)/review-original-\(dark ? "dark" : "light").png", dark: dark)
+        }
+        // A whole turn under review, in its window.
+        for dark in [false, true] {
+            render(TurnReviewView(center: .shared, turn: .sample, more: 1).frame(width: 1040, height: 720).background(Theme.canvas),
+                   to: "\(dir)/review-turn-\(dark ? "dark" : "light").png", dark: dark)
+        }
+        render(TurnReviewView(center: .shared, turn: .sample, choices: ["1": "original"]).frame(width: 1040, height: 720).background(Theme.canvas),
+               to: "\(dir)/review-turn-original-light.png", dark: false)
+        // Paused while the local model writes: the pause counted up, the most it can last.
+        var paused = PendingTurn.sample
+        paused.assisting = true
+        paused.hardDeadline = paused.created + 60 + 120
+        paused.agent = "claude-code"
+        paused.agentSince = paused.created - 3
+        paused.agentLimit = 360
+        render(TurnReviewView(center: .shared, turn: paused, previewPause: 12).frame(width: 1040, height: 720).background(Theme.canvas),
+               to: "\(dir)/review-turn-paused-light.png", dark: false)
+        // The instruction editor, on the harm rewrite's instruction.
+        for dark in [false, true] {
+            render(InstructionEditor(engine: .preview(), check: "harm", strategy: "rewrite"),
+                   to: "\(dir)/instruction-editor-\(dark ? "dark" : "light").png", dark: dark)
+        }
+        // Local turns with the harm check in Local mode and the injection check off.
+        render(Dashboard(store: store, engine: .preview(harmOnlyLocal: true), page: .settings, settingsPane: .handback).frame(width: 1200, height: 1500),
+               to: "\(dir)/settings-handback-harm-local-light.png", dark: false)
         ReviewCenter.shared.inject([], mode: "off")
         // The menu bar icon, plain and with the dot that points at Settings › Tools.
         for (name, image) in [("menubar", Brand.menuBarActive), ("menubar-attention", Brand.menuBarAttention)] {

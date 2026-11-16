@@ -114,19 +114,25 @@ class LocalRoute:
 
 
 # Where a skill can go, on the turns keepmum keeps on this Mac:
-#   injection: the local model answers a turn the injection check flagged (a tool result)
-#   handback:  the local model writes a summary or rewrite of that result for the cloud model
-#   harm:      the local model answers a request the harm check flagged
-# The two injection places need different instructions: one that suits an answer ("say what the
-# planted part asked for") can spoil a summary, which the check then flags. No place: parked.
-PLACES = ("injection", "handback", "harm")
+#   injection:     the local model answers a turn the injection check flagged (a tool result)
+#   handback:      the local model writes a summary or rewrite of that result for the cloud model
+#   harm:          the local model answers a request the harm check flagged
+#   harm_handback: the local model takes what the harm check flagged out of what the user typed
+# Answering and rewriting need different instructions: one that suits an answer ("say what the
+# planted part asked for", "say you can't help with that") can spoil a rewrite, which the check then
+# flags, or turn a harm rewrite against the user's own task. No place: parked.
+PLACES = ("injection", "handback", "harm", "harm_handback")
+# Where a skill goes when its entry names no places: not the harm rewrite, which only takes words out,
+# and which a skill written for answers made worse in keepmum's tests (proxy.py, _rewrite_typed). A
+# skill reaches it only when the user picks it.
+DEFAULT_PLACES = ("injection", "handback", "harm")
 PLACE_NAMES = {"injection": "answering a flagged tool result", "handback": "summaries and rewrites of tool results for the cloud",
-               "harm": "answering a flagged request"}
+               "harm": "answering a flagged request", "harm_handback": "rewrites of what you typed for the cloud"}
 
 
 def places_of_checks(checks) -> tuple[str, ...]:
-    """The places an older `checks` list meant: injection was both of its places."""
-    return tuple(p for p in PLACES if (p if p == "harm" else "injection") in checks)
+    """The places an older `checks` list meant: injection was both of its places, harm its answers."""
+    return tuple(p for p in DEFAULT_PLACES if (p if p == "harm" else "injection") in checks)
 
 
 @dataclass(frozen=True)
@@ -134,15 +140,16 @@ class Skill:
     """A skill the user added for local mode: a SKILL.md, or a folder holding one, and the places it
     goes (PLACES; none: parked). Read when a request goes local, so edits apply at once."""
     path: str
-    places: tuple[str, ...] = PLACES
+    places: tuple[str, ...] = DEFAULT_PLACES
 
     @property
     def checks(self) -> tuple[str, ...]:
         """The checks whose local turns get it, in any place."""
-        return tuple(c for c in CHECKS if (c in self.places if c == "harm" else {"injection", "handback"} & set(self.places)))
+        mine = {"injection": {"injection", "handback"}, "harm": {"harm", "harm_handback"}}
+        return tuple(c for c in CHECKS if mine[c] & set(self.places))
 
     def as_toml(self) -> dict:
-        return {"path": self.path} | ({} if tuple(self.places) == PLACES else {"places": list(self.places)})
+        return {"path": self.path} | ({} if tuple(self.places) == DEFAULT_PLACES else {"places": list(self.places)})
 
 
 def parse_keep_loaded(value, where: str = "guard") -> str:
@@ -240,7 +247,8 @@ def parse_skills(value, where: str) -> list[Skill]:
         if "places" in entry:
             places = entry["places"]
             if not isinstance(places, list) or not all(p in PLACES for p in places):
-                raise ValueError(f"{at}.places must list some of \"injection\", \"handback\", \"harm\" (none: parked)")
+                raise ValueError(f"{at}.places must list some of \"injection\", \"handback\", \"harm\", \"harm_handback\" "
+                                 "(none: parked)")
             out.append(Skill(path, tuple(p for p in PLACES if p in places)))
             continue
         checks = entry.get("checks", list(CHECKS))

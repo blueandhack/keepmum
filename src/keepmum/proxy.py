@@ -33,6 +33,7 @@ Codex sends them; that backend refuses large uncompressed ones.
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import hmac
 import json
@@ -58,15 +59,19 @@ from .local import CHAT_PATH as LOCAL_CHAT_PATH
 from .local import APIS_LOCAL
 from .local import PATHS as LOCAL_PATHS
 from .handback import WRITTEN, Handbacks
-from .handback import harm_messages, harm_pieces, harm_wrap, harm_written, nothing_left, only_removed
+from .handback import REMOVED, harm_messages, harm_pieces, harm_wrap, harm_written, nothing_left, only_removed, sentences, without
 from .handback import _key as handback_key
 from .handback import edited as handback_edited
 from .handback import messages as handback_messages
 from .handback import notice as handback_notice
 from .handback import wrap as handback_wrap
 from .handback import written as handback_written
-from .review import MAX_WAIT, Review, Reviews
+from .review import HELD as REVIEW_HELD
+from .review import MAX_WAIT, WRITTEN_ACTIONS, Piece, Review, Reviews, TurnReview
+from .review import PIECE_ACTIONS
 from .review import applies as review_applies
+from .review import assist_messages as review_assist_messages
+from .review import assisted as review_assisted
 from .local import DEFAULT_MAX_TOKENS as LOCAL_MAX_TOKENS
 from .local import NO_THINKING
 from .local import keep_alive, thinking_fields, without_thinking
@@ -103,7 +108,8 @@ def _reviewed(decision, wait: int) -> str:
     """How a review ended, for the Logs page."""
     if decision.timed_out:
         return f"no answer in {wait} s: " + ("sent as written" if decision.action == "send" else "kept local")
-    return {"send": "approved", "edit": "edited", "withhold": "withheld", "local": "kept local"}[decision.action]
+    return {"send": "approved", "edit": "edited", "withhold": "withheld", "local": "kept local",
+            "original": "sent the original, as you chose"}[decision.action]
 
 
 # Of a streamed local answer, what is kept to check before it is handed back (handback.py "answer").
@@ -242,7 +248,8 @@ class Proxy:
                  chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
                  gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM,
                  tools=None, guards=None, commands=None, local=None, antigravity_upstream: str = ANTIGRAVITY_UPSTREAM,
-                 local_skills=None, handback=None, review=None, speed=None, handback_harm=None):
+                 local_skills=None, handback=None, review=None, speed=None, handback_harm=None,
+                 harm_instructions=None):
         self.redactor = redactor
         # The checks on a request's texts (guard.Guard): "injection" on tool results, "harm" on what
         # the user typed. Warn-mode checks run after the request is sent, in `_background`.
@@ -260,6 +267,8 @@ class Proxy:
         self.handbacks = Handbacks()
         # The same for the harm check ([guard] local_handback_harm): "stay", or "rewrite" what was typed.
         self._handback_harm = handback_harm if callable(handback_harm) else (lambda: "stay")
+        # The user's own instruction for that rewrite ("": keepmum's), a callable.
+        self._harm_instructions = harm_instructions if callable(harm_instructions) else (lambda: "")
         self.harm_handbacks = Handbacks()
         # Whether the user reviews a summary or rewrite before it goes: a callable giving ([guard]
         # local_handback_review, _wait, _timeout), and the reviews waiting for an answer (review.py).
@@ -272,6 +281,9 @@ class Proxy:
         # "answer" under review: the flagged results whose hand-back waits for the user, by key; a
         # request carrying one waits for the answer (`_wait_for_reviews`).
         self._held: dict[bytes, anyio.Event] = {}
+        # A harm rewrite under way, by what was typed: another request carrying the same text (Codex's
+        # task title comes with the turn) waits for it and takes its outcome, not a review of its own.
+        self._rewriting: dict[bytes, anyio.Lock] = {}
         # (server URL, API) pairs a server answered 404/405/501 for and then answered as Chat
         # Completions: asked that way from then on, until keepmum restarts.
         self._chat_only: set[tuple[str, str]] = set()
@@ -383,17 +395,49 @@ class Proxy:
         if path == "/_keepmum/reviews" and request.method == "GET":
             self.reviews.seen()
             mode, wait, timeout = self._review()
-            return JSONResponse({"reviews": self.reviews.pending(), "mode": mode, "wait": wait, "timeout": timeout})
+            return JSONResponse({"reviews": self.reviews.pending(), "turns": self.reviews.turns(), "mode": mode, "wait": wait,
+                                 "timeout": timeout})
+        if request.method == "POST" and path.count("/") == 4 and path.endswith("/assist"):
+            try:
+                ask = json.loads(await request.body() or b"{}")
+            except ValueError:
+                return api_error(400, "invalid_request_error", "the body must be JSON: {\"text\": …, \"request\": …}")
+            return await self._assist_review(path.split("/")[3], str(ask.get("text") or ""), str(ask.get("request") or ""))
+        if request.method == "POST" and path.count("/") == 4 and path.endswith("/draft"):
+            try:
+                ask = json.loads(await request.body() or b"{}")
+            except ValueError:
+                return api_error(400, "invalid_request_error", "the body must be JSON: {\"piece\": …, \"kind\": …}")
+            return await self._draft_route(path.split("/")[3], ask if isinstance(ask, dict) else {})
         if request.method == "POST" and path.count("/") == 3:
             try:
                 answer = json.loads(await request.body() or b"{}")
             except ValueError:
                 return api_error(400, "invalid_request_error", "the body must be JSON: {\"action\": …}")
-            why = self.reviews.decide(path.rsplit("/", 1)[-1], str(answer.get("action")), answer.get("text"))
+            why = self.reviews.decide(path.rsplit("/", 1)[-1], str(answer.get("action")), answer.get("text"),
+                                      answer.get("pieces"))
             if why:
                 return api_error(404 if why.startswith("no such") else 400, "invalid_request_error", why)
             return JSONResponse({"ok": True})
         return api_error(405, "invalid_request_error", "GET /_keepmum/reviews, or POST /_keepmum/reviews/<id>")
+
+    async def _assist_review(self, rid: str, draft: str, asked: str) -> Response:
+        """POST /_keepmum/reviews/<id>/assist {"text": the box, "request": what to change}: the text as
+        the check's local model changed it, {"text", "model"}. Nothing is decided: the user still
+        sends it, as an edit (checked and noted like any edit). The review waits while it writes."""
+        review = self.reviews.get(rid)
+        if review is None:
+            return api_error(404, "invalid_request_error", "no such review: it was answered, or ran out of time")
+        if not asked.strip():
+            return api_error(400, "invalid_request_error", "say what to change")
+        with self.reviews.assisting(review):
+            got = await self._write_locally("edit", draft, review.source, None, "", "", review.path, check=review.check,
+                                            messages=review_assist_messages(review, draft, asked))
+        if got is None:
+            return api_error(502, "api_error", "no local model answered: see Settings › Local models")
+        out, server = got
+        log.info("%s: the local model %s edited a review's text as the user asked", review.path, server.model)
+        return JSONResponse({"text": review_assisted(out), "model": server.model})
 
     def _local(self, request: Request, path: str) -> Response:
         if path == "/_keepmum/health":
@@ -457,6 +501,7 @@ class Proxy:
 
     async def _scanned(self, request: Request, t: Target) -> Response:
         path, origin = request.url.path, self._origin(request, t)
+        REVIEW_HELD.set((origin[0], time.time()))  # a review of this request ends before its agent gives up
         raw = await request.body()
         if self._observe():
             return await self._observed(request, t, raw)
@@ -474,7 +519,7 @@ class Proxy:
         if self._held:
             await self._wait_for_reviews(body, path)
         original, (body, _) = body, self._handed_back(body, seen)
-        first = handed = None
+        handled: list[tuple[LocalRoute, dict]] = []  # each check's route and what its hand-back did
         while True:
             try:
                 masked, counts, new, found, texts = await anyio.to_thread.run_sync(self._redact, body, t.api, origin)
@@ -487,23 +532,44 @@ class Proxy:
             texts["injection"] = [i for i in texts.get("injection") or [] if not self.handbacks.made(i[1])]
             texts["harm"] = [i for i in texts.get("harm") or [] if not self.harm_handbacks.made(i[1])]
             refused = await self._guarded(texts, path, origin, kind="masked" if new else "clean", api=t.api)
-            if isinstance(refused, LocalRoute):
-                if first is None and (handed := await self._hand_back(refused, texts, path)):
-                    if handed.get("kept"):  # what the local model wrote was flagged: this turn stays local
-                        self.stats.note_guard(refused.entries, handed_back=handed)
-                        return await self._answer_locally(request, t, original, refused, origin, texts)
+            if isinstance(refused, list):
+                if handled:  # scanned again, and what the local model wrote (or the user) was flagged
+                    log.info("%s: the %s check flagged what went in a flagged part's place too; answered locally",
+                             path, refused[0].check)
+                    for route, handed in handled:
+                        self.stats.note_guard(route.entries, handed_back={**handed, "kept": "what the local model wrote was flagged too"})
+                    return await self._answer_locally(request, t, original, refused[0], origin, texts)
+                # Reviewed whole, in one window: every flagged piece, each answered by the user.
+                if self._review()[0] == "turn" and self.reviews.present():
+                    outcome = await self._review_turn(refused, texts, path)
+                    if any("kept" in o for o in outcome.values()):
+                        for route in refused:
+                            self.stats.note_guard(route.entries, handed_back=outcome.get(route.check) or {"kept": "kept local"})
+                        return await self._answer_locally(request, t, original, refused[0], origin, texts)
+                    handled = [(route, outcome.get(route.check) or {}) for route in refused]
                     seen = []
-                    first, (body, _) = refused, self._handed_back(original, seen)
-                    continue  # scanned again: what the local model wrote is checked like any result
-                if first is not None:
-                    log.info("%s: the %s check flagged what the local model wrote too; answered locally", path, refused.check)
-                    self.stats.note_guard(first.entries, handed_back={**handed, "kept": "what the local model wrote was flagged too"})
-                return await self._answer_locally(request, t, original, refused, origin, texts)
+                    body, _ = self._handed_back(original, seen)
+                    continue
+                # Each check hands back its part, what was typed first; the turn goes to the cloud only
+                # if every part can: one kept local keeps the turn local, and nothing more is asked.
+                for route in refused:
+                    handed = await self._hand_back(route, texts, path)
+                    if not handed or handed.get("kept"):
+                        if handed:
+                            self.stats.note_guard(route.entries, handed_back=handed)
+                        for done, was in handled:
+                            self.stats.note_guard(done.entries, handed_back={
+                                **was, "kept": f"the {route.check} check kept the turn on this Mac"})
+                        return await self._answer_locally(request, t, original, route, origin, texts)
+                    handled.append((route, handed))
+                seen = []
+                body, _ = self._handed_back(original, seen)
+                continue  # scanned again: what the local model wrote is checked like any result
             if refused is not None:
                 return refused
             break
-        if first is not None:
-            self.stats.note_guard(first.entries, handed_back=handed)
+        for route, handed in handled:
+            self.stats.note_guard(route.entries, handed_back=handed)
         # The first request to carry a replacement to the cloud is its hand-back on the flow diagram.
         handed_back = next(iter(self.handbacks.first_sent(seen) + self.harm_handbacks.first_sent(seen)), None)
         scan_ms = (time.perf_counter() - started) * 1000
@@ -618,6 +684,7 @@ class Proxy:
             self.redactor.tool_results = []
             self.redactor.user_texts = []
             self.redactor.typed_in = {}
+            self.redactor.aside = False
             self.redactor.shown = {}
             self.redactor.previews = self._previews()
             self.redactor.context = self._context()
@@ -630,9 +697,10 @@ class Proxy:
             self.stats.record_findings(self.redactor.findings, outcome, origin)
             result = (masked, Counter(self.redactor.counts), self.redactor.fresh, found_by(self.redactor.findings),
                       {"injection": self.redactor.tool_results, "harm": self.redactor.user_texts,
-                       "shown": self.redactor.shown, "typed_in": self.redactor.typed_in})
+                       "shown": self.redactor.shown, "typed_in": self.redactor.typed_in,
+                       "aside": self.redactor.aside})
             self.redactor.tool_results, self.redactor.user_texts, self.redactor.shown = [], [], {}
-            self.redactor.typed_in = {}
+            self.redactor.typed_in, self.redactor.aside = {}, False
         if self.tools is not None:
             try:
                 self.tools.observe(definitions(body, api), origin[0] if origin else None,
@@ -642,56 +710,63 @@ class Proxy:
         return result
 
     async def _guarded(self, texts: dict, path: str, origin, observing: bool = False, kind: str = "clean",
-                       api: str | None = None) -> Response | LocalRoute | None:
-        """Run each guard on its texts: None to send the request, or the refusal. Block mode checks
-        before the request goes; warn mode, and every mode while observing, checks after it is sent,
-        so a warning adds no delay. `kind` is how the request goes out (masked, clean, observed): a
-        warning carries it, with an id of the request, so the flow diagram moves the request to Flagged."""
+                       api: str | None = None) -> Response | list[LocalRoute] | None:
+        """Run each guard on its texts: None to send the request, the refusal, or where it goes instead.
+        Block and local mode check before the request goes, and every such check runs, whatever another
+        found: text is scored once (a text seen before is not scored again), so a check skipped now would
+        let what it would have flagged through on the next try. A check in block mode that flags it, or
+        one that fails, refuses the request; else each check in local mode that flags it gives its route
+        to the local model (local.py), the harm check's first: what was typed kept local, no result needs
+        handing back. Warn mode, and every mode while observing, checks after it is sent, so a warning
+        adds no delay. `kind` is how the request goes out (masked, clean, observed): a warning carries it,
+        with an id of the request, so the flow diagram moves the request to Flagged."""
         request = secrets.token_hex(6)
+        found, failed = [], None
         for guard in self.guards:
             items = texts.get(guard.name) or []
             mode = guard.mode
             if mode == "off" or not items:
                 continue
             if mode in ("block", "local") and not observing:
-                refused = await self._check_now(guard, items, path, origin, api, texts)
-                if refused is not None:
-                    return refused
+                try:
+                    hits = await anyio.to_thread.run_sync(guard.check, items, True)
+                except Exception as e:  # it cannot vouch for what it did not check
+                    log.error("blocked %s: %s check failed (%s)", path, guard.name, type(e).__name__)
+                    failed = failed or api_error(500, "api_error", f"the {guard.name} check failed, so this request was not "
+                                                 f"sent (`keepmum guard {guard.name} warn` sends such requests with a warning)")
+                    continue
+                if hits:
+                    found.append((guard, items, hits))
             else:
                 self._later(self._check_later(guard, items, path, origin, kind, request, texts))
-        return None
-
-    async def _check_now(self, guard, items, path: str, origin, api: str | None = None,
-                         texts: dict | None = None) -> Response | LocalRoute | None:
-        """Block mode: a hit, or a text flagged before and still in the conversation, refuses the
-        request. A guard that fails refuses it too: it cannot vouch for what it did not check.
-        Local mode: such a request goes to the local model instead (local.py), if its API is one
-        the local server speaks; otherwise it is refused, as in block mode."""
-        try:
-            hits = await anyio.to_thread.run_sync(guard.check, items, True)
-        except Exception as e:
-            log.error("blocked %s: %s check failed (%s)", path, guard.name, type(e).__name__)
-            self._record(path, "blocked", 500, origin=origin)
-            return api_error(500, "api_error", f"the {guard.name} check failed, so this request was not sent "
-                             f"(`keepmum guard {guard.name} warn` sends such requests with a warning)")
-        if not hits:
+        if not found and failed is None:
             return None
-        if guard.mode == "local" and api in APIS_LOCAL:
-            entries = self._record_hits(guard, hits, "local", path, origin, self._shown(hits, items, texts))
-            return LocalRoute(guard.name, hits, entries)
-        self._record_hits(guard, hits, "blocked", path, origin, self._shown(hits, items, texts))
-        self._record(path, "blocked", 403, origin=origin, guard=guard_summary(hits, "blocked"))
-        if guard.name == "harm":
+        aside = bool((texts or {}).get("aside"))  # Codex's task title: its turn has the Logs row
+        if failed is None and api in APIS_LOCAL and all(g.mode == "local" for g, _, _ in found):
+            routes = [LocalRoute(g.name, hits, self._record_hits(g, hits, "local", path, origin, self._shown(hits, items, texts), aside))
+                      for g, items, hits in found]
+            return sorted(routes, key=lambda r: r.check != "harm")
+        for g, items, hits in found:
+            self._record_hits(g, hits, "blocked", path, origin, self._shown(hits, items, texts), aside)
+        if failed is not None:
+            self._record(path, "blocked", 500, origin=origin)
+            return failed
+        self._record(path, "blocked", 403, origin=origin,
+                     guard=[s for _, _, hits in found for s in guard_summary(hits, "blocked")])
+        return api_error(403, "permission_error", " Also, ".join(self._refusal(g.name, hits) for g, _, hits in found))
+
+    @staticmethod
+    def _refusal(check: str, hits: list[dict]) -> str:
+        """What the agent is told when a check refuses its request."""
+        if check == "harm":
             cats = sorted({c for h in hits for c in h.get("categories") or []})
-            return api_error(403, "permission_error",
-                             "the harm check flagged what you typed" + (f" ({', '.join(cats)})" if cats else "")
-                             + ", so this request was not sent. Rephrase it (rewind, or /clear), or run "
-                             "`keepmum guard harm warn` to send such requests with a warning.")
+            return ("the harm check flagged what you typed" + (f" ({', '.join(cats)})" if cats else "")
+                    + ", so this request was not sent. Rephrase it (rewind, or /clear), or run "
+                    "`keepmum guard harm warn` to send such requests with a warning.")
         sources = ", ".join(sorted({h["source"] or "a tool" for h in hits}))
-        return api_error(403, "permission_error",
-                         f"the injection check found a likely prompt injection in what {sources} returned, so this "
-                         "request was not sent. Remove that result from the conversation (rewind, or /clear), or run "
-                         "`keepmum guard injection warn` to send such requests with a warning.")
+        return (f"the injection check found a likely prompt injection in what {sources} returned, so this "
+                "request was not sent. Remove that result from the conversation (rewind, or /clear), or run "
+                "`keepmum guard injection warn` to send such requests with a warning.")
 
     def _handed_back(self, body: dict, seen: list | None = None) -> tuple[dict, int]:
         """The body with the results handed back so far replaced: while the injection check is in
@@ -699,10 +774,11 @@ class Proxy:
         `seen` gets the replaced results' keys (Handbacks.first_sent)."""
         guard = next((g for g in self.guards if g.name == "injection"), None)
         n = 0
-        if guard is not None and guard.mode == "local" and self._handback()[0] != "stay":
+        turn = self._review()[0] == "turn"  # sent on from a turn's review, whatever the defaults say
+        if guard is not None and guard.mode == "local" and (self._handback()[0] != "stay" or turn):
             body, n = self.handbacks.apply(body, seen)
         harm = next((g for g in self.guards if g.name == "harm"), None)
-        if harm is not None and harm.mode == "local" and self._handback_harm() == "rewrite":
+        if harm is not None and harm.mode == "local" and (self._handback_harm() == "rewrite" or turn):
             body, m = self.harm_handbacks.apply(body, seen)
             n += m
         return body, n
@@ -751,7 +827,9 @@ class Proxy:
                         self.handbacks.keep_local(t)
                     return {"strategy": strategy, "model": why["too_long"], "review": reviews[-1], "too_long": True,
                             "kept": "you kept it on this Mac" if not decision.timed_out else f"no answer in {wait} s"}
-                if decision.action == "edit":
+                if decision.action == "original":  # the user's call, after a warning: the result as it was
+                    done.append((text, text))
+                elif decision.action == "edit":
                     if await self._edit_flagged(guard, decision.text):
                         reviews[-1] = "edited; the check flagged the edit, sent as you approved it"
                     done.append((text, handback_edited(source, decision.text, read=False)))
@@ -787,6 +865,9 @@ class Proxy:
                 if decision.action == "withhold":
                     done.append((text, handback_notice("withhold", source)))
                     continue
+                if decision.action == "original":  # the user's call, after a warning: the result as it was
+                    done.append((text, text))
+                    continue
                 if decision.action == "edit":
                     out = decision.text
                     if await self._edit_flagged(guard, out):  # the user's own text: noted if flagged, theirs to send
@@ -805,10 +886,12 @@ class Proxy:
     async def _hand_back_harm(self, route: LocalRoute, texts: dict, path: str) -> dict | None:
         """[guard] local_handback_harm "rewrite" (handback.py): what the user typed, with what the harm
         check flagged taken out by the local model, in place of what they typed, so the turn can go to
-        the cloud. Removal only: what the local model wrote is checked by the harm check, and if it is
-        still flagged, or nothing is left, the turn stays local. No skills go with it (see below). Under review ([guard]
-        local_handback_review), a rewrite the check passed waits for the user first (review.py).
-        None leaves it to the local model."""
+        the cloud. Removal only: what the local model wrote is checked by the harm check. Under review
+        ([guard] local_handback_review) the user decides on every rewrite, one that failed a check too,
+        told why, and on a message the local model wrote no rewrite of (review.py); without, a rewrite
+        still flagged, one that changed words, or nothing left keeps the turn local. No skills go with it
+        (see below). A text is rewritten and reviewed once: another request carrying it (Codex's task
+        title comes with the turn) waits for that and goes the same way. None leaves it to the local model."""
         if self._handback_harm() != "rewrite":
             return None
         flagged = self._flagged_texts(route, texts)
@@ -816,19 +899,266 @@ class Proxy:
         if not flagged or any(self.harm_handbacks.kept(text) for text in flagged):
             return None
         guard = next((g for g in self.guards if g.name == "harm"), None)
-        done, server, reviews = [], None, []
+        done, server, reviews, again = [], None, [], 0
         for text in flagged:
             full = whole.get(text)
             if not full or text not in full:  # what was typed is not one piece of its message: kept local
                 return None
-            # keepmum's instruction alone, no skills: a skill for answering or for tool results can turn
-            # the model against the user's own task. Qwen3.6 35B, given the jailbreak-then-task message of
-            # Nov 15, 2026 with keepmum-local-turns after the instruction, kept the jailbreak and took the
-            # task out in 2 of 4 runs; with the instruction alone, 1 miss in 30 over five such messages.
-            got = await self._write_locally("rewrite", text, None, None, "", "", path, check="harm")
-            if got is None:
+            async with self._one_rewrite(text):
+                if self.harm_handbacks.kept(text):
+                    return None  # kept local while this request waited on another carrying it
+                if (mine := self.harm_handbacks.went(text)) is not None:
+                    done.append((full, full.replace(text, mine, 1), mine))  # what went for it before
+                    again += 1
+                    continue
+                got = await self._rewrite_typed(text, full, flagged, guard, path, reviews)
+                if not isinstance(got, tuple):
+                    return got
+                server = got[1] or server
+                done.append(got[0])
+        for full, replacement, mine in done:
+            self.harm_handbacks.add(full, replacement, "rewrite")
+            self.harm_handbacks.mark_made(mine)
+        if again == len(done):
+            log.info("%s: what was typed went on as its rewrite did before", path)
+            return {"strategy": "rewrite", "review": "as before, for the same text"}
+        if server is None:
+            log.info("%s: what was typed went on as the user wrote it in review", path)
+            return {"strategy": "rewrite", **({"review": "; ".join(reviews)} if reviews else {})}
+        log.info("%s: the local model %s at %s took the flagged part out of what was typed, and it went on as checked or reviewed",
+                 path, server.model, server.url)
+        return {"strategy": "rewrite", "model": server.model, "url": server.url,
+                **({"review": "; ".join(reviews)} if reviews else {})}
+
+    async def _review_turn(self, routes: list, texts: dict, path: str) -> dict[str, dict]:
+        """[guard] local_handback_review "turn" (review.py): the turn's flagged pieces, what was typed and
+        each tool result, in one review. The local model drafts each piece's default meanwhile (checked
+        as a hand-back is); the user answers each (rewrite or summary, the original, or removed) and
+        sends the turn on, or keeps it here. What each check's part came to, for the Logs page, by
+        check; one with "kept" keeps the turn on this Mac."""
+        whole = (texts or {}).get("typed_in") or {}
+        strategy, instructions = self._handback()
+        tool_default = {"summary": "summary", "withhold": "remove", "answer": "remove"}.get(strategy, "rewrite")
+        pieces: list[Piece] = []
+        for route in routes:
+            for text, source in self._flagged_texts(route, texts).items():
+                if route.check == "harm":
+                    full = whole.get(text)
+                    if not full or text not in full:  # what was typed is not one piece of its message
+                        return {"harm": {"strategy": "turn", "kept": "what was typed is not one piece of its message"}}
+                    pieces.append(Piece("", "harm", text, whole=full))
+                else:
+                    pieces.append(Piece("", "injection", text, source=source, default=tool_default))
+        stores = {"harm": self.harm_handbacks, "injection": self.handbacks}
+        async with contextlib.AsyncExitStack() as stack:
+            # One review of a typed text at a time: Codex's task-title request carries it too, and waits.
+            for text in sorted({p.text for p in pieces if p.check == "harm"}, key=handback_key):
+                await stack.enter_async_context(self._one_rewrite(text))
+            if any(stores[p.check].kept(p.text) for p in pieces):
+                return {r.check: {"strategy": "turn", "kept": "you kept it on this Mac"} for r in routes}
+            again = [p for p in pieces if p.check == "harm" and self.harm_handbacks.went(p.text) is not None]
+            for p in again:  # answered with the request that first carried it
+                mine = self.harm_handbacks.went(p.text)
+                self.harm_handbacks.add(p.whole, p.whole.replace(p.text, mine, 1), "rewrite")
+                self.harm_handbacks.mark_made(mine)
+            pieces = [p for p in pieces if p not in again]
+            if not pieces:
+                log.info("%s: what was typed went on as it did before", path)
+                return {r.check: {"strategy": "turn", "review": "as before, for the same text"} for r in routes}
+            for i, p in enumerate(pieces, 1):
+                p.id = str(i)
+            _, wait, timeout = self._review()
+            checks = {p.check for p in pieces}
+            send = ("harm" not in checks or self._handback_harm() == "rewrite") and ("injection" not in checks or strategy != "stay")
+            turn = TurnReview(path, pieces, wait, send=send, context=(texts.get("harm") or [(None, None, None)])[-1][1])
+            log.info("%s: holding the turn for the user's review in one window, %d flagged piece%s (up to %d s)", path,
+                     len(pieces), "" if len(pieces) == 1 else "s", wait)
+            async with anyio.create_task_group() as tg:
+                for p in pieces:
+                    if p.default in WRITTEN_ACTIONS:
+                        tg.start_soon(self._draft, turn, p, p.default)
+                decision = await self.reviews.ask_turn(turn, timeout)
+                tg.cancel_scope.cancel()
+            said = f"no answer in {wait} s: " if decision.timed_out else ""
+            if decision.action == "local":
+                for p in pieces:
+                    stores[p.check].keep_local(p.text)
+                # What each piece's draft had come to, for the Logs page: the user may ask why it stayed.
+                drafts = "; ".join(f"{p.source or 'what you typed'}: " + (
+                    f"{p.kind} {'ready' if p.failed is None else 'did not pass'}" if p.draft is not None
+                    else p.failed or "no draft") for p in pieces)
+                log.info("%s: the turn was kept on this Mac (%s; %s)", path, said.rstrip(": ") or "you chose it", drafts)
+                kept = "you kept it on this Mac" if not decision.timed_out else f"no answer in {wait} s"
+                return {c: {"strategy": "turn", "review": f"{said}kept local; {drafts}", "kept": kept}
+                        for c in checks | {r.check for r in routes}}
+            guards = {g.name: g for g in self.guards}
+            out: dict[str, dict] = {}
+            for p in pieces:
+                a = decision.pieces[p.id]
+                action, text = a["action"], a["text"]
+                note = {"original": "the original, as you chose", "remove": "removed"}.get(action, action + (" (yours)" if a["edited"] else ""))
+                if a["edited"] and await self._edit_flagged(guards.get(p.check), text):
+                    note += "; the check flagged your text, sent as you approved it"
+                if p.check == "harm":
+                    mine = p.text if action == "original" else harm_wrap(REMOVED if action == "remove" else text)
+                    self.harm_handbacks.went(p.text, mine)
+                    self.harm_handbacks.add(p.whole, p.whole.replace(p.text, mine, 1), "original" if action == "original" else "rewrite")
+                    self.harm_handbacks.mark_made(mine)
+                else:
+                    replacement = (p.text if action == "original" else handback_notice("withhold", p.source) if action == "remove"
+                                   else handback_wrap(action, p.source, text, custom=a["edited"] or bool(instructions)))
+                    self.handbacks.add(p.text, replacement, {"remove": "withhold"}.get(action, action))
+                was = out.setdefault(p.check, {"strategy": {"remove": "withhold"}.get(action, action), "review": said + "reviewed with the turn"})
+                was["review"] += f"; {p.source or 'what you typed'}: {note}"
+                if p.model:
+                    was.setdefault("model", p.model)
+            log.info("%s: the turn goes on as reviewed: %s", path, "; ".join(o["review"] for o in out.values()))
+            return out
+
+    async def _draft(self, turn: TurnReview, piece: Piece, kind: str, request: str | None = None,
+                     base: str | None = None) -> None:
+        """A `kind` (rewrite or summary) of one piece of a turn under review, from its check's local
+        model, checked as a hand-back is; with `request`, `base` (the user's box) changed as they ask,
+        and checked the same. Only the latest asked for lands. The turn waits while it is written."""
+        piece.asked += 1
+        mine = piece.asked
+        piece.drafting = True
+        try:
+            with self.reviews.assisting(turn):
+                got = await self._write_piece(turn, piece, kind, request, base)
+        finally:
+            if piece.asked == mine:
+                piece.drafting = False
+        if piece.asked == mine:
+            piece.draft, piece.kind, piece.failed, piece.model = got
+
+    async def _write_piece(self, turn: TurnReview, piece: Piece, kind: str, request: str | None, base: str | None):
+        """(text or None, kind, why it did not pass or None, model) for `_draft`. A second draft of the
+        same kind (Write Again) is sampled: at temperature 0 the harm rewrite would be the same again."""
+        harm = piece.check == "harm"
+        path = turn.path
+        skills = self.local_skills("harm_handback" if harm else "handback") if callable(self.local_skills) else []
+        skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
+        msgs = review_assist_messages(piece, base or "", request) if request else None
+        why: dict = {}
+        again = piece.kind == kind and piece.draft is not None and not request
+        if harm:
+            got = await self._write_locally("rewrite", piece.text, None, None, self._harm_instructions(), skills, path,
+                                            check="harm", why=why, messages=msgs, temperature=0.7 if again else None)
+        else:
+            got = await self._write_locally(kind, piece.text, piece.source, turn.context, self._handback()[1], skills, path,
+                                            why=why, messages=msgs)
+        if got is None:
+            if harm and not request:  # no local model: keepmum's own removal, if it passes
+                guard = next((g for g in self.guards if g.name == "harm"), None)
+                if (mine := await self._by_sentence(piece.text, guard)) is not None:
+                    return mine, kind, None, "keepmum, sentence by sentence"
+            failed = (f"It is {len(piece.text):,} characters, more than the local model ({why['too_long']}) can read at once."
+                      if why.get("too_long") else f"No local model wrote a {kind}.")
+            log.info("%s: no %s for the turn's review: %s", path, kind, failed)
+            return None, kind, failed, why.get("too_long") or ""
+        out, server = got
+        out = review_assisted(out) if request else out
+        guard = next((g for g in self.guards if g.name == piece.check), None)
+        try:
+            if harm:
+                out = harm_written(out)
+                failed = ("The local model changed words in it, not only took the flagged part out." if not only_removed(piece.text, out)
+                          else "Nothing was left once the flagged part was out." if nothing_left(out) else None)
+                if failed is None and guard:
+                    hits = await anyio.to_thread.run_sync(guard.check, [(None, x, True) for x in harm_pieces(out)], True)
+                    failed = "The harm check flagged the rewrite too." if hits else None
+                # The user asked for this change: theirs to judge. Otherwise, keepmum's own removal.
+                if failed and not request and (mine := await self._by_sentence(piece.text, guard)) is not None:
+                    log.info("%s: the local model's rewrite did not pass (%s); keepmum took out the sentences the harm check "
+                             "flags", path, failed)
+                    return mine, kind, None, f"{server.model}, then keepmum sentence by sentence"
+                log.info("%s: a rewrite of what was typed for the turn's review: %s", path, failed or "passed")
+                return out, kind, failed, server.model
+            hits = await anyio.to_thread.run_sync(guard.check, [("the local model", out, True)], True) if guard else []
+            log.info("%s: a %s of a tool result for the turn's review: %s", path, kind, "flagged" if hits else "passed")
+            return out, kind, "The injection check flagged what the local model wrote too." if hits else None, server.model
+        except Exception as e:
+            log.warning("%s: a draft for the turn's review was not checked (%s)", path, type(e).__name__)
+            return out, kind, "keepmum could not check it.", server.model
+
+    async def _by_sentence(self, text: str, guard) -> str | None:
+        """keepmum's own removal, for when the local model's rewrite of what was typed fails a check:
+        each sentence of it scored by the harm check on its own, the flagged ones taken out whole, the
+        rest as typed. Then checked as any rewrite is: as a whole and sentence by sentence. None when
+        that does not pass either: one sentence, none flagged alone, all of them, or the rest flagged."""
+        parts = sentences(text)
+        if guard is None or len(parts) < 2:
+            return None
+        try:
+            hits = await anyio.to_thread.run_sync(guard.check, [(None, p.strip(), True) for p in parts], True)
+            flagged = {h["at"] for h in hits if isinstance(h.get("at"), int)}
+            if not flagged or len(flagged) == len(parts):
                 return None
+            out = without(parts, flagged)
+            if nothing_left(out) or not only_removed(text, out):
+                return None
+            still = await anyio.to_thread.run_sync(guard.check, [(None, x, True) for x in harm_pieces(out)], True)
+        except Exception as e:
+            log.warning("keepmum's own rewrite of what was typed was not checked (%s)", type(e).__name__)
+            return None
+        return None if still else out
+
+    async def _draft_route(self, rid: str, ask: dict) -> Response:
+        """POST /_keepmum/reviews/<id>/draft {"piece", "kind": rewrite | summary, "request"?, "text"?}: a
+        new draft of one piece of a turn under review, or, with "request", the user's "text" changed as
+        they ask. The piece as it is then (review.Piece.public)."""
+        turn = self.reviews.get_turn(rid)
+        piece = turn.piece(str(ask.get("piece"))) if turn else None
+        if piece is None:
+            return api_error(404, "invalid_request_error", "no such review or piece: it was answered, or ran out of time")
+        kind = ask.get("kind") or ("rewrite" if piece.check == "harm" else piece.default)
+        if kind not in WRITTEN_ACTIONS or kind not in PIECE_ACTIONS[piece.check]:
+            return api_error(400, "invalid_request_error", f"kind must be {' or '.join(a for a in WRITTEN_ACTIONS if a in PIECE_ACTIONS[piece.check])}")
+        request = str(ask.get("request") or "").strip() or None
+        await self._draft(turn, piece, kind, request, str(ask.get("text") or "") if request else None)
+        return JSONResponse(piece.public())
+
+    @contextlib.asynccontextmanager
+    async def _one_rewrite(self, text: str):
+        """One harm rewrite of a text at a time: a request that brings it while another's rewrite or
+        review is under way waits for that (`_rewriting`)."""
+        key = handback_key(text)
+        lock = self._rewriting.setdefault(key, anyio.Lock())
+        try:
+            async with lock:
+                yield
+        finally:
+            if not lock.locked() and not lock.statistics().tasks_waiting:
+                self._rewriting.pop(key, None)
+
+    async def _rewrite_typed(self, text: str, full: str, flagged, guard, path: str, reviews: list):
+        """The rewrite of one flagged text, reviewed if review is on: ((full, replacement, mine),
+        server or None) to send, or what `_hand_back_harm` returns to keep the turn local."""
+        server = None
+        # The user's instruction, or keepmum's, and only the skills the user picked for this place
+        # ("harm_handback"): a skill for answering or for tool results can turn the model against the
+        # user's own task. Qwen3.6 35B, given the jailbreak-then-task message of Nov 15, 2026 with
+        # keepmum-local-turns after the instruction, kept the jailbreak and took the task out in 2 of 4
+        # runs; with the instruction alone, 1 miss in 30 over five such messages. Whatever either says,
+        # the rewrite is checked below.
+        skills = self.local_skills("harm_handback") if callable(self.local_skills) else []
+        skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
+        why: dict = {}
+        got = await self._write_locally("rewrite", text, None, None, self._harm_instructions(), skills, path,
+                                        check="harm", why=why)
+        mode, wait, timeout = self._review()
+        asking = review_applies(mode, "rewrite") and self.reviews.present()
+        if got is None:
+            if not asking:
+                return None
+            model, out, sendable = why.get("too_long") or "none answered", "", False
+            failed = (f"It is {len(text):,} characters, more than the local model ({why['too_long']}) can read at once, "
+                      "so it wrote no rewrite." if why.get("too_long") else "No local model wrote a rewrite.")
+            kept = "no rewrite"
+        else:
             out, server = got
+            model = server.model
             out = harm_written(out)
             changed = not only_removed(text, out)
             try:
@@ -837,39 +1167,52 @@ class Proxy:
             except Exception as e:
                 log.warning("%s: the local rewrite was not checked (%s); answered locally", path, type(e).__name__)
                 return None
-            if changed or hits or nothing_left(out):
+            empty = nothing_left(out)
+            if (changed or hits or empty) and (mine := await self._by_sentence(text, guard)) is not None:
+                log.info("%s: the local model's rewrite did not pass; keepmum took out the sentences the harm check flags", path)
+                out, changed, hits, empty = mine, False, [], False
+            kept = ("the rewrite changed what was typed, not only took a part out" if changed
+                    else "the harm check flagged the rewrite too" if hits
+                    else "nothing was left once the flagged part was out" if empty else None)
+            failed = {"the rewrite changed what was typed, not only took a part out":
+                      "The local model changed words in it, not only took the flagged part out.",
+                      "the harm check flagged the rewrite too": "The harm check flagged the rewrite too.",
+                      "nothing was left once the flagged part was out": "Nothing was left once the flagged part was out."}.get(kept)
+            sendable = not empty
+            if kept and not asking:
                 for t in flagged:
                     self.harm_handbacks.keep_local(t)
-                why = ("the rewrite changed what was typed, not only took a part out" if changed
-                       else "the harm check flagged the rewrite too" if hits
-                       else "nothing was left once the flagged part was out")
-                log.info("%s: %s; answered locally", path, why)
-                return {"strategy": "rewrite", "model": server.model, "url": server.url, "kept": why}
-            mode, wait, timeout = self._review()
-            if review_applies(mode, "rewrite") and self.reviews.present():
-                log.info("%s: holding the rewrite of what was typed for the user's review (up to %d s)", path, wait)
-                decision = await self.reviews.ask(Review("rewrite", None, path, text, out, server.model, wait,
-                                                         check="harm"), timeout)
-                reviews.append(_reviewed(decision, wait))
-                if decision.action not in ("send", "edit"):  # local, or no answer under "stay"
-                    for t in flagged:
-                        self.harm_handbacks.keep_local(t)
-                    log.info("%s: the rewrite of what was typed was kept on this Mac (%s)", path, reviews[-1])
-                    return {"strategy": "rewrite", "model": server.model, "url": server.url, "review": reviews[-1],
-                            "kept": "you kept it on this Mac" if not decision.timed_out else f"no answer in {wait} s"}
-                if decision.action == "edit":
-                    out = decision.text
-                    if await self._edit_flagged(guard, out):  # the user's own words: noted if flagged, theirs to send
-                        reviews[-1] = "edited; the check flagged the edit, sent as you approved it"
-            mine = harm_wrap(out)
-            done.append((full, full.replace(text, mine, 1), mine))
-        for full, replacement, mine in done:
-            self.harm_handbacks.add(full, replacement, "rewrite")
-            self.harm_handbacks.mark_made(mine)
-        log.info("%s: the local model %s at %s took the flagged part out of what was typed, and the harm check passed the rest", path,
-                 server.model, server.url)
-        return {"strategy": "rewrite", "model": server.model, "url": server.url,
-                **({"review": "; ".join(reviews)} if reviews else {})}
+                log.info("%s: %s; answered locally", path, kept)
+                return {"strategy": "rewrite", "model": model, "url": server.url, "kept": kept}
+        if asking:
+            log.info("%s: holding the rewrite of what was typed for the user's review (up to %d s)%s", path, wait,
+                     f"; {kept}" if kept else "")
+            decision = await self.reviews.ask(Review("rewrite", None, path, text, out, model, wait, reason=failed,
+                                                     check="harm", sendable=sendable), timeout)
+            reviews.append(_reviewed(decision, wait))
+            # No answer under "send" sends it as written, but only a rewrite that passed: never one
+            # that failed a check, or nothing at all, without the user's say.
+            if decision.timed_out and decision.action == "send" and kept:
+                reviews[-1] = f"no answer in {wait} s: kept local, since {kept}"
+            if decision.action == "original":  # the user's call, after a warning: what they typed, as typed
+                log.info("%s: what was typed went on as typed, as the user chose in review", path)
+                mine = self.harm_handbacks.went(text, text)
+                return (full, full, mine), server
+            if decision.action not in ("send", "edit") or (decision.timed_out and kept) or not (sendable or decision.action == "edit"):
+                for t in flagged:
+                    self.harm_handbacks.keep_local(t)
+                log.info("%s: the rewrite of what was typed was kept on this Mac (%s)", path, reviews[-1])
+                return {"strategy": "rewrite", "model": model, **({"url": server.url} if server else {}),
+                        "review": reviews[-1],
+                        "kept": "you kept it on this Mac" if not decision.timed_out else f"no answer in {wait} s"}
+            if decision.action == "edit":
+                out = decision.text
+                if await self._edit_flagged(guard, out):  # the user's own words: noted if flagged, theirs to send
+                    reviews[-1] = "edited; the check flagged the edit, sent as you approved it"
+            elif kept:
+                reviews[-1] = f"{reviews[-1]}, though {kept}"
+        mine = self.harm_handbacks.went(text, harm_wrap(out))
+        return (full, full.replace(text, mine, 1), mine), server
 
     @staticmethod
     def _flagged_texts(route: LocalRoute, texts: dict | None) -> dict[str, str | None]:
@@ -880,7 +1223,8 @@ class Proxy:
 
     async def _write_locally(self, strategy: str, text: str, source: str | None, prompt: str | None,
                              instructions: str, skills: str, path: str, check: str = "injection",
-                             why: dict | None = None) -> tuple[str, object] | None:
+                             why: dict | None = None, messages: list | None = None,
+                             temperature: float | None = None) -> tuple[str, object] | None:
         """A summary or rewrite of a flagged result (or, for the harm check, of what was typed) from the
         check's local servers, the first that writes one, in Chat Completions (every local server speaks
         it), with no tools."""
@@ -888,12 +1232,14 @@ class Proxy:
         failures = []
         for server in servers:
             data = {"model": server.model, "stream": False, "max_tokens": LOCAL_MAX_TOKENS,
-                    "messages": (harm_messages(text, skills) if check == "harm"
-                                 else handback_messages(strategy, text, source, prompt, instructions, skills)), **NO_THINKING,
+                    "messages": messages or (harm_messages(text, skills, instructions) if check == "harm"
+                                             else handback_messages(strategy, text, source, prompt, instructions, skills)),
+                    **NO_THINKING,
                     # Taking words out of what was typed has one right answer: the model's most likely one. Sampled,
                     # Qwen3.6 35B kept the jailbreak about 1 run in 10, and the turn stayed local; at 0, 24 of 24
                     # right over eight messages (Nov 15, 2026).
-                    **({"temperature": 0} if check == "harm" else {})}
+                    **({"temperature": temperature} if temperature is not None
+                       else {"temperature": 0} if check == "harm" and messages is None else {})}
             try:
                 resp = await self.client.post(server.url + LOCAL_CHAT_PATH, json=data)
                 # A server that refuses the fields that turn thinking off: ask again without them. Not
@@ -970,7 +1316,9 @@ class Proxy:
                         "kept": "you kept it on this Mac" if not decision.timed_out else f"no answer in {wait} s"})
                     return
                 replacement = notice
-                if decision.action == "edit":
+                if decision.action == "original":  # the user's call, after a warning: the result as it was
+                    replacement = text
+                elif decision.action == "edit":
                     replacement = handback_edited(source, decision.text)
                     if await self._edit_flagged(guard, decision.text):
                         reviews[-1] = "edited; the check flagged the edit, sent as you approved it"
@@ -1236,11 +1584,15 @@ class Proxy:
         return out
 
     def _record_hits(self, guard, hits: list[dict], action: str, path: str, origin,
-                     shown: list[tuple[str | None, str | None]] | None = None) -> list[dict]:
+                     shown: list[tuple[str | None, str | None]] | None = None, aside: bool = False) -> list[dict]:
         """Log, count and audit hits: the check, source, score, length and categories, never the text.
         `shown`, per hit, is its text and the user's prompt for the Logs page alone. Returns the
-        Logs page's entries for them."""
-        for h in hits:
+        Logs page's entries for them. A request an agent makes aside the turn (harm.aside: Codex's task
+        title, with the prompt inside) is audited, but its turn has the warning and the Logs page's row."""
+        if aside:
+            log.info("%s: the agent's own request for a task title carries what the %s check flagged in its turn: %s",
+                     path, guard.name, "sent to the local model instead" if action == "local" else "not sent")
+        for h in hits if not aside else ():
             cats = ", ".join(h.get("categories") or []) or "no category"
             what = (f"what the user typed ({cats})" if guard.name == "harm"
                     else f"a {h['source']} command in the reply ({cats})" if guard.name == "commands"
@@ -1254,7 +1606,7 @@ class Proxy:
         about = {"mode": guard.mode, "path": path,
                  "model": getattr(getattr(guard, "model", None), "label", None) or getattr(guard, "label", None),
                  "threshold": round(threshold, 3) if isinstance(threshold, (int, float)) else None}
-        entries = self.stats.record_guard(hits, action, origin, about, shown)
+        entries = self.stats.record_guard(hits, action, origin, about, shown) if not aside else []
         if self.audit is not None:
             client, provider = origin or (None, None)
             self.audit.append("guard", client=client, provider=provider, path=path, check=guard.name, action=action,

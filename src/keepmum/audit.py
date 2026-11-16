@@ -258,6 +258,7 @@ def config_state(cfg) -> dict:
         "gateways": sorted(f"{name} = {url}" for name, url in cfg.gateways.items()),
         "destinations": sorted(f"{rule} = {h}" for rule, hosts in cfg.destinations.items() for h in hosts),
         "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
+        "log_keep_days": cfg.log_keep_days,
         "guard": cfg.guard_injection, "injection_threshold": cfg.guard_injection_threshold, "harm": cfg.guard_harm,
         "harm_sensitivity": cfg.guard_harm_sensitivity, "harm_model": cfg.guard_harm_model,
         "commands": cfg.guard_commands,
@@ -271,8 +272,14 @@ def config_state(cfg) -> dict:
         "local_handback_harm": cfg.guard_local_handback_harm,
         "local_handback_review": (f"{cfg.guard_local_handback_review}, {cfg.guard_local_handback_review_wait} s, "
                                   f"then {cfg.guard_local_handback_review_timeout}"),
+        # The instruction in use: the user's own (as a fingerprint), or "" for keepmum's, so turning
+        # one's own off and on is a change too.
         "local_handback_instructions": (_fingerprint("string", cfg.guard_local_handback_instructions)
-                                        if cfg.guard_local_handback_instructions else ""),
+                                        if cfg.guard_local_handback_instructions and not cfg.guard_local_handback_instructions_off
+                                        else ""),
+        "local_handback_harm_instructions": (_fingerprint("string", cfg.guard_local_handback_harm_instructions)
+                                             if cfg.guard_local_handback_harm_instructions
+                                             and not cfg.guard_local_handback_harm_instructions_off else ""),
     }
 
 
@@ -284,11 +291,12 @@ _SETTINGS = {
     "pass": ("detect.pass", "added"), "rules_off": ("rules.off", "added"), "mask_rules": ("rules.mask", "removed"),
     "allow_strings": ("allowlist.strings", "added"), "allow_patterns": ("allowlist.patterns", "added"),
     "upstream": ("server.upstream", "any"), "gateways": ("gateways", "added"), "destinations": ("destinations", "added"), "previews": ("log.previews", None), "context": ("log.context", None),
+    "log_keep_days": ("log.keep_days", None),
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
-_ADDED_LATER = {"context", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers", "local_skills",
+_ADDED_LATER = {"context", "log_keep_days", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers", "local_skills",
                 "injection_threshold", "harm_sensitivity", "local_handback", "local_handback_instructions",
-                "local_handback_review", "local_handback_harm"}
+                "local_handback_review", "local_handback_harm", "local_handback_harm_instructions"}
 # Local is below block: a flagged request is answered (on this Mac) rather than refused.
 _GUARD_RANK = {"off": 0, "warn": 1, "local": 2, "block": 3}
 # After a local turn (handback.py): how little of a flagged result reaches the cloud. A rewrite keeps
@@ -341,7 +349,7 @@ def config_changes(old: dict, new: dict) -> list[dict]:
     if "local_handback_review" in old and a != b:
         # Reviewing a hand-back before it goes: less of it (off, or rewrites only after all), or sending
         # on no answer, lets more of the local model's text reach the cloud unseen.
-        rank = {"all": 2, "rewrite": 1, "off": 0}
+        rank = {"turn": 2, "all": 2, "rewrite": 1, "off": 0}
         mode = lambda s: (s or "off").split(",")[0]
         out.append({"setting": "guard.local_handback_review", "from": a, "to": b,
                     "weakens": rank.get(mode(b), 0) < rank.get(mode(a), 0) or (str(b).endswith("send") and not str(a).endswith("send"))})
@@ -350,6 +358,11 @@ def config_changes(old: dict, new: dict) -> list[dict]:
         # The user's own instruction for what the local model hands back: it may keep more of a
         # flagged result than keepmum's, so a new one is marked for a look. Recorded as a fingerprint.
         out.append({"setting": "guard.local_handback_instructions", "from": a or None, "to": b or None, "weakens": bool(b)})
+    a, b = old.get("local_handback_harm_instructions"), new.get("local_handback_harm_instructions")
+    if "local_handback_harm_instructions" in old and a != b:
+        # The user's own instruction for the harm rewrite: what it sends is checked all the same (removal
+        # only, and the harm check passes it), but it is marked for a look like the other.
+        out.append({"setting": "guard.local_handback_harm_instructions", "from": a or None, "to": b or None, "weakens": bool(b)})
     if "injection_threshold" in old and old["injection_threshold"] != new.get("injection_threshold"):
         # A higher threshold flags less: fewer false alarms, and fewer injections caught.
         out.append({"setting": "guard.injection_threshold", "from": old["injection_threshold"],

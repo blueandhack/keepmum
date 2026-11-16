@@ -93,15 +93,35 @@ struct ShellDestinationsSection: View {
     }
 }
 
-/// What the Logs page may show about masked values (`keepmum log`). Both stay in keepmum's memory.
+/// What the Logs page may show about masked values, and how long its rows outlast a restart
+/// (`keepmum log`). Previews and text stay in keepmum's memory; rows, without either, can be kept.
 struct LogsPageSection: View {
     var engine: Engine
+
+    static let keeps = [0, 7, 30, 90]
+
+    private func keepLabel(_ days: Int) -> String {
+        days == 0 ? "Off" : "\(days) days" + (days == 30 ? " (default)" : "")
+    }
 
     var body: some View {
         let previews = engine.status?.previews ?? true
         let context = engine.status?.context ?? true
+        let keep = engine.status?.logKeepDays
         FormSection(title: "Logs page",
-                    footer: "Kept in keepmum's memory until it exits and sent only to this app; never written to disk. The model provider never sees them.") {
+                    footer: "Previews and text are kept in keepmum's memory until it exits and sent only to this app; never written to disk. The model provider never sees any of it.",
+                    details: "Kept rows are in ~/.config/keepmum/logs.jsonl, readable by you alone: for each check, what it flagged where (the check, the tool, the score, the categories), and what came of it (answered on this Mac, handed back, your review's answers, why a rewrite did not pass); for each masked value, its type, the rule that found it and its length. Never what was flagged, what you typed, a value or a preview. Rows older than this are dropped when keepmum starts; Off deletes the file.") {
+            if let keep {
+                FormRow(title: "Keep after a restart",
+                        detail: keep == 0 ? "Off: the Logs page starts empty each time keepmum starts"
+                                          : "The rows of the last \(keep) days, without previews or text") {
+                    ChoiceMenu(engine: engine, label: keepLabel(keep),
+                               items: (Self.keeps.contains(keep) ? Self.keeps : (Self.keeps + [keep]).sorted()).map { d in
+                                   (keepLabel(d), { await engine.setLogKeep(d); await engine.refresh() })
+                               })
+                }
+                Hairline()
+            }
             FormRow(title: "Value previews",
                     detail: previews ? "The first and last character of long masked values, such as g…w" : "Off: types and rules only") {
                 Switch(isOn: previews, enabled: engine.isBundled && !engine.busy) { on in Task { await engine.setLog("previews", on) } }
