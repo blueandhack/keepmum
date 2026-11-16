@@ -1,0 +1,33 @@
+name: Limbowatch
+
+# Daily: the dependencies in the lockfiles (uv.lock, mac/Package.resolved) against security advisories
+# published on GitHub but not yet reviewed into the GitHub Advisory Database or OSV, which Dependabot
+# and other scanners read (https://github.com/limbowatch/limbowatch). A finding at any severity fails
+# the run, and a failed scheduled run is emailed to whoever last changed this schedule. What it found
+# is in the job summary, and the full reports (JSON, Markdown, HTML, SARIF) in the run's artifact.
+# By hand: gh workflow run limbowatch.yml
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Runs Limbowatch's own image, pinned by digest in the action; reads the checkout only.
+      - uses: limbowatch/limbowatch-action@fd1a8e37e1b04afbcc33321144c2d4d2e3153f8f # v0.1.0a16
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: limbowatch-report
+          path: limbowatch-report
+          if-no-files-found: ignore
+          retention-days: 30
