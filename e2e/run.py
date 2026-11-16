@@ -228,10 +228,10 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
     limited = any(e["status"] == 429 for e in keepmum["errors"]) and not any(f.cls == "leak" for f in findings)
     result = {
         "case": case.id, "agent": agent.name, "mode": mode, "rep": rep, "seconds": round(time.monotonic() - started, 1),
-        "status": "skip" if limited else ("gap" if failed else "gap-passed") if case.gap(agent.name)
+        "status": "skip" if limited else ("gap" if failed else "gap-passed") if case.gap(agent.name, mode)
         else ("fail" if failed else "pass"),
         "reason": "the provider's usage limit (429): nothing was tested" if limited else None,
-        "known_gap": case.gap(agent.name), "findings": oracle.as_dicts(findings), "exit": code,
+        "known_gap": case.gap(agent.name, mode), "findings": oracle.as_dicts(findings), "exit": code,
         "requests": len(provider), "local_requests": len(local), "masked": len(masked),
         "turns": [s["turn"] for s in scripted.served] if scripted else None,
         "tools": sorted(scripted.tools) if scripted else None,

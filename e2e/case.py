@@ -119,9 +119,11 @@ class Case:
             text = _SEEN.sub(lambda m: seen.mask(m.group(1)), text)
         return text
 
-    def gap(self, agent: str) -> str | None:
+    def gap(self, agent: str, mode: str | None = None) -> str | None:
+        """The case's known gap for an agent: a string for every agent, or a table by agent, or by
+        agent and mode ("codex.live": a real model can take a path the scripted run does not)."""
         if isinstance(self.known_gap, dict):
-            return self.known_gap.get(agent)
+            return self.known_gap.get(f"{agent}.{mode}") or self.known_gap.get(agent)
         return self.known_gap
 
     def placeholder(self, name: str, salt: bytes) -> str:
