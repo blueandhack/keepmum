@@ -712,11 +712,15 @@ final class Engine {
 
     /// Reloads the local servers every two seconds while the Splash keepmum runs at `url` is still
     /// starting (the first start downloads its model), for at most twenty minutes.
+    /// Follows a Splash keepmum started until it answers: its first start downloads a model of up to
+    /// 16 GB, which can take far longer than its warm-up. Every 2 s for two minutes, then every 5 s,
+    /// for up to 4 hours; the row shows how much has come (splashsvc.progress).
     func followSplash(url: String) async {
-        for _ in 0..<600 {
+        let started = Date()
+        while Date().timeIntervalSince(started) < 4 * 3600, !Task.isCancelled {
             await loadLocalServers()
             guard let s = localServers?.servers.first(where: { $0.url == url }), s.managed == true, s.kind != "Splash" else { return }
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(Date().timeIntervalSince(started) < 120 ? 2 : 5))
         }
     }
 

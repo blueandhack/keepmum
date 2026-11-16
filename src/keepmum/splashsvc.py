@@ -199,12 +199,37 @@ def context_info(url: str, timeout: float = 2.0) -> dict | None:
     return {"context": now, "max": most, "bytes_per_token": per}
 
 
+# Splash says what it downloads, then Hugging Face's counter of files: "Fetching 1 file(s), 15.44 GB,
+# from HauhauCS/Qwen3.6-…@f12a584fecbe; …", then "Fetching 1 files:   0%| | 0/1". The counter moves
+# when a file is done, and Splash's log is not a terminal, so nothing else is written meanwhile: a
+# 15 GB model reads 0% until it is all there (a new Mac, Nov 16, 2026). How much has come is the
+# size of the download's .incomplete file in Hugging Face's cache.
+_FETCHING = re.compile(r"Fetching \d+ file\(s\), ([\d.]+) ([KMGT]?B), from ([\w.-]+/[\w.-]+)@")
+_COUNTER = re.compile(r"^Fetching \d+ files?:\s+(\d+)%")
+_UNITS = {"B": 1, "KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12}
+
+
+def hub_cache() -> Path:
+    """Where Splash's downloads go: Hugging Face's cache, as the LaunchAgent leaves it (its default)."""
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def downloaded(repo: str) -> int:
+    """Bytes of the files being downloaded now from `repo`, in Hugging Face's cache."""
+    blobs = hub_cache() / f"models--{repo.replace('/', '--')}" / "blobs"
+    try:
+        return sum(p.stat().st_size for p in blobs.glob("*.incomplete"))
+    except OSError:
+        return 0
+
+
 def progress() -> str | None:
-    """What Splash is doing, from the last line of its log: downloading, warming up, ready."""
+    """What Splash is doing, from the last line of its log: downloading (with how much has come),
+    warming up, ready."""
     try:
         with log_path().open("rb") as f:
             f.seek(0, 2)
-            f.seek(max(0, f.tell() - 4096))
+            f.seek(max(0, f.tell() - 16384))
             tail = f.read().decode("utf-8", "replace")
     except OSError:
         return None
@@ -212,4 +237,13 @@ def progress() -> str | None:
     if not lines:
         return None
     last = re.sub(r"^\d\d:\d\d:\d\d ", "", lines[-1])  # Splash's own time stamp
+    counter = _COUNTER.match(last)
+    fetching = next((m for m in map(_FETCHING.search, reversed(lines)) if m), None)
+    if counter and int(counter.group(1)) < 100 and fetching:
+        size, unit, repo = float(fetching.group(1)), fetching.group(2), fetching.group(3)
+        total = size * _UNITS[unit]
+        name = repo.rsplit("/", 1)[-1]
+        if (got := downloaded(repo)) and total:
+            return f"downloading {name}: {got / 1e9:.1f} of {total / 1e9:.1f} GB ({min(99, int(100 * got / total))}%)"
+        return f"downloading {name}, {size:g} {unit}"
     return last[:160]

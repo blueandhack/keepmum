@@ -90,6 +90,29 @@ def test_start_says_why_it_cannot(mac, monkeypatch):
         splashsvc.start(SPEC, 8000)
 
 
+LOG = ("Selected Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ3_M.gguf from HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive.\n"
+       "Fetching 1 file(s), 1.05 GB, from incoai/Qwen3.6-35B-A3B-DFlash2@51ef7b6923ad; cached files are reused.\n"
+       "Fetching 2 files:   0%|          | 0/2 [00:00<?, ?it/s]\rFetching 2 files: 100%|##########| 2/2 [00:16<00:00]\n"
+       "Fetching 1 file(s), 15.44 GB, from HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive@f12a584fecbe; cached files are reused.\n"
+       "Fetching 1 files:   0%|          | 0/1 [00:00<?, ?it/s]")
+
+
+def test_a_download_shows_how_much_has_come(mac):
+    """Hugging Face's counter reads 0/1 until a 15 GB file is done (Splash's log is not a terminal):
+    what has come is the .incomplete file's size in its cache."""
+    log = splashsvc.log_path()
+    log.parent.mkdir(parents=True)
+    log.write_text(LOG)
+    assert splashsvc.progress() == "downloading Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive, 15.44 GB"
+    blobs = splashsvc.hub_cache() / "models--HauhauCS--Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive" / "blobs"
+    blobs.mkdir(parents=True)
+    with (blobs / "4dd9a27c.067b8881.incomplete").open("wb") as f:
+        f.truncate(4_200_000_000)  # sparse: no 4 GB written
+    assert splashsvc.progress() == "downloading Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive: 4.2 of 15.4 GB (27%)"
+    log.write_text(LOG + "\rFetching 1 files: 100%|##########| 1/1 [09:12<00:00]\n12:55:47 Loading · the model\n")
+    assert splashsvc.progress() == "Loading · the model"
+
+
 def test_progress_reads_the_last_line_of_the_log(mac):
     home, _ = mac
     assert splashsvc.progress() is None
