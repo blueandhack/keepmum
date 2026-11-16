@@ -7,6 +7,61 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a8</title>
+      <pubDate>Mon, 16 Nov 2026 09:48:18 GMT</pubDate>
+      <sparkle:version>10008</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a8</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a8</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The eighth alpha of keepmum lets you look before anything a check flagged goes to the cloud, in a panel per change or the whole turn in one window. What you typed can now go back to the cloud too, with only the flagged part taken out, and each check gets its own local model setup, instructions and skills.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a8.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2 through 0.1.0a7:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a8.dmg.sha256`
+
+## New
+
+- **Review before it goes.** Settings › Local turns › Review first holds a hand-back until you look. A floating panel, which doesn't take the keyboard, shows what the local model wrote beside the flagged text. You can send it, edit it, ask the local model to change it, withhold a tool result, or keep the turn on your Mac. **Use the original** sends the flagged text unchanged, after a warning and a second click. `keepmum guard local handback --review`, or `keepmum review --watch` in a terminal.
+- **The whole turn in one window.** With Review first › Every flagged turn, one window lists every flagged piece of a turn: what you typed and each tool result. Each piece shows the original beside what goes in its place, and takes its own answer. A rewrite or summary is drafted by the local model while you look, and you can edit it, write it again or have it changed. You can also keep the original or remove the piece. Then send the turn, or keep it on your Mac. `--review turn`.
+- **What you typed, back to the cloud.** When the harm check keeps your message local, keepmum can send it on with the flagged part taken out: Settings › Local turns › What you typed › Local rewrite, then cloud. The rewrite may only remove words. keepmum checks that what is left is word for word from your message, and that the harm check passes it as a whole and sentence by sentence. If the local model takes out the wrong part, keepmum takes out the flagged sentences itself. The provider never gets the flagged part, in any wording.
+- **Settings › Local turns.** Each check has the same card: what follows a local turn, the local model it uses, and each step that model takes, with its instruction and skills. You can write your own instruction for a rewrite or summary, switch back to keepmum's without losing yours, and ask the local model to write it for you. Skills are picked per step, with a click. A skill never reaches the harm rewrite unless you pick it.
+- **Local models, easier.** keepmum's tested picks download with progress, from Ollama or Hugging Face. Splash runs keepmum's pick about 1.6 times as fast as Ollama, started in the background with one click. You can set the context size, how long the model stays loaded, and whether it thinks first. The Skills window asks the local model to write or change a skill.
+- **Protection map.** A new page draws each setting where it acts on a request, and where a hit goes. **Send a sample** shows a made-up request, with 12 kinds, take the route your settings give it. **Try a review** opens a demo of the panel or the turn window on made-up text, so you can try every answer before a real review comes up.
+- **Logs kept across restarts.** The Logs page shows checks and masked values in one table or split in two, with details beside the table. Its rows now outlast a restart for 30 days, without any text or previews: Settings › General › Logs page, or `keepmum log keep`.
+- **A color-blind safe palette**, in Settings › General.
+
+## Changes
+
+- **A new injection model.** The injection check now runs keepmum's fine-tune of Prompt Injection Guard Small for agent tool output. The background service downloads it once, pinned and checked.
+- **A review never outlasts your agent.** Measured against a server that never answers, Claude Code gives up on a request after 6 minutes and pi and opencode after 5. keepmum ends a review 10 seconds before that, so its answer still reaches the agent. The window shows how long the agent has waited. While the local model writes for you, the review pauses, for up to 2 minutes in all.
+- **Your answer holds for one conversation.** A message or tool result you reviewed keeps your answer in that conversation's history. If the same text comes back new, typed again or returned again, you are asked again. The only exception is within 30 seconds, for Codex's task-title request and agent retries, and the log says so.
+- **No local model answering is a 403**, so agents stop instead of retrying for minutes.
+- **Updates fall back to GitHub** when keepmum.app's feed does not load, and the Download button keeps working without it.
+- **keepmum says when Codex needs a restart** to go through it.
+
+## Fixes
+
+- **What you typed could reach the cloud unchanged.** With both checks in local mode, a turn where the injection check flagged a tool result first never had what you typed checked by the harm check. Both checks now score a turn before keepmum decides. Block mode on either refuses it with both reasons.
+- **One flagged text, one row and one review.** The same text twice in a request was logged twice, and Codex's task-title request opened a second review.
+- **A local model's tool call** is never passed to the agent.
+- **A piece of a flagged result** that comes back in a later one, a line or part of one, is flagged too.
+- **Hex bytes after a label or in a list** are decoded and scanned, so a token cannot leave as hex.
+- **The Skills window** now follows Settings › General › Appearance (it stayed dark).
+- **The engine loads all its modules at start**, so an update that swaps the app cannot break a scan in progress.
+
+This release was checked against real agents. The unit tests passed (1,616, 96% coverage). The scripted end-to-end suite passed on Codex, Claude Code, pi, opencode and the Antigravity CLI. Every local-mode and harm case also passed on a real local model (Qwen3.6 35B). The live suite on real cloud models passed 71 of 72 runs, and the Antigravity CLI passed all 17. The one failure is a known limitation, unchanged since 0.1.0a7: Codex's model, in code mode, read a token in its own script and passed it to an MCP tool on the Mac, past keepmum. keepmum warned, as it is set to; it does not block such scripts, which would flag ordinary ones too.</description>
+      <enclosure url="https://keepmum.app/update/v0.1.0a8/Keepmum-0.1.0a8.dmg" length="39508371" type="application/octet-stream" sparkle:edSignature="b9hTmqJjRIs1ShnURKzfAg7XDEfTlmG1fZwg6oRrfO+JKATg7UK8oh3HVeuCyVaJXKNm/ZhmZ5qLkGOROfoJAg=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a7</title>
       <pubDate>Tue, 10 Nov 2026 10:35:48 GMT</pubDate>
       <sparkle:version>10007</sparkle:version>
@@ -266,6 +321,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 8gdHwtnI0U6XaFd964tR2W72xINILmrTxtqC57IMfdrExUbbg50V6ysEjy5SrmbSnFG+JZlLkXnZVIUqXt16Dg==
-length: 25334
+edSignature: YU6aulo2WSlXKi6YkpXH/YlkFySTM9EIDA0Tx/EijAiVfZkHJcU5NEzvT017W4a1pMIWN8mTypx7EgcuOIIZCA==
+length: 32931
 -->
