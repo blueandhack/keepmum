@@ -556,6 +556,9 @@ enum Snapshotter {
         // For keepmum.app: Local turns at the size of the site's figure (1440x780), with both checks local.
         render(Dashboard(store: store, engine: .preview(bothLocal: true), page: .settings, settingsPane: .handback).frame(width: 1440, height: 780),
                to: "\(dir)/site-turns-light.png", dark: false)
+        // For keepmum.app: the Protection map with both checks local, a jailbreak sample on its way.
+        render(mapPage(store, .preview(bothLocal: true), sample: .jailbreak, width: 1440, height: 1080),
+               to: "\(dir)/site-map-light.png", dark: false)
         // A demo review, and what it says once answered.
         render(TurnReviewView(center: .shared, turn: .demo()).frame(width: 1040, height: 720).background(Theme.canvas),
                to: "\(dir)/review-turn-demo-light.png", dark: false)

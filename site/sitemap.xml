@@ -6,10 +6,10 @@
     <video:video>
       <video:thumbnail_loc>https://keepmum.app/img/flow-poster.webp</video:thumbnail_loc>
       <video:title>How a request travels through keepmum</video:title>
-      <video:description>A request from a coding agent goes through keepmum on a Mac: secrets are detected and masked, the request is sent with placeholders only, and the real values are restored in the answer. 67 seconds, no sound.</video:description>
-      <video:content_loc>https://keepmum.app/video/keepmum-flow-1b4b44f951.mp4</video:content_loc>
-      <video:duration>67</video:duration>
-      <video:publication_date>2026-11-09</video:publication_date>
+      <video:description>A request from a coding agent goes through keepmum on a Mac: secrets are detected and masked, the request is sent with placeholders only, and the real values are restored in the answer. Then what happens when a check flags a turn, and how you review it before it goes. 98 seconds, no sound.</video:description>
+      <video:content_loc>https://keepmum.app/video/keepmum-flow-72c6f8f470.mp4</video:content_loc>
+      <video:duration>98</video:duration>
+      <video:publication_date>2026-11-16</video:publication_date>
     </video:video>
   </url>
   <url>
