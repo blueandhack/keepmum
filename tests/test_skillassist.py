@@ -187,3 +187,21 @@ def test_the_cli_asks_for_an_instruction_from_the_one_in_use(tmp_path, monkeypat
     assert INSTRUCTIONS["summary"] in seen[0][1]["messages"][1]["content"]
     bad = CliRunner().invoke(app, ["guard", "local", "assist-instructions", "--for", "answer", "--request", "x"])
     assert bad.exit_code == 2
+
+
+def test_an_instruction_request_is_checked_before_anything_is_asked():
+    from keepmum.skillassist import ask_instruction
+
+    with pytest.raises(AssistError, match="no such job"):
+        ask_instruction(Server("http://127.0.0.1:1", "m"), "", "answer", "x", "y")
+    with pytest.raises(AssistError, match="say what to change"):
+        ask_instruction(Server("http://127.0.0.1:1", "m"), "", "harm", "x", "  ")
+
+
+def test_too_long_an_instruction_is_refused(monkeypatch):
+    from keepmum.skillassist import ask_instruction
+
+    monkeypatch.setattr(skillassist, "MAX_INSTRUCTIONS", 5)
+    monkeypatch.setattr(skillassist, "_stream", lambda *a, **k: json.dumps({"instruction": "far too long", "note": ""}))
+    with pytest.raises(AssistError, match="shorter"):
+        ask_instruction(Server("http://127.0.0.1:1", "m"), "", "summary", "x", "y")

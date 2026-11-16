@@ -41,6 +41,8 @@ def run_turn(decide=None, harm_rewrite=KEPT, strategy="rewrite", harm_strategy="
                 seen["chat"].append(data)
                 if data["messages"][0]["content"].startswith("You help a user edit"):
                     return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "EDITED"}}]})
+                if harm_rewrite is None:  # no local model writes anything
+                    return httpx.Response(503, json={"error": {"message": "down"}})
                 harm = data["messages"][-1]["content"].startswith("The user's message:")
                 return httpx.Response(200, json={"choices": [{"message": {"role": "assistant",
                                                                           "content": harm_rewrite if harm else WRITTEN}}]})
@@ -253,3 +255,21 @@ def test_write_again_of_what_was_typed_is_sampled():
     seen, proxy = run_turn(decide)
     harm_temps = [c.get("temperature") for c in seen["chat"] if c["messages"][-1]["content"].startswith("The user's message:")]
     assert harm_temps == [0, 0.7]
+
+
+def test_your_own_text_the_check_flags_still_goes_and_is_noted():
+    seen, proxy = run_turn(send({"1": {"action": "rewrite", "text": "Sort it. " + ATTACK}}))
+    assert seen["results"][0].json()["id"] == "up"
+    assert "the check flagged your text, sent as you approved it" in " ".join(
+        h["handed_back"]["review"] for h in proxy.stats.guard_hits if h.get("handed_back"))
+
+
+def test_with_no_local_model_keepmum_still_drafts_what_was_typed_itself():
+    async def decide(agent, turn):
+        harm = turn["pieces"][0]
+        assert harm["draft"] == KEPT and harm["model"] == "keepmum, sentence by sentence"
+        assert turn["pieces"][1]["draft"] is None and turn["pieces"][1]["failed"] == "No local model wrote a rewrite."
+        return {"action": "send", "pieces": {"2": {"action": "remove"}}}
+
+    seen, proxy = run_turn(decide, harm_rewrite=None)
+    assert seen["results"][0].json()["id"] == "up" and "Note to AI agents" not in sent_text(seen)

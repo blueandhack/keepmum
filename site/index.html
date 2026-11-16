@@ -263,7 +263,7 @@
   <section id="checks" class="wrap section checks" aria-labelledby="checks-title">
     <div class="checks-head">
       <h2 id="checks-title">Three checks, if you want them.</h2>
-      <p class="intro">All off until you turn them on, and all on your Mac. Warn sends the request and logs a hit. Block refuses it. Local, for the first two, sends a flagged request to a model on your Mac instead of the provider, so your agent still gets an answer, with your own skills if you add them. It works with every agent here, the Antigravity CLI and Gemini CLI included. After a planted instruction, keepmum can also hand the conversation back: the local model summarises or rewrites what was flagged, or keepmum withholds it, and the cloud model carries on without ever seeing the original.</p>
+      <p class="intro">All off until you turn them on, and all on your Mac. Warn sends the request and logs a hit. Block refuses it. Local, for the first two, sends a flagged request to a model on your Mac instead of the provider, so your agent still gets an answer, with your own skills if you add them. It works with every agent here, the Antigravity CLI and Gemini CLI included. After a check keeps a turn local, keepmum can also hand the conversation back: the local model summarises or rewrites a flagged tool result, or takes the flagged part out of what you typed, and the cloud model carries on without ever seeing it. Each check gets its own instruction and skills for that.</p>
     </div>
     <div class="cols">
       <div class="feature">
@@ -279,7 +279,12 @@
         <p>Checks the shell commands a reply asks your agent to run: a download piped into a shell, deleting your home folder, erasing a disk, credentials sent over the network. Seven rules, no download.</p>
       </div>
     </div>
-    <figure class="shot"><img src="img/checks.webp" width="2880" height="1560" alt="keepmum’s Checks settings: each check off, warn, block or local, the local servers that answer flagged requests, what follows a local turn, and skills for local turns" loading="lazy"></figure>
+    <figure class="shot"><img src="img/checks.webp" width="2880" height="1560" alt="keepmum’s Local turns settings: for what you typed and for tool results, what follows a local turn, the local model, and each step it takes with its instruction and skills" loading="lazy"></figure>
+    <div class="checks-head">
+      <h2 id="review-title">You look before it goes.</h2>
+      <p class="intro">Turn on review, and nothing a check flagged goes to the cloud until you say so. A panel shows what the local model wrote beside the original: send it, edit it, ask the local model to change it, or keep the turn on your Mac. Or review the whole turn in one window, every flagged piece side by side, each rewritten, sent as it was (after a warning) or removed. The clock pauses while the local model writes, and never runs past what your agent waits. A demo in the app shows how it works before one comes up.</p>
+    </div>
+    <figure class="shot"><img src="img/review.webp" width="2080" height="1440" alt="keepmum’s turn review window: three flagged pieces, what you typed and two tool results, each with the original, the local model’s rewrite or summary, and its own answer" loading="lazy"></figure>
   </section>
 
   <section id="extensions" class="wrap section checks" aria-labelledby="extensions-title">

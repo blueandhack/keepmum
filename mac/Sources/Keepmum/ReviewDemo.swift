@@ -64,7 +64,7 @@ extension ReviewCenter {
         var lines: [String] = []
         if action == "local" {
             lines = ["The whole turn stays on your Mac: your local model answers it, and nothing of it goes to the cloud.",
-                     "Later turns that carry these pieces stay local too."]
+                     "This conversation\u{2019}s later turns stay local too."]
         } else {
             lines = turn.pieces.map { p in
                 let a = pieces[p.id]?["action"] ?? p.default
@@ -75,7 +75,7 @@ extension ReviewCenter {
                 default: "its \(a) goes in its place" + (pieces[p.id]?["text"].map { "; it begins \u{201C}\($0.prefix(60))\($0.count > 60 ? "\u{2026}" : "")\u{201D}." } ?? ".")
                 }
                 return "\(p.title): " + what
-            } + ["Then the turn goes to the cloud. Later turns that carry these pieces go the same way, without asking again."]
+            } + ["Then the turn goes to the cloud. This conversation\u{2019}s later turns resend these pieces as you answered them; typed or returned again, they are asked about again."]
         }
         demoTurn = nil
         demoOutcome = DemoOutcome(window: true, title: action == "local" ? "Kept on this Mac" : "Sent to the cloud", lines: lines)

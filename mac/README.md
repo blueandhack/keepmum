@@ -32,6 +32,9 @@ A menu-bar app that sets keepmum up, runs it in the background and shows what it
 ![Settings › Setup: the local model, the background service, and one switch per coding agent](docs/settings-light.png)
 ![Settings › Checks: each check off, warn, block or local, its sensitivity, and where local mode's settings are](docs/checks-light.png)
 ![Settings › Local models: the servers on this Mac, in the order tried, and how fast they answer](docs/local-light.png)
+![Settings › Local turns: for what you typed and for tool results, the local model, then each step it takes with its instruction and skills](docs/turns-light.png)
+![The review panel: what the local model wrote, editable, beside the flagged result, with the time left](docs/review-light.png)
+![The turn window: every flagged piece of a turn, each with the original and its own answer, then send the turn or keep it on this Mac](docs/review-turn-light.png)
 ![Settings › Extensions: what other apps added to your coding agents, to keep or remove](docs/extensions-light.png)
 ![The menu bar panel: the background service, which agents are protected, and what needs you](docs/menu-light.png)
 

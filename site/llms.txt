@@ -9,6 +9,7 @@ Key facts:
 - Fails closed: a request keepmum cannot scan (an unknown endpoint, an unreadable body, a WebSocket) is blocked, never sent raw.
 - Tools that reach the network get less: web search and fetch keep placeholders, and an MCP server gets back only the values it returned itself.
 - Optional checks, all local and off by default: prompt injection in tool results, harmful requests, and risky shell commands. Each can warn, block, or send a flagged request to a local model instead of the provider.
+- After a local turn, the conversation can go back to the cloud with only the flagged part replaced: a summary or rewrite of a tool result, or what the user typed with the flagged part taken out (checked to be removal only). The user can review it first: a panel per change, or the whole turn in one window, where each flagged piece is rewritten, sent as it was (after a warning) or removed.
 - Also watches what other apps add to agents' settings (plugins, hooks, MCP servers, skills, instruction files) and can take an entry back out.
 - Measured on synthetic, labeled datasets: secret recall 0.989 to 1; personal data recall 0.996 to 1; about 100 to 145 ms added at the 95th percentile for 4K tokens of new text; 8 to 9 ms with the rules alone.
 - Works in front of an existing gateway (LiteLLM, OpenRouter, a company proxy): agent → keepmum → gateway → provider.

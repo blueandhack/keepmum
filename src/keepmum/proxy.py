@@ -61,6 +61,7 @@ from .local import PATHS as LOCAL_PATHS
 from .handback import WRITTEN, Handbacks
 from .handback import REMOVED, harm_messages, harm_pieces, harm_wrap, harm_written, nothing_left, only_removed, sentences, without
 from .handback import _key as handback_key
+from .handback import newest as newest_input
 from .handback import edited as handback_edited
 from .handback import messages as handback_messages
 from .handback import notice as handback_notice
@@ -518,7 +519,10 @@ class Proxy:
         seen: list = []  # the handed-back results this request carries
         if self._held:
             await self._wait_for_reviews(body, path)
-        original, (body, _) = body, self._handed_back(body, seen)
+        # What is new in this request (what was just typed, the latest tool results) is asked about
+        # again, whatever was answered for the same text before; the history keeps its answers.
+        fresh = newest_input(body)
+        original, (body, _) = body, self._handed_back(body, seen, skip=fresh)
         handled: list[tuple[LocalRoute, dict]] = []  # each check's route and what its hand-back did
         while True:
             try:
@@ -529,8 +533,14 @@ class Proxy:
                 return api_error(500, "api_error", "could not scan this request, so it was not sent")
             # keepmum's own replacements are not tool output: what the local model wrote in them was
             # checked on its own (`_hand_back`), and their wording reads like an injection to the model.
-            texts["injection"] = [i for i in texts.get("injection") or [] if not self.handbacks.made(i[1])]
-            texts["harm"] = [i for i in texts.get("harm") or [] if not self.harm_handbacks.made(i[1])]
+            # New text is checked on the first scan even when it is one (an original the user sent).
+            texts["fresh"] = fresh
+            first = not handled
+            typed_in = texts.get("typed_in") or {}
+            texts["injection"] = [i for i in texts.get("injection") or []
+                                  if not self.handbacks.made(i[1]) or first and i[1] in fresh]
+            texts["harm"] = [i for i in texts.get("harm") or []
+                             if not self.harm_handbacks.made(i[1]) or first and typed_in.get(i[1]) in fresh]
             refused = await self._guarded(texts, path, origin, kind="masked" if new else "clean", api=t.api)
             if isinstance(refused, list):
                 if handled:  # scanned again, and what the local model wrote (or the user) was flagged
@@ -768,18 +778,18 @@ class Proxy:
                 "request was not sent. Remove that result from the conversation (rewind, or /clear), or run "
                 "`keepmum guard injection warn` to send such requests with a warning.")
 
-    def _handed_back(self, body: dict, seen: list | None = None) -> tuple[dict, int]:
+    def _handed_back(self, body: dict, seen: list | None = None, skip: frozenset[str] = frozenset()) -> tuple[dict, int]:
         """The body with the results handed back so far replaced: while the injection check is in
         local mode and hands back. Turned off, or set to stay, the request goes as the agent wrote it.
-        `seen` gets the replaced results' keys (Handbacks.first_sent)."""
+        `seen` gets the replaced results' keys (Handbacks.first_sent); `skip`, what is left as it is."""
         guard = next((g for g in self.guards if g.name == "injection"), None)
         n = 0
         turn = self._review()[0] == "turn"  # sent on from a turn's review, whatever the defaults say
         if guard is not None and guard.mode == "local" and (self._handback()[0] != "stay" or turn):
-            body, n = self.handbacks.apply(body, seen)
+            body, n = self.handbacks.apply(body, seen, skip)
         harm = next((g for g in self.guards if g.name == "harm"), None)
         if harm is not None and harm.mode == "local" and (self._handback_harm() == "rewrite" or turn):
-            body, m = self.harm_handbacks.apply(body, seen)
+            body, m = self.harm_handbacks.apply(body, seen, skip)
             n += m
         return body, n
 
@@ -793,8 +803,14 @@ class Proxy:
         if route.check != "injection" or strategy not in ("withhold", *WRITTEN):
             return None
         flagged = self._flagged_texts(route, texts)
-        if not flagged or any(self.handbacks.kept(text) for text in flagged):
+        fresh = (texts or {}).get("fresh") or frozenset()
+        if not flagged or any(self.handbacks.kept(text, fresh=text in fresh) for text in flagged):
             return None  # what the local model wrote for it was flagged before: it stays local
+        if all(self.handbacks.went(text, fresh=text in fresh) is not None for text in flagged):
+            for text in flagged:  # answered moments ago, for a request carrying it too (a retry)
+                self._note_reuse(path, text, self.handbacks, text in fresh)
+                self.handbacks.add(text, self.handbacks.went(text, fresh=text in fresh), strategy)
+            return {"strategy": strategy, "review": "as before, for the same result"}
         if strategy == "withhold":
             for text, source in flagged.items():
                 self.handbacks.add(text, handback_notice(strategy, source), strategy)
@@ -875,6 +891,7 @@ class Proxy:
             done.append((text, handback_wrap(strategy, source, out, custom=bool(instructions))))
         for text, replacement in done:
             self.handbacks.add(text, replacement, strategy)
+            self.handbacks.went(text, replacement)
         if server is None:  # every result was too long: what went is the notice, or the user's text
             log.info("%s: the flagged result was too long for the local model; it went on as reviewed", path)
             return {"strategy": "withhold", "too_long": True, **({"review": "; ".join(reviews)} if reviews else {})}
@@ -890,13 +907,15 @@ class Proxy:
         ([guard] local_handback_review) the user decides on every rewrite, one that failed a check too,
         told why, and on a message the local model wrote no rewrite of (review.py); without, a rewrite
         still flagged, one that changed words, or nothing left keeps the turn local. No skills go with it
-        (see below). A text is rewritten and reviewed once: another request carrying it (Codex's task
-        title comes with the turn) waits for that and goes the same way. None leaves it to the local model."""
+        (see below). A text is rewritten and reviewed once at a time: another request carrying it (Codex's task
+        title comes with the turn) waits for that and, within REUSE_S, goes the same way; later, new in a
+        request, it is asked about again (handback.newest). None leaves it to the local model."""
         if self._handback_harm() != "rewrite":
             return None
         flagged = self._flagged_texts(route, texts)
         whole = (texts or {}).get("typed_in") or {}
-        if not flagged or any(self.harm_handbacks.kept(text) for text in flagged):
+        fresh = (texts or {}).get("fresh") or frozenset()
+        if not flagged or any(self.harm_handbacks.kept(text, fresh=whole.get(text) in fresh) for text in flagged):
             return None
         guard = next((g for g in self.guards if g.name == "harm"), None)
         done, server, reviews, again = [], None, [], 0
@@ -904,10 +923,12 @@ class Proxy:
             full = whole.get(text)
             if not full or text not in full:  # what was typed is not one piece of its message: kept local
                 return None
+            new = full in fresh
             async with self._one_rewrite(text):
-                if self.harm_handbacks.kept(text):
+                if self.harm_handbacks.kept(text, fresh=new):
                     return None  # kept local while this request waited on another carrying it
-                if (mine := self.harm_handbacks.went(text)) is not None:
+                if (mine := self.harm_handbacks.went(text, fresh=new)) is not None:
+                    self._note_reuse(path, text, self.harm_handbacks, new)
                     done.append((full, full.replace(text, mine, 1), mine))  # what went for it before
                     again += 1
                     continue
@@ -954,13 +975,24 @@ class Proxy:
             # One review of a typed text at a time: Codex's task-title request carries it too, and waits.
             for text in sorted({p.text for p in pieces if p.check == "harm"}, key=handback_key):
                 await stack.enter_async_context(self._one_rewrite(text))
-            if any(stores[p.check].kept(p.text) for p in pieces):
+            fresh = (texts or {}).get("fresh") or frozenset()
+
+            def new(p: Piece) -> bool:
+                return (p.whole if p.check == "harm" else p.text) in fresh
+
+            if any(stores[p.check].kept(p.text, fresh=new(p)) for p in pieces):
+                for p in pieces:
+                    self._note_reuse(path, p.text, stores[p.check], new(p))
                 return {r.check: {"strategy": "turn", "kept": "you kept it on this Mac"} for r in routes}
-            again = [p for p in pieces if p.check == "harm" and self.harm_handbacks.went(p.text) is not None]
+            again = [p for p in pieces if stores[p.check].went(p.text, fresh=new(p)) is not None]
             for p in again:  # answered with the request that first carried it
-                mine = self.harm_handbacks.went(p.text)
-                self.harm_handbacks.add(p.whole, p.whole.replace(p.text, mine, 1), "rewrite")
-                self.harm_handbacks.mark_made(mine)
+                self._note_reuse(path, p.text, stores[p.check], new(p))
+                mine = stores[p.check].went(p.text, fresh=new(p))
+                if p.check == "harm":
+                    self.harm_handbacks.add(p.whole, p.whole.replace(p.text, mine, 1), "rewrite")
+                    self.harm_handbacks.mark_made(mine)
+                else:
+                    self.handbacks.add(p.text, mine, "rewrite")
             pieces = [p for p in pieces if p not in again]
             if not pieces:
                 log.info("%s: what was typed went on as it did before", path)
@@ -1008,6 +1040,7 @@ class Proxy:
                     replacement = (p.text if action == "original" else handback_notice("withhold", p.source) if action == "remove"
                                    else handback_wrap(action, p.source, text, custom=a["edited"] or bool(instructions)))
                     self.handbacks.add(p.text, replacement, {"remove": "withhold"}.get(action, action))
+                    self.handbacks.went(p.text, replacement)
                 was = out.setdefault(p.check, {"strategy": {"remove": "withhold"}.get(action, action), "review": said + "reviewed with the turn"})
                 was["review"] += f"; {p.source or 'what you typed'}: {note}"
                 if p.model:
@@ -1118,6 +1151,13 @@ class Proxy:
         request = str(ask.get("request") or "").strip() or None
         await self._draft(turn, piece, kind, request, str(ask.get("text") or "") if request else None)
         return JSONResponse(piece.public())
+
+    @staticmethod
+    def _note_reuse(path: str, text: str, store, new: bool) -> None:
+        """Log a past answer used for new text: only ever within REUSE_S of it (Codex's task title)."""
+        if new and (when := store.answered(text)) is not None:
+            log.info("%s: used the answer you gave %.0f s ago for the same text, new in this request (the agent's "
+                     "own request with the turn, or a retry)", path, time.time() - when)
 
     @contextlib.asynccontextmanager
     async def _one_rewrite(self, text: str):

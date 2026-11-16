@@ -553,6 +553,9 @@ enum Snapshotter {
         paused.agentLimit = 360
         render(TurnReviewView(center: .shared, turn: paused, previewPause: 12).frame(width: 1040, height: 720).background(Theme.canvas),
                to: "\(dir)/review-turn-paused-light.png", dark: false)
+        // For keepmum.app: Local turns at the size of the site's figure (1440x780), with both checks local.
+        render(Dashboard(store: store, engine: .preview(bothLocal: true), page: .settings, settingsPane: .handback).frame(width: 1440, height: 780),
+               to: "\(dir)/site-turns-light.png", dark: false)
         // A demo review, and what it says once answered.
         render(TurnReviewView(center: .shared, turn: .demo()).frame(width: 1040, height: 720).background(Theme.canvas),
                to: "\(dir)/review-turn-demo-light.png", dark: false)
@@ -560,7 +563,7 @@ enum Snapshotter {
             "What you typed: its rewrite goes in its place; it begins \u{201C}[removed by keepmum] Then review the retry logic in sync.py\u{2026}\u{201D}.",
             "What WebFetch returned: its summary goes in its place.",
             "What exec returned: nothing of it goes; keepmum\u{2019}s notice takes its place.",
-            "Then the turn goes to the cloud. Later turns that carry these pieces go the same way, without asking again."]))
+            "Then the turn goes to the cloud. This conversation\u{2019}s later turns resend these pieces as you answered them; typed or returned again, they are asked about again."]))
             .frame(width: 1040, height: 520).background(Theme.canvas), to: "\(dir)/review-demo-outcome-light.png", dark: false)
         // The instruction editor, on the harm rewrite's instruction.
         for dark in [false, true] {

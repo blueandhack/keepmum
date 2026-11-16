@@ -46,6 +46,7 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
+import time
 from collections import Counter, OrderedDict
 
 STRATEGIES = ("stay", "answer", "summary", "rewrite", "withhold")
@@ -250,6 +251,56 @@ def written(reply: dict) -> str:
     return _THINK.sub("", text).strip() if isinstance(text, str) else ""
 
 
+# An answer is reused for something new in a request (what was just typed, a tool's latest result)
+# only this soon after it was given: Codex's task-title request, sent with its turn, or an agent's
+# retry. Later, the same text is new again, and asked about again. Resent in a conversation's
+# history, it keeps its answer for good: the conversation stays as it went.
+REUSE_S = 30
+# What an agent wrote in a request's messages: the newest input is what comes after the last of these.
+_MODEL_ROLES = frozenset({"assistant", "model"})
+_MODEL_ITEMS = frozenset({"function_call", "custom_tool_call", "reasoning", "local_shell_call", "web_search_call",
+                          "computer_call", "file_search_call", "image_generation_call", "code_interpreter_call"})
+
+
+def newest(body) -> frozenset[str]:
+    """The strings of a request's newest input: what the user just typed, or the tool results that
+    just came back. The last message (Messages, Chat Completions, Gemini's contents, Code Assist's
+    wrapped too), or every Responses item after the model's last. Text there is new, whatever was
+    answered for the same text before; text before it is the conversation's history."""
+    if not isinstance(body, dict):
+        return frozenset()
+    if isinstance(body.get("request"), dict):  # Code Assist wraps Gemini's request
+        body = body["request"]
+    key = next((k for k in ("messages", "input", "contents") if k in body), None)
+    items = body.get(key) if key else None
+    if isinstance(items, str):
+        return frozenset({items})
+    if not isinstance(items, list) or not items:
+        return frozenset()
+    if key != "input":  # Messages, Chat Completions, Gemini: the newest input is the last message
+        last = items[-1]
+        at = len(items) - 1 if isinstance(last, dict) and last.get("role") not in _MODEL_ROLES else len(items)
+    else:  # Responses: each tool output an item of its own, all after the model's last item
+        at = len(items)
+        while at and not (isinstance(items[at - 1], dict) and (items[at - 1].get("role") in _MODEL_ROLES
+                                                               or items[at - 1].get("type") in _MODEL_ITEMS)):
+            at -= 1
+    out: set[str] = set()
+
+    def walk(v):
+        if isinstance(v, str):
+            out.add(v)
+        elif isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    walk(items[at:])
+    return frozenset(out)
+
+
 def _key(text: str) -> bytes:
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).digest()
 
@@ -265,11 +316,12 @@ class Handbacks:
         self._lengths: Counter[int] = Counter()  # of the flagged texts: most strings are passed over on length
         self._made: dict[bytes, None] = {}
         self._unsent: dict[bytes, str] = {}  # flagged text hash -> strategy, until first sent
-        # Flagged results whose summary or rewrite the check flagged: they stay local, not asked again.
-        self._kept: OrderedDict[bytes, None] = OrderedDict()
+        # Flagged results the user (or a check) kept local, and when: in history they stay local; new in a
+        # request, only within REUSE_S.
+        self._kept: OrderedDict[bytes, float] = OrderedDict()  # -> when
         # What the user typed -> the rewrite that went in its place: another request carrying the same
-        # text (Codex asks for a task title with the prompt inside) takes it, not asked again.
-        self._went: OrderedDict[bytes, str] = OrderedDict()
+        # text (Codex asks for a task title with the prompt inside) takes it within REUSE_S, not asked again.
+        self._went: OrderedDict[bytes, tuple[str, float]] = OrderedDict()  # -> (what went, when)
         self._keep = keep
         self._lock = threading.Lock()
 
@@ -302,25 +354,37 @@ class Handbacks:
 
     def keep_local(self, text: str) -> None:
         with self._lock:
-            self._kept[_key(text)] = None
+            self._kept[_key(text)] = time.time()
+            self._kept.move_to_end(_key(text))
             while len(self._kept) > self._keep:
                 self._kept.popitem(last=False)
 
-    def kept(self, text: str) -> bool:
+    def kept(self, text: str, fresh: bool = False) -> bool:
+        """Whether the user kept `text` on this Mac. For `fresh` text (new in its request), only when
+        that was in the last REUSE_S seconds: later, it is asked about again."""
         with self._lock:
-            return _key(text) in self._kept
+            when = self._kept.get(_key(text))
+        return when is not None and (not fresh or time.time() - when <= REUSE_S)
 
-    def went(self, text: str, instead: str | None = None) -> str | None:
-        """What went in place of `text` before, or None; with `instead`, note that it did."""
+    def went(self, text: str, instead: str | None = None, fresh: bool = False) -> str | None:
+        """What went in place of `text` before, or None; with `instead`, note that it did. For
+        `fresh` text, only what went in the last REUSE_S seconds."""
         with self._lock:
             key = _key(text)
             if instead is None:
-                return self._went.get(key)
-            self._went[key] = instead
+                got = self._went.get(key)
+                return got[0] if got and (not fresh or time.time() - got[1] <= REUSE_S) else None
+            self._went[key] = (instead, time.time())
             self._went.move_to_end(key)
             while len(self._went) > self._keep:
                 self._went.popitem(last=False)
             return instead
+
+    def answered(self, text: str) -> float | None:
+        """When the user's answer for `text` was given (kept local, or what went), if any."""
+        with self._lock:
+            got, when = self._went.get(_key(text)), self._kept.get(_key(text))
+        return max((t for t in (got[1] if got else None, when) if t is not None), default=None)
 
     def made(self, text: str) -> bool:
         """Whether keepmum wrote this text as a replacement."""
@@ -333,9 +397,10 @@ class Handbacks:
         with self._lock:
             return [s for k in dict.fromkeys(keys) if (s := self._unsent.pop(k, None))]
 
-    def apply(self, body, seen: list | None = None):
+    def apply(self, body, seen: list | None = None, skip: frozenset[str] = frozenset()):
         """The body with every string that is a flagged result replaced, and how many were. Parts
-        that do not change are shared with `body`, not copied. `seen` gets each replaced text's key."""
+        that do not change are shared with `body`, not copied. `seen` gets each replaced text's key.
+        `skip`: strings left as they are (new in this request: asked about again, `newest`)."""
         with self._lock:
             if not self._by:
                 return body, 0
@@ -345,6 +410,8 @@ class Handbacks:
         def walk(value):
             nonlocal count
             if isinstance(value, str):
+                if value in skip:
+                    return value
                 if len(value) in lengths and (r := by.get(key := _key(value))) is not None:
                     count += 1
                     if seen is not None:

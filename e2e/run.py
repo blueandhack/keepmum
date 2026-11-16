@@ -34,6 +34,12 @@ def _environment() -> None:
     pf = Path(REAL_HOME) / ".local" / "share" / "keepmum" / "bin" / "pf-serve"
     if pf.exists():
         os.environ.setdefault("KEEPMUM_PF_SERVE", str(pf))
+    # The model too: `keepmum setup` keeps it in keepmum's own folder under the real HOME, which a
+    # run's HOME is not (the Hugging Face cache, set below, is read where it is).
+    from keepmum.detect.pfserve import find_model
+
+    if model := find_model():
+        os.environ.setdefault("KEEPMUM_PF_MODEL", str(model))
     os.environ.setdefault("HF_HOME", str(Path(REAL_HOME) / ".cache" / "huggingface"))
     os.environ.setdefault("CODEX_HOME", str(Path(REAL_HOME) / ".codex"))
 
