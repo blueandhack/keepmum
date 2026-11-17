@@ -175,10 +175,12 @@ final class Engine {
             /// what it is doing while it starts (downloading, warming up).
             var managed: Bool?
             var progress: String?
+            /// For a Splash model: whether it is on this Mac yet (nil: not one Splash downloads).
+            var downloaded: Bool?
             /// For Splash: the memory its cache takes a token of context, while a request that long runs.
             var contextBytes: Double?
             enum CodingKeys: String, CodingKey {
-                case url, model, checks, api, kind, models, problem, context, base, start, managed, progress, contextMax = "context_max",
+                case url, model, checks, api, kind, models, problem, context, base, start, managed, progress, downloaded, contextMax = "context_max",
                      contextBytes = "context_bytes"
             }
         }
@@ -207,7 +209,15 @@ final class Engine {
         var contexts: [Int]?
         var defaultContext: Int?
         /// Whether Splash is installed and this Mac can run it; nil from older engines.
-        struct SplashInfo: Decodable, Equatable { var installed: Bool; var supported: Bool; var why: String?; var install: String }
+        struct SplashInfo: Decodable, Equatable {
+            var installed: Bool
+            var supported: Bool
+            var why: String?
+            var install: String
+            /// A Hugging Face token is saved for Splash's downloads (nil from older engines).
+            var signedIn: Bool?
+            enum CodingKeys: String, CodingKey { case installed, supported, why, install, signedIn = "signed_in" }
+        }
         var splash: SplashInfo?
         /// How long a server keeps its model loaded, and whether a local answer thinks first
         /// (`keepmum guard local speed`); nil from older engines.
@@ -704,6 +714,16 @@ final class Engine {
         await followSplash(url: url)
     }
 
+    /// Saves a Hugging Face token where Splash's downloader looks (`keepmum guard local splash
+    /// --hf-token`, on stdin so it is never in a process list): signed in, downloads go faster.
+    func saveHFToken(_ token: String) async {
+        await act {
+            let out = try await self.run(["guard", "local", "splash", "--hf-token"], input: Data(token.utf8))
+            if out.code != 0 { throw EngineError(out.lastLine) }
+        }
+        await loadLocalServers()
+    }
+
     /// Stops the Splash keepmum runs, and no longer starts it at login.
     func stopSplash() async {
         await act { try await self.check(["guard", "local", "splash", "--stop"]) }
@@ -1084,6 +1104,16 @@ final class Engine {
 
     // MARK: Built-in rules, the doctor
 
+    /// For snapshots: Splash downloading keepmum's pick, not signed in to Hugging Face.
+    func previewSplashDownload() {
+        guard var servers = localServers else { return }
+        servers.servers[0].managed = true
+        servers.servers[0].downloaded = false
+        servers.servers[0].progress = "downloading the model: 6.2 of 15.4 GB (39%), 3.1 MB/s, about 50 min left"
+        servers.splash = .init(installed: true, supported: true, why: nil, install: "brew install incoai/tap/splash", signedIn: false)
+        localServers = servers
+    }
+
     func previewRules() {
         builtinRules = [.init(id: "github-token", type: "SECRET", on: true), .init(id: "gitlab-token", type: "SECRET", on: true),
                         .init(id: "key-in-prose", type: "SECRET", on: true), .init(id: "email", type: "EMAIL", on: true),
@@ -1205,7 +1235,8 @@ final class Engine {
     }
 
     /// Run the bundled `keepmum` off the main thread. `onLine` sees stderr lines as they arrive.
-    private func run(_ args: [String], process box: ProcessBox? = nil, onLine: (@Sendable (String) -> Void)? = nil) async throws -> Output {
+    private func run(_ args: [String], input: Data? = nil, process box: ProcessBox? = nil,
+                     onLine: (@Sendable (String) -> Void)? = nil) async throws -> Output {
         guard let cli else { throw EngineError("This copy of Keepmum has no bundled engine.") }
         return try await Task.detached {
             let p = Process()
@@ -1216,6 +1247,8 @@ final class Engine {
             let out = Pipe(), err = Pipe()
             p.standardOutput = out
             p.standardError = err
+            let stdin = input.map { _ in Pipe() }
+            if let stdin { p.standardInput = stdin }
             let collected = LockedData()
             err.fileHandleForReading.readabilityHandler = { h in
                 let chunk = h.availableData
@@ -1225,6 +1258,10 @@ final class Engine {
                 }
             }
             try p.run()
+            if let stdin, let input {
+                stdin.fileHandleForWriting.write(input)
+                try? stdin.fileHandleForWriting.close()
+            }
             box?.process = p
             defer { box?.process = nil }
             let stdout = out.fileHandleForReading.readDataToEndOfFile()

@@ -447,6 +447,11 @@ enum Snapshotter {
         // A local mode pane while no check answers on this Mac.
         render(Dashboard(store: store, engine: .preview(localOff: true), page: .settings, settingsPane: .localModels).frame(width: 1200, height: 1240),
                to: "\(dir)/settings-localModels-off-light.png", dark: false)
+        // Splash's first download, not signed in to Hugging Face: the tip under its row.
+        let downloadEngine = Engine.preview()
+        downloadEngine.previewSplashDownload()
+        render(Dashboard(store: store, engine: downloadEngine, page: .settings, settingsPane: .localModels).frame(width: 1200, height: 1240),
+               to: "\(dir)/settings-localModels-download-light.png", dark: false)
         // Every built-in rule, as the Detection page's sheet shows them.
         let rulesEngine = Engine.preview()
         rulesEngine.previewRules()

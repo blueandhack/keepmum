@@ -408,6 +408,8 @@ struct LocalServersSection: View {
     @State private var otherURL = "http://localhost:"
     /// The Splash command just copied, to say what to do with it.
     @State private var copiedSplash: String?
+    @State private var addingToken = false
+    @State private var hfToken = ""
     /// The command that installs Splash, just copied.
     @State private var installCopied: String?
     /// Downloading another model to Ollama server `number`: a Hugging Face link or an Ollama name.
@@ -454,6 +456,10 @@ struct LocalServersSection: View {
                 ForEach(Array(rows.enumerated()), id: \.offset) { i, server in
                     row(i + 1, server)
                     Hairline()
+                    if needsToken(server) {
+                        tokenTip(server)
+                        Hairline()
+                    }
                 }
                 if needsBackup, let pick = defaultPick {
                     backupRow(pick)
@@ -490,6 +496,41 @@ struct LocalServersSection: View {
             Button("Add") { let url = otherURL; Task { await engine.addLocalServer(url: url) } }
         } message: {
             Text("Its URL, on this Mac: http://localhost, 127.0.0.1 or [::1], with its port.")
+        }
+    }
+
+    /// Splash downloads its model (about 16 GB for keepmum's pick) without a Hugging Face sign-in,
+    /// which Hugging Face lets go slower: before the first start, or while it downloads.
+    private func needsToken(_ server: Engine.LocalServers.Server) -> Bool {
+        guard engine.localServers?.splash?.signedIn == false, server.kind != "Splash" else { return false }
+        return server.progress?.hasPrefix("downloading") == true || (server.managed != true && server.downloaded == false)
+    }
+
+    @ViewBuilder private func tokenTip(_ server: Engine.LocalServers.Server) -> some View {
+        let downloading = server.progress?.hasPrefix("downloading") == true
+        FormRow(title: "Faster download: sign in to Hugging Face",
+                detail: downloading
+                    ? "Hugging Face limits downloads without a sign-in. A token takes effect when Splash starts again, and this download would start over: worth it early on."
+                    : "The first start downloads the model, about 16 GB for keepmum\u{2019}s pick. Signed in, Hugging Face lets it go faster: add a token before you click Start.",
+                help: "Make a token with Read access at huggingface.co/settings/tokens. keepmum saves it in ~/.cache/huggingface/token, readable only by you, where Splash\u{2019}s downloader looks; `hf auth login` writes the same file.") {
+            HStack(spacing: Space.s) {
+                PillButton(title: "Get a Token", icon: "arrow.up.right") {
+                    if let url = URL(string: "https://huggingface.co/settings/tokens") { NSWorkspace.shared.open(url) }
+                }
+                PillButton(title: "Add Token", icon: "key", prominent: !downloading) { hfToken = ""; addingToken = true }
+                    .disabled(!engine.isBundled || engine.busy)
+            }
+        }
+        .alert("Add a Hugging Face token", isPresented: $addingToken) {
+            SecureField("hf_\u{2026}", text: $hfToken)
+            Button("Cancel", role: .cancel) { hfToken = "" }
+            Button("Save") {
+                let token = hfToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                hfToken = ""
+                if !token.isEmpty { Task { await engine.saveHFToken(token) } }
+            }
+        } message: {
+            Text("A token with Read access, from huggingface.co/settings/tokens. keepmum saves it on this Mac, readable only by you, for Splash\u{2019}s downloads; it is sent only to Hugging Face.")
         }
     }
 

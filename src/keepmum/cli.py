@@ -966,7 +966,10 @@ def _splash_start(server, name: str | None) -> str | None:
     if not server.model or not (name == "Splash" or (name is None and server.url.endswith(":" + SPLASH_URL.rsplit(":", 1)[-1]))):
         return None
     port = server.url.rsplit(":", 1)[-1]
-    return splash_command(server.model) + ("" if server.url == SPLASH_URL else f" --port {port}")
+    from .localmodels import parse_context
+
+    return (splash_command(server.model, parse_context(_config().guard_local_splash_context))
+            + ("" if server.url == SPLASH_URL else f" --port {port}"))
 
 
 def _splash_status() -> dict:
@@ -980,9 +983,11 @@ def _splash_managed(server, name: str | None) -> dict:
     from . import splashsvc
 
     m = splashsvc.managed()
+    # Whether its model is on this Mac yet: if not, its first start downloads it (the app's tip).
+    downloaded = splashsvc.cached(server.model) if name != "Splash" and "/" in server.model else None
     if not m or not m["port"] or not server.url.endswith(f":{m['port']}"):
-        return {"managed": False, "progress": None}
-    return {"managed": True, "progress": None if name == "Splash" else splashsvc.progress()}
+        return {"managed": False, "progress": None, "downloaded": downloaded}
+    return {"managed": True, "progress": None if name == "Splash" else splashsvc.progress(), "downloaded": downloaded}
 
 
 def _context_text(n: int | None, longest: int | None) -> str:
@@ -1019,8 +1024,12 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
                        stop: bool = typer.Option(False, "--stop", help="Stop the Splash keepmum runs, and no longer start it at login."),
                        idle: str = typer.Option(None, "--idle", help="With --start: how long without a request before it frees its "
                                                 "memory, or off (default: `[guard] local_keep_loaded`, `keepmum guard local speed`)."),
-                       context: str = typer.Option("64k", "--context", help="Its context: 16k, 32k, 64k (the default), 128k, up to "
-                                                   "the model's own window (256k for keepmum's pick), or default (Splash's own).")) -> None:
+                       context: str = typer.Option(None, "--context", help="Its context: 16k, 32k, 64k (keepmum's default), 128k, up "
+                                                   "to the model's own window (256k for keepmum's pick), or default (Splash's own). "
+                                                   "Kept for the next start (default: the last one set, `[guard] local_splash_context`)."),
+                       hf_token: bool = typer.Option(False, "--hf-token", help="Read a Hugging Face token on stdin and save it where "
+                                                     "Splash's downloader looks (~/.cache/huggingface/token): signed in, Hugging Face "
+                                                     "lets downloads go faster. Splash uses it from its next start.")) -> None:
     """Use Splash (github.com/incoai/splash) for local mode: tried first, the other servers kept behind it.
     Splash is an engine for Apple silicon built around a few models; with keepmum's pick it wrote about
     1.6 times as fast as Ollama in keepmum's tests. --start runs it in the background; without it, this
@@ -1033,6 +1042,18 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
         typer.echo("stopped Splash, and it no longer starts at login" if splashsvc.stop() else "keepmum was not running Splash",
                    err=True)
         return
+    if hf_token:
+        try:
+            path = splashsvc.save_hf_token(sys.stdin.read())
+        except ValueError as e:
+            typer.echo(f"keepmum guard local splash --hf-token: {e}", err=True)
+            raise typer.Exit(2)
+        typer.echo(f"saved your Hugging Face token to {path} (only you can read it): Splash downloads signed in from its "
+                   "next start. A download under way starts over when Splash starts again.", err=True)
+        return
+    chosen = context is not None
+    if context is None:
+        context = _config().guard_local_splash_context
     if idle is None:
         idle = splashsvc.idle_release(_config().guard_local_keep_loaded)
     if start and not re.fullmatch(r"\d+[smh]?|off", idle):
@@ -1083,6 +1104,8 @@ def guard_local_splash(model: str = typer.Argument(None, help="A pick that Splas
         except (splashsvc.SplashError, ValueError, OSError) as e:
             typer.echo(f"{where}: {e}", err=True)
             raise typer.Exit(1)
+        if chosen:
+            _save_splash_context(cfg, size, f"{where} --start --context {context}")
         typer.echo(f"Splash is starting in the background, and starts again at login (`{where} --stop` stops it). "
                    "The first start downloads the model and its draft; "
                    + ("it keeps it loaded" if idle == "off" else f"it frees its memory after {idle} without a request and "
@@ -1226,6 +1249,15 @@ def _runs_splash(url: str) -> bool:
     return bool(m and m["port"] and url.rstrip("/").endswith(f":{m['port']}"))
 
 
+def _save_splash_context(cfg, tokens: int | None, command: str) -> None:
+    """Keep the context Splash runs with for its next start: Stop removes its LaunchAgent."""
+    from .localmodels import context_label
+
+    label = context_label(tokens)
+    if label != cfg.guard_local_splash_context:
+        _update_config(cfg.path, "guard", "local_splash_context", None if label == "64k" else label, command)
+
+
 def _splash_context(number: int, target, size: str | None, n: int | None) -> None:
     """`keepmum guard local context` for Splash: it takes its context when it starts, so keepmum
     starts the Splash it runs again; one started in a terminal is started again by hand."""
@@ -1265,6 +1297,7 @@ def _splash_context(number: int, target, size: str | None, n: int | None) -> Non
     except (splashsvc.SplashError, OSError) as e:
         typer.echo(f"{where}: {e}", err=True)
         raise typer.Exit(1)
+    _save_splash_context(_config(), n, f"{where} {size}")
     said = f"a {context_label(n)}-token context" if n else "Splash's own context (the model's longest when memory holds it)"
     typer.echo(f"local server {number}: Splash starts again with {said}, and loads its model again in a few seconds."
                + memory(n), err=True)
