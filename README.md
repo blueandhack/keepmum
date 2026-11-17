@@ -37,6 +37,8 @@ Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned
 
 ▶ [Watch the 98-second video](https://keepmum.app/video/keepmum-flow-e4795778a6.mp4) of how a request travels through keepmum, or see it on [keepmum.app](https://keepmum.app/#video).
 
+▶ [Take the 58-second tour of the app](https://keepmum.app/video/keepmum-tour-46c3491c76.mp4): the menu bar, the live Overview, Logs, the Protection map and a turn under review, rendered from the app's own views on preview data ([keepmum.app](https://keepmum.app/#tour)).
+
 ![The keepmum dashboard: requests out and replies back, per coding agent](mac/docs/overview-light.png)
 
 ## How it works

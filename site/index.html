@@ -18,7 +18,7 @@
 <script src="analytics.js" defer></script>
 <!-- The newest release's build time in the visitor's time zone -->
 <script src="release.js" defer></script>
-<!-- The flow video plays muted once it is on screen -->
+<!-- The videos play muted once they are on screen -->
 <script src="video.js" defer></script>
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="keepmum">
@@ -92,6 +92,17 @@
    "embedUrl": "https://keepmum.app/#video",
    "uploadDate": "2026-11-16T00:00:00Z",
    "duration": "PT1M38S"
+  },
+  {
+   "@type": "VideoObject",
+   "@id": "https://keepmum.app/#tour",
+   "name": "A tour of the keepmum app",
+   "description": "The keepmum app on a Mac, on preview data: the menu bar panel, the Overview with requests out and replies back live, Logs of what the checks flagged and what was masked, a jailbreak sample sent along the Protection map, and the window where you review a flagged turn before it goes. 58 seconds, no sound.",
+   "thumbnailUrl": "https://keepmum.app/img/tour-poster.webp",
+   "contentUrl": "https://keepmum.app/video/keepmum-tour-46c3491c76.mp4",
+   "embedUrl": "https://keepmum.app/#tour",
+   "uploadDate": "2026-11-17T00:00:00Z",
+   "duration": "PT58S"
   },
   {
    "@type": "FAQPage",
@@ -328,6 +339,13 @@
         <figure class="shot"><img src="img/dashboard.webp" width="2400" height="1560" alt="The keepmum dashboard: requests going out and replies coming back, per coding agent, with what was masked, blocked and flagged by a check"></figure>
         <img class="menu-shot" src="img/menu.webp" width="640" height="1034" alt="The keepmum menu in the menu bar" loading="lazy">
       </div>
+      <figure id="tour" class="video">
+        <video controls muted preload="none" playsinline poster="img/tour-poster.webp" width="1920" height="1080" aria-describedby="tour-caption">
+          <source src="/video/keepmum-tour-46c3491c76.mp4" type="video/mp4">
+          <a href="/video/keepmum-tour-46c3491c76.mp4">Watch the tour (MP4, 5 MB)</a>
+        </video>
+        <figcaption id="tour-caption">A tour of the app in 58 seconds: the menu bar, the Overview’s live flow, Logs, a sample sent along the Protection map, and a turn under review. Preview data, made up; no sound, the captions are in the picture.</figcaption>
+      </figure>
       <div class="cols">
         <div class="feature">
           <h3>Every session</h3>

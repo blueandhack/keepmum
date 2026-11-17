@@ -74,6 +74,14 @@ cd worker && npx wrangler r2 object put "keepmum-media/keepmum-flow-$H.mp4" --re
 CRF 24 is the highest that keeps the small colored text and the scan's gradient clean; at 28 blocks
 show around the text. AVFoundation's own H.264 (the script's `.mp4` output) is six times the size.
 
+The app tour (`keepmum-tour.mp4`, 58 seconds) is the app's own views, rendered by the app:
+
+```sh
+cd mac && swift build -c release && .build/release/Keepmum --tour /tmp/tour && cd ..
+ffmpeg -framerate 30 -i /tmp/tour/%05d.png -c:v libx264 -preset veryslow -tune animation -crf 24 -g 300 \
+  -pix_fmt yuv420p -movflags +faststart -an docs/video/keepmum-tour.mp4      # about 5 MB
+```
+
 Then point `site/index.html`, `site/sitemap.xml` and `README.md` at `/video/keepmum-flow-$H.mp4`, and refresh the poster (`site/img/flow-poster.webp`, a still from `swift docs/video/flow.swift --frames`). R2's free tier covers 10 GB stored and charges nothing for what is downloaded.
 
 ## If the Worker goes away

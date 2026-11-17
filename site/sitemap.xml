@@ -11,6 +11,14 @@
       <video:duration>98</video:duration>
       <video:publication_date>2026-11-16</video:publication_date>
     </video:video>
+    <video:video>
+      <video:thumbnail_loc>https://keepmum.app/img/tour-poster.webp</video:thumbnail_loc>
+      <video:title>A tour of the keepmum app</video:title>
+      <video:description>The keepmum app on a Mac, on preview data: the menu bar panel, the live Overview, Logs, a sample sent along the Protection map, and the review of a flagged turn. 58 seconds, no sound.</video:description>
+      <video:content_loc>https://keepmum.app/video/keepmum-tour-46c3491c76.mp4</video:content_loc>
+      <video:duration>58</video:duration>
+      <video:publication_date>2026-11-17</video:publication_date>
+    </video:video>
   </url>
   <url>
     <loc>https://keepmum.app/privacy</loc>
