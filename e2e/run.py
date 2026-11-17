@@ -379,6 +379,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = RESULTS / f"{args.mode}-{stamp}"
+    # Two runners started in the same second (release-check.sh runs agy beside the others) each get a folder.
+    for n in range(2, 100):
+        try:
+            out.mkdir(parents=True)
+            break
+        except FileExistsError:
+            out = RESULTS / f"{args.mode}-{stamp}-{n}"
     keep = out  # every run with --keep; without it, the runs that failed
     agents = [AGENTS[a] for a in (args.agent or AGENTS)]
     if args.cmd == "run" and args.mode == "live":
