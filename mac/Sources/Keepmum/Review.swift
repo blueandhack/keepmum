@@ -440,6 +440,7 @@ struct ReviewClock: View {
     var agentSince: Double?
     var agentLimit: Double?
     @Environment(\.isSnapshot) private var isSnapshot
+    @Environment(\.tourClock) private var tourClock
     /// For snapshots: a pause this many seconds old.
     var previewPause: Double?
 
@@ -450,7 +451,7 @@ struct ReviewClock: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let now = isSnapshot ? created + 18 : context.date.timeIntervalSince1970
+            let now = tourClock?.timeIntervalSince1970 ?? (isSnapshot ? created + 18 : context.date.timeIntervalSince1970)
             let since = isSnapshot ? previewPause.map { now - $0 } : pausedSince
             let hard = hardDeadline ?? .infinity
             let left = Int(max(0, min(deadline - (since ?? now), hard - now)).rounded(.up))

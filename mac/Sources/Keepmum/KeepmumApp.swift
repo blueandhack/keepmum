@@ -366,6 +366,7 @@ enum DashboardWindow {
 ///   `Keepmum --snapshot dir --live`  the overview from the running keepmum's stats feed
 ///   `Keepmum --icon dir`             the app icon at every size iconutil needs
 ///   `Keepmum --dmg-background dir`   the DMG window's background, at 1x and 2x (make-dmg.sh)
+///   `Keepmum --tour dir [t …]`        the app tour video's frames, or the moments given (Tour.swift)
 @MainActor
 enum Snapshotter {
     static func runIfRequested() {
@@ -384,6 +385,11 @@ enum Snapshotter {
             for scale in [1, 2] {
                 render(DMGBackground(), to: "\(args[i + 1])/background\(scale == 2 ? "@2x" : "").png", dark: false, scale: CGFloat(scale))
             }
+            exit(0)
+        }
+        if let i = args.firstIndex(of: "--tour"), i + 1 < args.count {
+            _ = NSApplication.shared
+            Tour.run(dir: args[i + 1], at: args.dropFirst(i + 2).compactMap(Double.init))
             exit(0)
         }
         guard let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count else { return }

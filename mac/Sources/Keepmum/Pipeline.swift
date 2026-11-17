@@ -64,12 +64,13 @@ struct FlowBandsView: View {
     /// The pointer, while it is over the diagram: what is under it is highlighted.
     @State private var hover: CGPoint?
     @AppStorage(FlowPulseStyle.key) private var style: FlowPulseStyle = .comet
+    @Environment(\.tourClock) private var tourClock
 
     var body: some View {
         // Requests that only wait at a provider breathe slowly: a low frame rate is enough for them.
         TimelineView(.animation(minimumInterval: pulses.isEmpty ? 1 / 20 : 1 / 60, paused: !live || (pulses.isEmpty && open.isEmpty))) { tl in
             Canvas { context, size in
-                FlowBands(flows: flows, size: size, open: open).draw(&context, now: tl.date, pulses: pulses, style: style, hover: hover)
+                FlowBands(flows: flows, size: size, open: open).draw(&context, now: tourClock ?? tl.date, pulses: pulses, style: style, hover: hover)
             }
         }
         .onContinuousHover { phase in

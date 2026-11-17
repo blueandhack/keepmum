@@ -8,6 +8,8 @@ import SwiftUI
 extension EnvironmentValues {
     /// True while Snapshotter renders: views avoid what ImageRenderer cannot draw (ScrollView).
     @Entry var isSnapshot = false
+    /// The time while the tour renders a frame (Tour.swift): what moves is drawn as of then, not now.
+    @Entry var tourClock: Date? = nil
 }
 
 enum Appearance: String, CaseIterable, Identifiable {

@@ -617,12 +617,14 @@ struct ProtectionMapPage: View {
     @State private var started = Date()
     @Environment(\.isSnapshot) private var isSnapshot
 
-    /// `selected` and `sample`: what it opens on (the snapshot renderer shows each).
-    init(store: StatsStore, engine: Engine, selected: MapPart = .injection, sample: MapSample? = nil) {
+    /// `selected` and `sample`: what it opens on (the snapshot renderer shows each). `started`: when
+    /// the sample set off, for the tour.
+    init(store: StatsStore, engine: Engine, selected: MapPart = .injection, sample: MapSample? = nil, started: Date = Date()) {
         self.store = store
         self.engine = engine
         _selected = State(initialValue: selected)
         _sample = State(initialValue: sample)
+        _started = State(initialValue: started)
     }
 
     /// From this width the selected part's settings sit beside the map, in a column this wide.
@@ -793,6 +795,7 @@ struct MapDiagram: View {
     var started: Date
     @State private var hovered: MapPart?
     @Environment(\.isSnapshot) private var isSnapshot
+    @Environment(\.tourClock) private var tourClock
 
     private var s: MapSettings { settings }
 
@@ -925,7 +928,8 @@ struct MapDiagram: View {
     private var moving: some View {
         TimelineView(.animation(minimumInterval: 1 / 30, paused: isSnapshot)) { tl in
             Canvas { ctx, _ in
-                let t = tl.date.timeIntervalSinceReferenceDate
+                let now = tourClock ?? tl.date
+                let t = now.timeIntervalSinceReferenceDate
                 if !layout.empty {
                     for (i, r) in ambient.enumerated() {
                         let period = 5.0
@@ -935,7 +939,7 @@ struct MapDiagram: View {
                     }
                 }
                 guard let run else { return }
-                let elapsed = isSnapshot ? run.length * 0.55 : tl.date.timeIntervalSince(started)
+                let elapsed = tourClock != nil || !isSnapshot ? now.timeIntervalSince(started) : run.length * 0.55
                 ctx.stroke(run.route, with: .color(Theme.accent.opacity(0.85)),
                            style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [2, 6], dashPhase: CGFloat(-t * 26)))
                 for d in run.dots where elapsed >= d.delay {
