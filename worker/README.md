@@ -63,13 +63,18 @@ The website's flow video (`docs/video/flow.swift`) is too big for git, so it liv
 
 ```sh
 npx wrangler r2 bucket create keepmum-media                     # once
-swift docs/video/flow.swift docs/video/keepmum-flow.mp4         # from the repository root
+swift docs/video/flow.swift /tmp/flow.mov                      # from the repository root: a ProRes master, 1.4 GB
+ffmpeg -i /tmp/flow.mov -c:v libx264 -preset veryslow -tune animation -crf 24 -g 300 \
+  -pix_fmt yuv420p -movflags +faststart -an docs/video/keepmum-flow.mp4   # about 2.5 MB (brew install ffmpeg)
 H=$(shasum -a 256 docs/video/keepmum-flow.mp4 | cut -c1-10)
 cd worker && npx wrangler r2 object put "keepmum-media/keepmum-flow-$H.mp4" --remote \
   --file ../docs/video/keepmum-flow.mp4 --content-type video/mp4
 ```
 
-Then point `site/index.html` at `/video/keepmum-flow-$H.mp4`, and refresh the poster (`site/img/flow-poster.webp`, a still from `swift docs/video/flow.swift --frames`). R2's free tier covers 10 GB stored and charges nothing for what is downloaded.
+CRF 24 is the highest that keeps the small colored text and the scan's gradient clean; at 28 blocks
+show around the text. AVFoundation's own H.264 (the script's `.mp4` output) is six times the size.
+
+Then point `site/index.html`, `site/sitemap.xml` and `README.md` at `/video/keepmum-flow-$H.mp4`, and refresh the poster (`site/img/flow-poster.webp`, a still from `swift docs/video/flow.swift --frames`). R2's free tier covers 10 GB stored and charges nothing for what is downloaded.
 
 ## If the Worker goes away
 

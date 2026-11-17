@@ -3,7 +3,8 @@
 //     swift docs/video/flow.swift docs/video/keepmum-flow.mp4
 //
 // Every frame is drawn with SwiftUI (ImageRenderer) and encoded with AVFoundation, so it needs
-// nothing beyond macOS and Xcode's command line tools. Every value shown is synthetic. It is set in
+// nothing beyond macOS and Xcode's command line tools. The website's copy is compressed from a
+// ProRes master (an output ending in .mov) with ffmpeg, a sixth the size (worker/README.md). Every value shown is synthetic. It is set in
 // the website's typefaces (site/fonts) and the app's colors: coral for keepmum, amber for a real
 // value, blue for a placeholder (masked) and green for a value restored.
 
@@ -790,13 +791,15 @@ struct Frame {
 @MainActor
 func render(to url: URL) throws {
     try? FileManager.default.removeItem(at: url)
-    let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+    // A .mov is a ProRes 4444 master, near lossless, for ffmpeg to compress (worker/README.md).
+    let master = url.pathExtension == "mov"
+    let writer = try AVAssetWriter(outputURL: url, fileType: master ? .mov : .mp4)
     // Its index first, so a browser starts playing before the whole file has arrived.
     writer.shouldOptimizeForNetworkUse = true
-    let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
-        AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: Int(W), AVVideoHeightKey: Int(H),
-        AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 8_000_000, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel],
-    ])
+    let input = AVAssetWriterInput(mediaType: .video, outputSettings: master
+        ? [AVVideoCodecKey: AVVideoCodecType.proRes4444, AVVideoWidthKey: Int(W), AVVideoHeightKey: Int(H)]
+        : [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: Int(W), AVVideoHeightKey: Int(H),
+           AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 8_000_000, AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel]])
     input.expectsMediaDataInRealTime = false
     let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
         kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
