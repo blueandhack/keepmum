@@ -608,7 +608,6 @@ struct Frame {
             ZStack(alignment: .topLeading) {
                 lines(request, appear: [6.4, 7.1, 7.8, 8.5], phase: .request).opacity(1 - p(t, 28.4, 28.9))
                 lines(reply, appear: [29.2, 29.8, 30.4, 31.0, 43.4, 47.9], phase: .reply).opacity(p(t, 28.9, 29.2))
-                scanLine
             }
             Spacer(minLength: 0)
         }
@@ -616,6 +615,8 @@ struct Frame {
         .frame(width: 1110, height: 470, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(C.surface)
             .shadow(color: .black.opacity(0.06), radius: 16, y: 6))
+        // Clipped to the card, so the scan never spills past its edges.
+        .overlay(scanLine.clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous)))
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
             .strokeBorder(C.masked.opacity(providerView), lineWidth: 3))
         .offset(x: 50, y: 420)
@@ -623,13 +624,15 @@ struct Frame {
         }())
     }
 
+    /// Sweeps the whole message card, from just off its left edge to just off its right.
     var scanLine: AnyView {
         AnyView({
         let k = p(t, 12.4, 14.4)
         return LinearGradient(colors: [C.accent.opacity(0), C.accent.opacity(0.35), C.accent.opacity(0)], startPoint: .leading, endPoint: .trailing)
-            .frame(width: 140, height: 300)
-            .offset(x: lerp(-140, 1040, k))
+            .frame(width: 140, height: 470)
+            .offset(x: lerp(-140, 1110, k))
             .opacity(window(t, 12.3, 14.6, fade: 0.2))
+            .frame(width: 1110, height: 470, alignment: .topLeading)
         }())
     }
 
