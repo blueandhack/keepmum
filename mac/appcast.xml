@@ -7,6 +7,43 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a10</title>
+      <pubDate>Tue, 17 Nov 2026 06:34:34 GMT</pubDate>
+      <sparkle:version>10010</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a10</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a10</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The tenth alpha of keepmum finishes the fix for Splash's first download on a new Mac. It shows how much has really come, how fast and how long is left, and offers a Hugging Face sign-in, which makes downloads faster. Splash also keeps its context across Stop and Start.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a10.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2 through 0.1.0a9:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a10.dmg.sha256`
+
+## New
+
+- **Faster downloads, signed in.** Hugging Face lets downloads go faster for a signed-in user. Before Splash's first download, without a token, a tip under its row in Settings › Local models offers **Get a Token** and **Add Token**. keepmum saves the token on this Mac, readable only by you, where Splash's downloader looks (`~/.cache/huggingface/token`, as `hf auth login` does). In a terminal: `keepmum guard local splash --hf-token`, which reads it on stdin. Add it before you click Start: a download that stops starts over.
+- **Speed and time left.** While Splash downloads, its row reads, for example, "downloading the model: 6.2 of 15.4 GB (39%), 3.1 MB/s, about 50 min left". If nothing new comes for a while, it says so, such as "nothing new for 3 min".
+
+## Fixes
+
+- **Splash's first download still read 0.0 GB.** 0.1.0a9 counted the file on disk, which Hugging Face's downloader writes only as the pieces it fetches at once join up. On a slower line, that file stays at 0 while gigabytes arrive. keepmum now counts what the downloader has received. In a download on a new Mac, the row climbed steadily from 0.9 to 15.2 GB, while the file on disk sat still for two minutes.
+- **Splash went back to a 64k context after Stop and Start.** The context you choose is now kept (`[guard] local_splash_context`).
+- **"Error · not_found · GET /api/tags" showed on Splash's row** for a moment as it became ready. That line was keepmum checking what server answers there, not a Splash error, and the row no longer shows it.
+- **0.1.0a9's notes said a stopped download picks up where it left off.** It does not: it starts over, and leaves the partial file behind. keepmum now counts only the newest one.
+
+This release was checked as 0.1.0a9 was. The unit tests passed (1,624). The live suite on real cloud models passed 70 of 71 runs, and the Antigravity CLI passed all 17. The one failure was not keepmum: Claude Haiku would not send a token to the team channel the task asked for, so the case had nothing to check. It passed 3 of 3 when run again. A first Splash download, of 16.5 GB, was run from the app on a Mac without the model.</description>
+      <enclosure url="https://keepmum.app/update/v0.1.0a10/Keepmum-0.1.0a10.dmg" length="39542253" type="application/octet-stream" sparkle:edSignature="63X3aDfr1SIrybA7VJmDrjoDubsaruYE7/QRm4dhdymk+Hpg8KS3PCAiXpkGMU/ec0O/VNkSc8omTzUDZ4y9BA=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a9</title>
       <pubDate>Tue, 17 Nov 2026 04:43:45 GMT</pubDate>
       <sparkle:version>10009</sparkle:version>
@@ -353,6 +390,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: DWXqct+Aoycz8ptr/Td773QxV914MmZcnvLSLJhzp3ifsCw+Iy4JfZRq4mNEZrDHB6iJ5AWnk6zvFIhWSlFqCw==
-length: 35547
+edSignature: 5CsUhWKsZlEErYDVkP/h6betzHjr35bJkNUtkecvrHFgYn9MgIv9QOX4He9Cr7atdYeptWlORrz2wPvvgV20Cw==
+length: 39464
 -->
