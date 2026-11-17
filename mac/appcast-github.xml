@@ -7,6 +7,38 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a9</title>
+      <pubDate>Tue, 17 Nov 2026 04:43:45 GMT</pubDate>
+      <sparkle:version>10009</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a9</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a9</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The ninth alpha of keepmum fixes local mode's first start with Splash on a new Mac, which looked stuck while it downloaded the model.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a9.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2 through 0.1.0a8:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a9.dmg.sha256`
+
+## Fixes
+
+- **Splash's first start showed "Fetching 1 files: 0%" for the whole download.** With Use keepmum's pick › With Splash, the first start downloads about 16.5 GB: a 1 GB draft model, then the model itself as one 15.4 GB file. Settings › Local models showed the last line of Splash's log. That line is Hugging Face's counter of *files*, which moves only when a file is done, so it read 0% from start to finish. On a new Mac it looked stuck. The row now says how much has come, such as "downloading Qwen3.6-35B-A3B…: 4.2 of 15.4 GB (27%)", then the loading and warm-up steps.
+- **The app stopped following a long first start after 20 minutes.** It now follows Splash until it answers, for up to 4 hours.
+
+If a download really stops (the size stays the same), click Stop and then Start in Settings › Local models: Splash picks up where it left off.
+
+This release was checked as 0.1.0a8 was: the unit tests, the scripted end-to-end suite, and the live suite on real models.</description>
+      <enclosure url="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a9/Keepmum-0.1.0a9.dmg" length="39515901" type="application/octet-stream" sparkle:edSignature="hiMHrDOBMpyku5Lr8Vtq6/qKELEZfk5S20zF5QRLd8I/Q7LqB8KO8o6Q1NFwc0MPYqRM3wS9hdiC7JtnXAn+DA=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a8</title>
       <pubDate>Mon, 16 Nov 2026 09:48:18 GMT</pubDate>
       <sparkle:version>10008</sparkle:version>
@@ -321,6 +353,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: u/l6bFy2IKTKmPUIgG9accvWud4MXfv03rtfgkJmWWblf3+kYe9zrN2f8MeZOQzyY9sRLSg4Ynr2pLNWp13zCg==
-length: 33051
+edSignature: WYJwAeKUE+99JARe1TWlabRF2dINAuPUmDnkctxfZyutnfbDJlaAk+LtLunORhFF7ivhNukGeQNXp9MWIIlzBA==
+length: 35697
 -->
