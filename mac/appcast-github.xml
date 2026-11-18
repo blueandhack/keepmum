@@ -7,6 +7,37 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a12</title>
+      <pubDate>Wed, 18 Nov 2026 09:39:49 GMT</pubDate>
+      <sparkle:version>10012</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a12</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a12</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The twelfth alpha of keepmum fixes one bug: a Codex session that sent a screenshot could stop with an error from OpenAI.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a12.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2 through 0.1.0a11:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a12.dmg.sha256`
+
+## Fixes
+
+- **A screenshot in a Codex tool's output could break the session.** When a tool returns an image (Codex's `view_image`, or an MCP tool that takes a screenshot), the image goes to OpenAI as base64 text. keepmum scanned that text like any other tool output. Now and then a stretch of an image's base64 looked like a secret, and keepmum put a placeholder in the middle of it. OpenAI then refused the request: `Invalid '…image_url'. Expected a base64-encoded data URL … but got an invalid base64-encoded value.` In a test on 34 real PNGs, 2 were changed this way. Images and files in a tool's output now go out as they are, as they already did in a message and in Claude Code's and the Antigravity CLI's requests. Text next to them is still masked.
+
+  A session that already hit this error keeps failing after the update, because the broken image is in its history and is sent again with every request. Start a new session.
+
+This release was checked with the unit tests and the scripted suite only. It was not run against real agents and models (the live suite), as earlier releases were.</description>
+      <enclosure url="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a12/Keepmum-0.1.0a12.dmg" length="39647575" type="application/octet-stream" sparkle:edSignature="5VEpXRX0G4rX1Oq3nCyJOv1n+wxOyv4eduPkKfr/sgxrTtX/L+o15eVx+vgcZUEqQ2jOipUp8vyU1mk3j8E4AQ=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a11</title>
       <pubDate>Wed, 18 Nov 2026 07:06:11 GMT</pubDate>
       <sparkle:version>10011</sparkle:version>
@@ -433,6 +464,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: riLhpyIyW+f85n2CNBgx6EeCcoN2ihCree0SzvJW13F5Q2dsCbNkDzYWXTcTKiXPMLF6IedtYLeow7rmXQIGAg==
-length: 45794
+edSignature: sSuw96hbqX/rykXCKJeDrq/QRRv+gv0nt7Hp3iyfEJPN4Qc2p0OLPNosriGKy4w607FoFa5AfkaY8np4RIcNBQ==
+length: 48549
 -->
