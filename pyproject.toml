@@ -21,6 +21,7 @@ keepmum-claude-wrapper = "keepmum.launch:wrap_main"
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-xdist>=3.6",
     "faker>=30",
     "coverage>=7.10",
 ]
@@ -59,10 +60,22 @@ afm = [
 requires = ["uv_build>=0.9,<0.14"]
 build-backend = "uv_build"
 
+# The tests run in parallel, a worker per core (pytest-xdist): about 5 s on an M5 Pro, 24 s one at a
+# time. `pytest -n 0` runs them one at a time (for pdb, or a test's own output).
+[tool.pytest.ini_options]
+addopts = "-n auto"
+
 # CI fails below fail_under (.github/workflows/ci.yml): statements and branches over the engine.
+# The parallel test workers are processes of their own: coverage measures each (patch: subprocess)
+# into a data file of its own, and `coverage combine` joins them before the report.
 [tool.coverage.run]
 branch = true
 source = ["src/keepmum"]
+patch = ["subprocess"]
+parallel = true
+# Measured, a child process would say on stderr that sys.monitoring cannot do branches before
+# Python 3.14 (CI's COVERAGE_CORE=sysmon on an older Python), and fail tests that check stderr.
+disable_warnings = ["no-sysmon"]
 
 [tool.coverage.report]
 fail_under = 95

@@ -24,11 +24,14 @@ jobs:
       - run: uv sync --frozen
       # The tests, measured: statement and branch coverage over src/keepmum, which fails the job below
       # fail_under in pyproject.toml. sys.monitoring keeps it fast (branches need Python 3.14 or later).
+      # pytest runs a worker per core (pytest-xdist, pyproject.toml); each writes its own coverage
+      # data, joined by `coverage combine`.
       - run: uv run --frozen coverage run -m pytest -q
         env:
           COVERAGE_CORE: sysmon
       - name: Coverage
         run: |
+          uv run --frozen coverage combine -q
           uv run --frozen coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY" || true
           uv run --frozen coverage report
 
