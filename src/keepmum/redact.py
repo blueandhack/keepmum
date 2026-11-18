@@ -35,6 +35,9 @@ PLACEHOLDER_HINT = (
 # Responses API items that are encrypted or signed, or carry no user content.
 RESPONSES_PASS_THROUGH = frozenset({"reasoning", "compaction", "item_reference", "web_search_call", "image_generation_call"})
 RESPONSES_HINT = {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": PLACEHOLDER_HINT}]}
+# Images and files in a tool's output (Codex's view_image, an MCP screenshot) pass through, as they
+# do in a message: a rule can match a stretch of base64, and a placeholder in it breaks the data URL.
+RESPONSES_BINARY_PARTS = frozenset({"input_image", "input_file"})
 
 # Below this length the first and last characters give too much of a value away: show none.
 PREVIEW_MIN = 8
@@ -554,7 +557,11 @@ class Redactor:
         for key in ("output", "input", "content", "text", "action", "error"):
             if key in out:
                 with self._result_of(tool if key == "output" else None, read=key in ("output", "content", "text", "error")):
-                    out[key] = self._values(out[key])
+                    if isinstance(out[key], list):
+                        out[key] = [p if isinstance(p, dict) and p.get("type") in RESPONSES_BINARY_PARTS else self._values(p)
+                                    for p in out[key]]
+                    else:
+                        out[key] = self._values(out[key])
         return out
 
     def _json_string(self, raw: str) -> str:

@@ -48,6 +48,23 @@ def test_request_items_are_masked_and_reasoning_passes_through():
     assert set(args) == {"cmd", "workdir"} and PLACEHOLDER.search(args["cmd"])
 
 
+def test_images_and_files_in_a_tool_output_pass_through():
+    # A rule matched a stretch of a screenshot's base64 (Codex's view_image, Nov 18), and the
+    # placeholder in it made OpenAI refuse the request: "invalid base64-encoded value".
+    canary = selftest.make_canary()
+    r = redactor()
+    image = {"type": "input_image", "image_url": f"data:image/png;base64,iVBORw0KGgo/{canary}/AAAA", "detail": "auto"}
+    file = {"type": "input_file", "filename": "a.pdf", "file_data": f"data:application/pdf;base64,JVBERi0x/{canary}/AA"}
+    body = {"input": [
+        {"type": "function_call", "name": "view_image", "call_id": "c1", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1",
+         "output": [{"type": "input_text", "text": f"token {canary}"}, image, file]},
+    ]}
+    output = r.redact_responses_request(body)["input"][-1]["output"]
+    assert canary not in output[0]["text"]
+    assert output[1:] == [image, file]
+
+
 def test_unchanged_arguments_keep_their_exact_text():
     r = redactor()
     raw = '{"cmd":  "ls -la"}'
