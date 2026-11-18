@@ -8,7 +8,7 @@ import anyio
 import httpx
 import pytest
 
-from keepmum.codemode import ScriptCheck, computed_to_network, shown_tool
+from keepmum.codemode import ScriptCheck, computed_to_network, guard_script, shown_tool
 from keepmum.detect.pipeline import Pipeline
 from keepmum.detect.rules import RulesDetector
 from keepmum.proxy import Proxy
@@ -104,7 +104,7 @@ def test_a_streamed_script_is_noted_once_right_after_its_call():
     assert note["content"][0]["text"].startswith("keepmum: this script")
     done = next(e for e in events if e["type"] == "response.completed")["response"]["output"]
     assert [i["id"] for i in done] == ["ctc_1", note["id"], "m2"]
-    assert done[0]["input"] == PIPE  # warned, not refused
+    assert done[0]["input"] == _guarded(PIPE)  # warned, not refused: it runs, its MCP call guarded
     hits = stats.snapshot()["guard"]["hits"]
     assert [(h["check"], h["action"]) for h in hits] == [("script", "warned")]  # once, though restored twice
 
@@ -113,7 +113,7 @@ def test_a_whole_reply_gets_the_note_after_its_call():
     r, stats = _run(PIPE, stream=False)
     output = r.json()["output"]
     assert [i["type"] for i in output] == ["custom_tool_call", "message", "message"]
-    assert output[1]["content"][0]["text"].startswith("keepmum: ") and output[0]["input"] == PIPE
+    assert output[1]["content"][0]["text"].startswith("keepmum: ") and output[0]["input"] == _guarded(PIPE)
     assert len(stats.snapshot()["guard"]["hits"]) == 1
 
 
@@ -129,3 +129,11 @@ def test_the_audit_log_says_what_the_script_check_saw():
                     "hits": [{"source": "exec", "categories": ["computed values sent to notes › send_note"]}]})
     assert line == ("codex -> openai; script check flagged a Codex script in the reply (computed values sent to "
                     "notes › send_note): values keepmum could not check; sent with a note to the user")
+
+
+def _guarded(script: str) -> str:
+    """The script as Codex gets it: run as written, each network call that gets a computed value
+    through keepmum's guard (codemode.guard_script)."""
+    from keepmum.restore import DEFAULT_POLICY, rule_for
+
+    return guard_script(script, lambda n: rule_for(n, DEFAULT_POLICY)[1])

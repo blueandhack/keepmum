@@ -398,8 +398,9 @@ def shown_tool(name: str) -> str:
 
 class ScriptCheck:
     """Warns, never refuses, when a Codex code-mode script hands a computed value to a network tool
-    (computed_to_network): keepmum cannot see that value, so a secret in a command's output can
-    reach the server. `review(name, value, action_of)` gives the hits to record and the note to show
+    (computed_to_network): keepmum cannot see that value. The guard (guard_script) withholds a secret
+    in a provider's format from it as the script runs; one with no telling shape can still reach
+    the server. `review(name, value, action_of)` gives the hits to record and the note to show
     in the agent, or ([], None)."""
 
     name = "script"
@@ -417,5 +418,104 @@ class ScriptCheck:
         hit = {"check": self.name, "source": name, "score": 1.0, "chars": len(code), "earlier": False,
                "categories": [f"computed values sent to {shown_tool(t)}" for t in tools]}
         note = (f"keepmum: this script sends values it computes, such as a command's output, to {shown}. keepmum "
-                "cannot see those values, so it cannot keep a secret out of them.")
+                "withholds a secret in a provider's format from them as the script runs; one without a telling "
+                "shape, such as a bare password, it cannot see.")
         return [hit], note
+
+
+# The guard: keepmum cannot see what a script computes, such as a token parsed from a command's
+# output, but it writes the script Codex runs. A call that hands a network tool a computed value
+# (computed_to_network) gets its arguments through `__keepmum_guard`, which replaces each secret in
+# a provider's format (the rules that need no context: rules.toml) with GUARD_MARK before the tool
+# sees it. Nothing is refused: a script runs as written, without the secret, and is told so. A
+# secret with no telling shape (a bare password) still only gets the script check's warning.
+GUARD_NAME = "__keepmum_guard"
+GUARD_MARK = "[a secret, withheld by keepmum]"
+_CONTEXT_KEYS = ("filters", "min_classes", "confidence", "scan", "prose_guard")
+_PRAGMA = re.compile(r"[ \t]*//[ \t]*@exec:[^\r\n]*\r?\n")
+_guard_rules_js: str | None = None
+
+
+def _js_rule(regex: str, group: int) -> str | None:
+    """A rules.toml regex as a JavaScript RegExp, or None when its syntax is Python's own."""
+    flags = "g"
+    while m := re.match(r"\(\?([ims]+)\)", regex):
+        flags += "".join(sorted(set(m.group(1)) - set(flags)))
+        regex = regex[m.end():]
+    if re.search(r"\(\?P[<=]|\(\?>|\(\?[a-z]*\)|\\[AZz]", regex):
+        return None
+    import json
+
+    return f"[new RegExp({json.dumps(regex)}, {json.dumps(flags)}), {group}]"
+
+
+def guard_rules_js() -> str:
+    """The format rules (no context needed) as a JavaScript array of [RegExp, group]."""
+    global _guard_rules_js
+    if _guard_rules_js is None:
+        import tomllib
+        from importlib import resources
+
+        cfg = tomllib.loads(resources.files("keepmum.detect").joinpath("rules.toml").read_text())
+        rules = []
+        for r in cfg.get("rule", []):
+            if r.get("type", "SECRET") != "SECRET":
+                continue
+            if any(k in r for k in _CONTEXT_KEYS) and r.get("filters") is not False:
+                continue
+            if js := _js_rule(r["regex"], int(r.get("group", 0))):
+                rules.append(js)
+        _guard_rules_js = "[" + ", ".join(rules) + "]"
+    return _guard_rules_js
+
+
+def guard_prelude() -> str:
+    mark = GUARD_MARK.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        f"const {GUARD_NAME} = ((rules) => {{ "
+        f'const mark = "{mark}"; let held = 0; '
+        # As the rules' placeholder filters (rules.toml): mostly runs of one character (a third,
+        # REPEATED_SHARE), or a word that marks an example.
+        "const runs = (p) => (p.match(/(.)\\1{5,}/g) || []).join('').length; "
+        "const example = /example|placeholder|redacted|dummy|sample|(?:^|[_-])your[_-]/i; "
+        "const kept = (p) => runs(p) * 3 >= p.length || example.test(p); "
+        "const mask = (s) => { for (const [re, g] of rules) { re.lastIndex = 0; s = s.replace(re, (...m) => { "
+        "const part = g ? m[g] : m[0]; if (typeof part !== 'string' || !part || kept(part)) return m[0]; held++; "
+        "return g ? m[0].replace(part, mark) : mark; }); } return s; }; "
+        "const walk = (v) => typeof v === 'string' ? mask(v) : Array.isArray(v) ? v.map(walk) "
+        ": v !== null && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype "
+        "? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v; "
+        "return (args) => { const before = held; const out = walk(args); "
+        "if (held > before && typeof text === 'function') text(`keepmum: ${held - before} secret(s) in what this "
+        "script computed were withheld from a tool that reaches the network, and replaced with \"${mark}\".`); "
+        f"return out; }}; }})({guard_rules_js()});\n"
+    )
+
+
+def guard_script(source: str, action_of) -> str:
+    """The script with each network tool call that gets a computed value guarded (see GUARD_NAME),
+    or as it was when there is none. Its calls are found as computed_to_network finds them."""
+    script = parse(source)
+    if not script.calls & SHELL_CALLS or GUARD_NAME in source:
+        return source
+    bound = set(script.bindings(source))
+    edits: list[tuple[int, str]] = []
+    for name, a, b in script.call_spans:
+        decided = name
+        if name in MCP_RESOURCE_CALLS:
+            m = _SERVER_ARG.search(source, a, b)
+            decided = f"mcp__{m.group(2) if m else '?'}__{name}"
+        if name in SHELL_CALLS or action_of(decided) == "restore":
+            continue
+        computed = any(a < r.start < b and r.name not in bound and r.name not in _HARMLESS for r in script.refs) \
+            or any(a < x < y < b for _, x, y in script.call_spans)
+        if computed:
+            edits += [(a + 1, f"...{GUARD_NAME}(["), (b, "])")]
+    if not edits:
+        return source
+    out = source
+    for at, text in sorted(edits, key=lambda e: e[0], reverse=True):
+        out = out[:at] + text + out[at:]
+    pragma = _PRAGMA.match(out)
+    head = pragma.end() if pragma else 0
+    return out[:head] + guard_prelude() + out[head:]

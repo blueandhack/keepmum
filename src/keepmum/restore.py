@@ -491,7 +491,10 @@ def _restore_script_tool(name: str, source: str, vault: Vault, policy: dict, cou
         return swap, lit is not None and (lit.shell or (lit.call is None and commands))
 
     commands = script.dynamic or bool(script.calls & SHELL_CALLS)
-    return restore_script(source, swap_for, edits)
+    from .codemode import guard_script
+
+    # What the script computes and hands a network tool is not seen here: guarded (codemode.py).
+    return guard_script(restore_script(source, swap_for, edits), lambda n: rule_for(n, policy)[1])
 
 
 def _canonical_tree(value, vault: Vault):

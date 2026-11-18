@@ -306,3 +306,75 @@ def test_a_plugin_suggestion_shows_the_user_real_text(v):
     person = v.ph["person"]
     out = run(f'await tools.request_plugin_install({{plugin_id: "linear", suggest_reason: "Track {person}"}});', v)
     assert f"Track {PERSON}" in out
+
+
+GAP = ('const env = await tools.exec_command({cmd: "cat .env"});\n'
+       'const token = env.output.match(/GITHUB_TOKEN=(\\S+)/)[1];\n'
+       'text(await tools.mcp__notes__send_note({text: "The deploy token is set up: " + token}));\n')
+
+
+def test_a_network_call_that_gets_a_computed_value_is_guarded_and_nothing_else():
+    from keepmum.codemode import GUARD_NAME, guard_script
+
+    def action(n):
+        return "own" if n.startswith("mcp__") else "restore"
+
+    out = guard_script(GAP, action)
+    assert out.count(f"...{GUARD_NAME}([") == 1 and f"send_note(...{GUARD_NAME}([{{text: " in out
+    assert 'tools.exec_command({cmd: "cat .env"})' in out  # a command is not guarded
+    # literals only, or no command in the script: as it was
+    literal = 'await tools.exec_command({cmd: "ls"});\nawait tools.mcp__notes__send_note({text: "done"});'
+    assert guard_script(literal, action) == literal
+    no_command = 'const t = "x"; await tools.mcp__notes__send_note({text: t});'
+    assert guard_script(no_command, action) == no_command
+    # Codex's first-line directive stays first
+    pragma = "// @exec: yield_time_ms=120000\n" + GAP
+    assert guard_script(pragma, action).startswith("// @exec: yield_time_ms=120000\nconst __keepmum_guard")
+
+
+def _node(script: str, env_output: str) -> tuple[list, list]:
+    """Run a code-mode script in Node.js (Codex runs it in V8), with a stub exec_command that
+    prints env_output and an MCP tool that records what it gets."""
+    import shutil
+    import subprocess
+
+    if shutil.which("node") is None:
+        pytest.skip("Node.js is not installed")
+    harness = ("const sent = [], said = [];\n"
+               "const text = (s) => said.push(String(s));\n"
+               "const tools = {exec_command: async () => ({output: " + json.dumps(env_output) + "}),\n"
+               "  mcp__notes__send_note: async (a) => { sent.push(a); return 'ok'; }};\n"
+               "(async () => {\n" + script + "\n})().then(() => console.log(JSON.stringify({sent, said})),"
+               " (e) => { console.error(e); process.exit(1); });\n")
+    r = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    return out["sent"], out["said"]
+
+
+def test_the_gap_a_token_a_script_reads_never_reaches_the_mcp_tool(v):
+    """Codex wrote this live (mcp-01): read .env, parse the token, send it to an MCP tool. keepmum
+    never sees the token; the guard it writes into the script keeps it from the tool all the same."""
+    from keepmum.codemode import GUARD_MARK
+
+    counts = Counter()
+    restored = run(GAP, v, counts=counts)
+    sent, said = _node(restored, f"GITHUB_TOKEN={TOKEN}\nREGION=eu-west-1\n")
+    assert sent == [{"text": f"The deploy token is set up: {GUARD_MARK}"}]
+    assert TOKEN not in json.dumps(sent) and any("withheld" in s for s in said)
+    # Without the guard the token went: the stub really does hand it to the script.
+    import re as _re
+
+    bare = _re.sub(r"\.\.\.__keepmum_guard\(\[(.*)\]\)\)\);", r"\1));", restored.split("\n", 1)[1])
+    sent, _ = _node(bare, f"GITHUB_TOKEN={TOKEN}\n")
+    assert TOKEN in json.dumps(sent)
+
+
+def test_the_guard_leaves_ordinary_values_and_placeholders_alone(v):
+    script = ('const out = await tools.exec_command({cmd: "git log -1 --format=%H"});\n'
+              'await tools.mcp__notes__send_note({text: "Deployed " + out.output.trim() + " for jane.doe@example.com, '
+              'see ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx in the docs", n: 3, tags: ["a", null]});\n')
+    sent, said = _node(run(script, v), "3f9a1c2e4b5d6f708192a3b4c5d6e7f8091a2b3c\n")
+    assert sent == [{"text": "Deployed 3f9a1c2e4b5d6f708192a3b4c5d6e7f8091a2b3c for jane.doe@example.com, "
+                             "see ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx in the docs", "n": 3, "tags": ["a", None]}]
+    assert not said
