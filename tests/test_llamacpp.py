@@ -76,7 +76,8 @@ def test_a_server_answers_and_stop_ends_it_and_its_supervisor(fake, tmp_path):
     assert gone_within(pid, 5) and gone_within(supervisor, 5) and s not in llamacpp._running
 
 
-def test_a_server_that_exits_ends_its_supervisor(fake, tmp_path):
+def test_a_server_that_exits_ends_its_supervisor(fake, tmp_path, monkeypatch):
+    monkeypatch.setattr(llamacpp, "POLL_S", 0.2)  # the supervisor's check, every 2 s in use
     s = llamacpp.Server(fake, tmp_path / "m.gguf", [])
     s.start()
     pid = server_pid(s._proc.pid)
@@ -92,6 +93,7 @@ def test_the_server_never_outlives_keepmum(fake, tmp_path, how):
         import sys, time
         from pathlib import Path
         from keepmum import llamacpp
+        llamacpp.POLL_S = 0.2  # the supervisor's check, every 2 s in use
         s = llamacpp.Server(Path({str(fake)!r}), Path("m.gguf"), [])
         s.start()
         print(s._proc.pid, flush=True)

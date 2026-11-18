@@ -86,7 +86,7 @@ def test_start_waits_until_health_answers_200(no_processes, monkeypatch):
     assert len(asked) == 3 and all(u == s.url + "/health" for u in asked)
     assert s.running() and s in llamacpp._running
     cmd = commands[0]
-    assert cmd[:3] == ["/bin/sh", "-c", llamacpp.SUPERVISE]
+    assert cmd[:3] == ["/bin/sh", "-c", llamacpp.supervise()]
     assert cmd[cmd.index("-m") + 1] == "/m.gguf" and cmd[-1] == "--embedding"
     assert cmd[cmd.index("--port") + 1] == s.url.rsplit(":", 1)[1]
     s.stop()

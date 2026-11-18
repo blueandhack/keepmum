@@ -69,7 +69,7 @@ def _ollama(lines: list[dict], status: int = 200):
             pass
 
     srv = http.server.HTTPServer(("127.0.0.1", 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     return f"http://127.0.0.1:{srv.server_port}", got, srv
 
 

@@ -222,7 +222,7 @@ class PfServe:
             else:
                 return self._spans(raw, deadline)
         except (PfServeError, OSError) as e:
-            self.close()  # mid-reply: start clean next time
+            self.close(wait=False)  # mid-reply, or hung: killed at once, started clean next time
             if isinstance(e, PfServeError):
                 raise
             raise PfServeError(f"pf-serve stopped responding ({type(e).__name__})") from e
@@ -278,7 +278,8 @@ class PfServe:
                     raise PfServeError("pf-serve timed out")
                 view = view[os.write(fd, view[: 1 << 16]):]
 
-    def close(self) -> None:
+    def close(self, wait: bool = True) -> None:
+        """End pf-serve: it exits when its input closes (`wait` seconds' grace, 5), or is killed."""
         proc, self._proc = self._proc, None
         if self._sel is not None:
             self._sel.close()
@@ -289,7 +290,7 @@ class PfServe:
         if proc.poll() is None:
             proc.stdin.close()
             try:
-                proc.wait(timeout=5)
+                proc.wait(timeout=5 if wait else 0)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()

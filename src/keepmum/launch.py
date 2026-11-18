@@ -264,12 +264,20 @@ def _quiet_server(config):
     import uvicorn
 
     class Quiet(uvicorn.Server):
+        _wake = None
+
         async def main_loop(self) -> None:
+            loop, self._wake = asyncio.get_running_loop(), asyncio.Event()
+            self.wake = lambda: loop.call_soon_threadsafe(self._wake.set)  # stop() rings it: no wait for the tick
             counter = 0
             should_exit = await self.on_tick(counter)
             while not should_exit:
                 counter = (counter + 10) % 864000  # on_tick does its once-a-second work at multiples of 10
-                await asyncio.sleep(1.0)
+                try:
+                    await asyncio.wait_for(self._wake.wait(), 1.0)
+                except TimeoutError:
+                    pass
+                self._wake.clear()
                 should_exit = await self.on_tick(counter)
 
     return Quiet(config) if hasattr(uvicorn.Server, "on_tick") else uvicorn.Server(config)
@@ -302,6 +310,8 @@ class BackgroundServer:
 
     def stop(self) -> None:
         self.server.should_exit = True
+        if wake := getattr(self.server, "wake", None):
+            wake()
         self.thread.join(timeout=5)
         try:
             self.sock.close()

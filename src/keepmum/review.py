@@ -278,7 +278,9 @@ class Reviews:
             left = review.deadline - now
             if hard <= 0 or left <= 0 and not review.assisting:
                 break
-            with anyio.move_on_after(min(hard, 0.5 if review.assisting else max(left, 0.5))):
+            # While the local model writes, look again every half second (the deadline moves);
+            # else wait out exactly what is left: a floor of 0.5 s here ran a review past its deadline.
+            with anyio.move_on_after(min(hard, 0.5 if review.assisting else left)):
                 await review.done.wait()
 
     async def ask(self, review: Review, timeout: str) -> Decision:
