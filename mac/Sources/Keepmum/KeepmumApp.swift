@@ -387,6 +387,11 @@ enum Snapshotter {
             }
             exit(0)
         }
+        if let i = args.firstIndex(of: "--tour-stills"), i + 1 < args.count {
+            _ = NSApplication.shared
+            Tour.stills(dir: args[i + 1])
+            exit(0)
+        }
         if let i = args.firstIndex(of: "--tour"), i + 1 < args.count {
             _ = NSApplication.shared
             Tour.run(dir: args[i + 1], at: args.dropFirst(i + 2).compactMap(Double.init))

@@ -1,6 +1,6 @@
-// The videos play by themselves, muted (they have no sound), once half of one is on screen: the app
-// tour, and the flow where flow.js does not draw it in the page instead, and pause when it scrolls
-// away. Nothing loads before then (preload="none").
+// The videos play by themselves, muted (they have no sound), once half of one is on screen, and
+// pause when it scrolls away: the flow and the app tour, where flow.js and tour.js do not draw them
+// in the page instead. Nothing loads before then (preload="none").
 // They stay still for a visitor who asked for reduced motion or to save data, and once they pause
 // one or it ends, it is theirs: it never starts again on its own.
 (function () {

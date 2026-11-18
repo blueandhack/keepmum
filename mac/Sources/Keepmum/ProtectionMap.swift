@@ -796,6 +796,7 @@ struct MapDiagram: View {
     @State private var hovered: MapPart?
     @Environment(\.isSnapshot) private var isSnapshot
     @Environment(\.tourClock) private var tourClock
+    @Environment(\.tourReport) private var tourReport
 
     private var s: MapSettings { settings }
 
@@ -924,8 +925,50 @@ struct MapDiagram: View {
 
     // MARK: Moving dots
 
-    /// Requests drifting along the bands, and a sample along its route.
-    private var moving: some View {
+    /// Requests drifting along the bands, and a sample along its route. keepmum.app's tour draws them
+    /// itself, over a still drawn without them: this tells it what moves instead.
+    @ViewBuilder private var moving: some View {
+        if let tourReport {
+            GeometryReader { g in reported(to: tourReport, g) }
+        } else {
+            drifting
+        }
+    }
+
+    /// What moves on the map, for keepmum.app's tour (Tour.stills): each path sampled at even
+    /// lengths, the dots' timing and colors, and the clock the drift and the dashes run on.
+    private func reported(to tour: TourReport, _ g: GeometryProxy) -> some View {
+        let rgba = TourReport.rgba
+        func points(_ path: Path, _ n: Int = 120) -> [[CGFloat]] {
+            (0...n).compactMap { k in
+                path.trimmedPath(from: 0, to: max(Double(k) / Double(n), 0.0005)).currentPoint.map { [($0.x * 10).rounded() / 10, ($0.y * 10).rounded() / 10] }
+            }
+        }
+        var data: [String: Any] = [
+            "ambient": layout.empty ? [] : ambient.map { points($0) },
+            "ambientColor": rgba(Theme.textTertiary),
+            "canvas": rgba(Theme.canvas),
+            // The drift and the dashes run on the clock itself: where it stood when the tour began.
+            "clock": tour.origin.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1000),
+            // The cards are drawn over what moves: the page leaves them out of where it draws.
+            "cards": [layout.injectionCard, layout.harmCard, layout.maskCard, layout.localCard, layout.restoreCard, layout.commandsCard]
+                .map { [$0.minX, $0.minY, $0.width, $0.height] },
+            "radius": Radius.m,
+        ]
+        if let run {
+            data["run"] = [
+                "route": points(run.route, 240), "color": rgba(Theme.accent), "started": started.timeIntervalSince(tour.origin),
+                "dots": run.dots.map { d in
+                    ["path": points(d.path), "delay": d.delay, "duration": d.duration, "size": d.size,
+                     "colors": d.colors.map { [$0.0] + rgba($0.1) }] as [String: Any]
+                },
+            ] as [String: Any]
+        }
+        tour.report(g.frame(in: .named(TourReport.space)), data)
+        return Color.clear
+    }
+
+    private var drifting: some View {
         TimelineView(.animation(minimumInterval: 1 / 30, paused: isSnapshot)) { tl in
             Canvas { ctx, _ in
                 let now = tourClock ?? tl.date

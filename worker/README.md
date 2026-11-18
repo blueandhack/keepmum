@@ -74,7 +74,7 @@ cd worker && npx wrangler r2 object put "keepmum-media/keepmum-flow-$H.mp4" --re
 CRF 24 is the highest that keeps the small colored text and the scan's gradient clean; at 28 blocks
 show around the text. AVFoundation's own H.264 (the script's `.mp4` output) is six times the size.
 
-The app tour (`keepmum-tour.mp4`, 58 seconds) is the app's own views, rendered by the app:
+keepmum.app draws the app tour in the page too (`site/tour.js`): the app's own screens as stills, with the tour's timing and what moves on its diagrams, all from `mac/Sources/Keepmum/Tour.swift`. After a change to the app or the tour, `mac/tour-stills.sh` renders them again (to `site/img/tour/` and `site/tour-data.js`). The video version (`keepmum-tour.mp4`, 58 seconds), which the page still links, is the app's own views, rendered by the app:
 
 ```sh
 cd mac && swift build -c release && .build/release/Keepmum --tour /tmp/tour && cd ..

@@ -180,6 +180,32 @@ a { color: var(--ink); }
 .flow-sub { display: none; min-height: 3em; font-size: 16px; font-weight: 500; color: var(--ink); }
 .flow-narrow .flow-sub { display: block; }
 .flow-narrow .flow-stage .fl-caps { visibility: hidden; }
+/* The app tour (tour.js): the app's screens, as stills, on a desktop drawn in the page. */
+.tr-stage { overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+.tr-stage .tr-desk { position: absolute; transform-origin: 0 0; background: linear-gradient(to bottom right, rgb(247, 227, 217), rgb(227, 232, 245)); }
+.tr-stage .tr-win { position: absolute; overflow: hidden; border-radius: 12px; background: #fff; box-shadow: 0 14px 60px rgba(0, 0, 0, 0.22); }
+.tr-stage .tr-still { position: absolute; left: 0; top: 0; max-width: none; }
+.tr-stage .tr-content { position: absolute; overflow: hidden; }
+.tr-stage .tr-flow { position: absolute; }
+.tr-stage .tr-page { position: absolute; left: 0; top: 0; }
+.tr-stage .tr-lights { position: absolute; left: 18px; top: 18px; display: flex; gap: 8px; }
+.tr-stage .tr-lights span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12); }
+.tr-stage .tr-hair { position: absolute; inset: 0; border-radius: 12px; box-shadow: inset 0 0 0 0.75px rgba(0, 0, 0, 0.14); pointer-events: none; }
+.tr-stage .tr-bar { position: absolute; left: 0; top: 0; }
+.tr-stage .tr-menu { position: absolute; overflow: hidden; border-radius: 12px; background: rgba(255, 255, 255, 0.96); outline: 1px solid rgba(0, 0, 0, 0.1); outline-offset: -1px; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18); }
+.tr-stage .tr-pointer { position: absolute; left: 0; top: 0; }
+.tr-stage .tr-ring { position: absolute; border: 2.5px solid transparent; border-radius: 50%; }
+.tr-stage .tr-arrow { position: absolute; left: 0; top: 0; transform-origin: 0 0; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3)); }
+.tr-stage .tr-arrow svg { display: block; }
+.tr-stage .tr-caps { position: absolute; display: grid; justify-items: center; align-items: end; }
+.tr-stage .tr-caps > * { grid-area: 1 / 1; }
+.tr-stage .tr-caption { padding: 16px 30px; border-radius: 999px; background: rgba(255, 255, 255, 0.94); box-shadow: 0 6px 36px rgba(0, 0, 0, 0.14); font-size: 34px; font-weight: 600; color: #1D1D1F; white-space: nowrap; }
+.tr-stage .tr-note { position: absolute; left: 24px; bottom: 24px; padding: 7px 14px; border-radius: 999px; background: rgba(255, 255, 255, 0.8); font-size: 18px; font-weight: 500; color: #6E6E73; }
+.tr-stage .tr-card { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; background: #F4F4F5; }
+.tr-stage .tr-card img { width: 200px; height: 200px; }
+.tr-stage .tr-card-title { font-size: 76px; font-weight: 700; line-height: 1.2; color: #1D1D1F; }
+.tr-stage .tr-card-line { font-size: 34px; color: #6E6E73; }
+.tr-stage .tr-card-link { font-size: 34px; font-weight: 600; color: #C93F17; }
 .flow-transcript { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .step { display: flex; flex-direction: column; gap: 12px; padding-top: 20px; border-top: 3px solid var(--ink); }
 .step .n { font-family: var(--mono); font-size: 14px; font-weight: 500; color: var(--number); }

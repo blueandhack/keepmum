@@ -10,15 +10,14 @@
 // stage is 1920 × 1080, scaled to the column. Every value shown is synthetic. Colors: coral for
 // keepmum, amber for a real value, blue for a placeholder (masked), green for a value restored.
 //
-// It plays by itself once half of it is on screen, and pauses when it scrolls away; it stays still
-// for a visitor who asked for reduced motion, and once they pause it or it ends, it is theirs
-// (site/video.js does the same for the app tour). Without this script, the page's <video> stays.
+// player.js plays it (as it plays the app tour, tour.js): by itself once half of it is on screen,
+// paused when it scrolls away, still for reduced motion. Without either script, the page's <video> stays.
 // The Content Security Policy allows no inline styles: everything here goes through `.style`.
 (function () {
   "use strict";
   var figure = document.getElementById("video");
   var video = figure && figure.querySelector("video");
-  if (!video || !("ResizeObserver" in window)) return;
+  if (!video || !window.keepmumPlayer || !("ResizeObserver" in window)) return;
 
   const W = 1920, H = 1080, DURATION = 110;
   /** The script chapter (0.1.0a11): everything after it plays SCRIPT seconds later. */
@@ -129,8 +128,7 @@
 
   // MARK: Layers: each a chapter, with its opacity and its own clock
 
-  const stage = el("div", null, "flow-stage");
-  stage.setAttribute("aria-hidden", "true");
+  const stage = el("div");
   const layers = [];
   const captionSets = [];
   function layer(opacity, local) {
@@ -712,112 +710,22 @@
     mono(links, "github.com/blueandhack/keepmum", 24, 400, C.secondary);
   }
 
-  // MARK: The player
+  // MARK: The player (player.js, shared with the app tour)
 
-  const wrap = el("div", null, "flow");
-  wrap.appendChild(stage);
-  const controls = el("div", null, "flow-controls");
-  const button = el("button", controls, "flow-play");
-  button.type = "button";
-  const scrub = el("input", controls, "flow-scrub");
-  scrub.type = "range";
-  scrub.min = "0"; scrub.max = String(DURATION); scrub.step = "0.1"; scrub.value = "0";
-  scrub.setAttribute("aria-label", "Position in the animation");
-  const clock = el("span", controls, "flow-time");
-  // On a narrow screen the stage's captions are too small to read: the current one shows below it.
-  const subtitle = el("p", null, "flow-sub");
-  // For screen readers, every caption in order: the stage itself is hidden from them.
-  const transcript = el("ol", null, "flow-transcript");
-  transcript.setAttribute("aria-label", "What the animation shows");
-  for (const set of captionSets) for (const i of set.items) el("li", transcript, null, i.s);
-
-  const glyph = {
-    play: '<path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/>',
-    pause: '<path d="M8 5h3v14H8zM13 5h3v14h-3z" fill="currentColor"/>',
-    replay: '<path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v4.5h4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
-  };
-  const fmt = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
-
-  let t = 0, playing = false, last = 0, raf = 0;
-  function render() {
-    draw(t);
-    scrub.value = String(t);
-    clock.textContent = fmt(t) + " / " + fmt(DURATION);
-    // The caption most on screen, for the subtitle.
-    let best = null, most = 0;
-    for (const set of captionSets) {
-      if (set.L.o <= 0.001) continue;
-      for (const i of set.items) {
-        const o = set.L.o * win(set.L.t, i.a, i.b, i.fade || 0.35);
-        if (o > most) { most = o; best = i.s; }
+  window.keepmumPlayer({
+    video, stage, width: W, height: H, duration: DURATION, name: "the animation", draw,
+    captions: captionSets.flatMap((set) => set.items.map((i) => i.s)),
+    // The caption most on screen, for the subtitle on a narrow screen.
+    caption: () => {
+      let best = null, most = 0;
+      for (const set of captionSets) {
+        if (set.L.o <= 0.001) continue;
+        for (const i of set.items) {
+          const o = set.L.o * win(set.L.t, i.a, i.b, i.fade || 0.35);
+          if (o > most) { most = o; best = i.s; }
+        }
       }
-    }
-    if (best && subtitle.textContent !== best) subtitle.textContent = best;
-    subtitle.style.opacity = best ? Math.min(1, most * 1.5) : 0;
-  }
-  function setButton() {
-    const ended = !playing && t >= DURATION;
-    button.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">'
-      + glyph[playing ? "pause" : ended ? "replay" : "play"] + "</svg>";
-    button.setAttribute("aria-label", playing ? "Pause the animation" : ended ? "Play the animation again" : "Play the animation");
-  }
-  function frame(now) {
-    t = Math.min(DURATION, t + Math.min(0.1, (now - last) / 1000));
-    last = now;
-    render();
-    if (t >= DURATION) { pause(); handOver(); } else raf = requestAnimationFrame(frame);
-  }
-  function play() {
-    if (playing) return;
-    if (t >= DURATION) t = 0;
-    playing = true;
-    last = performance.now();
-    raf = requestAnimationFrame(frame);
-    setButton();
-  }
-  function pause() {
-    playing = false;
-    cancelAnimationFrame(raf);
-    setButton();
-  }
-
-  // Plays by itself once half of it is on screen (after half a second there, so scrolling past
-  // does nothing), and pauses when it scrolls away, until the visitor pauses it or it ends.
-  let observer = null, settle = null;
-  function handOver() {
-    clearTimeout(settle);
-    if (observer) observer.disconnect();
-    observer = null;
-  }
-  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (!reduce && "IntersectionObserver" in window) {
-    observer = new IntersectionObserver((entries) => {
-      clearTimeout(settle);
-      if (entries[0].isIntersecting) settle = setTimeout(play, 500);
-      else pause();
-    }, { threshold: 0.5 });
-    observer.observe(wrap);
-  }
-  function toggle() {
-    if (playing) { pause(); handOver(); } else play();
-  }
-  button.addEventListener("click", toggle);
-  wrap.addEventListener("click", () => { if (!String(window.getSelection && window.getSelection())) toggle(); });
-  scrub.addEventListener("input", () => {
-    t = Math.min(DURATION, Math.max(0, Number(scrub.value)));
-    render();
-    if (!playing) setButton();
+      return [best, most];
+    },
   });
-
-  // The stage is 1920 × 1080, scaled to the column.
-  new ResizeObserver((entries) => {
-    const width = entries[0].contentRect.width;
-    stage.style.transform = "scale(" + width / W + ")";
-    figure.classList.toggle("flow-narrow", width < 640);
-  }).observe(wrap);
-
-  video.replaceWith(wrap);
-  wrap.after(controls, subtitle, transcript);
-  render();
-  setButton();
 })();

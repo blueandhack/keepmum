@@ -10,6 +10,29 @@ extension EnvironmentValues {
     @Entry var isSnapshot = false
     /// The time while the tour renders a frame (Tour.swift): what moves is drawn as of then, not now.
     @Entry var tourClock: Date? = nil
+    /// Set while keepmum.app's tour renders its still of the Overview (Tour.stills): the flow
+    /// diagrams are drawn without their pulses and report them instead, for the page to draw moving.
+    @Entry var tourReport: TourReport? = nil
+}
+
+/// What the diagrams that move tell keepmum.app's tour, the Overview's flow (FlowBands.tourData) and
+/// the Protection map's dots (MapDiagram): where they are (in the `space` coordinate space) and what
+/// moves on them, timed in seconds from `origin`.
+struct TourReport {
+    static let space = "tourWindow"
+    var origin: Date
+    var report: (CGRect, [String: Any]) -> Void
+
+    /// A color as the tour's page draws it: sRGB red, green, blue and alpha, in the light appearance.
+    static func rgba(_ color: Color) -> [Double] {
+        var out: [Double] = [0, 0, 0, 1]
+        NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
+            if let c = NSColor(color).usingColorSpace(.sRGB) {
+                out = [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent].map { (Double($0) * 1000).rounded() / 1000 }
+            }
+        }
+        return out
+    }
 }
 
 enum Appearance: String, CaseIterable, Identifiable {

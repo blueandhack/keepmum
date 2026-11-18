@@ -65,13 +65,20 @@ struct FlowBandsView: View {
     @State private var hover: CGPoint?
     @AppStorage(FlowPulseStyle.key) private var style: FlowPulseStyle = .comet
     @Environment(\.tourClock) private var tourClock
+    @Environment(\.tourReport) private var tourReport
 
     var body: some View {
+        // keepmum.app's tour draws the pulses itself, over a still of the bands drawn without them.
+        let drawn = tourReport == nil
         // Requests that only wait at a provider breathe slowly: a low frame rate is enough for them.
         TimelineView(.animation(minimumInterval: pulses.isEmpty ? 1 / 20 : 1 / 60, paused: !live || (pulses.isEmpty && open.isEmpty))) { tl in
             Canvas { context, size in
-                FlowBands(flows: flows, size: size, open: open).draw(&context, now: tourClock ?? tl.date, pulses: pulses, style: style, hover: hover)
+                FlowBands(flows: flows, size: size, open: drawn ? open : [])
+                    .draw(&context, now: tourClock ?? tl.date, pulses: drawn ? pulses : [], style: style, hover: hover)
             }
+        }
+        .background {
+            if let tourReport { GeometryReader { g in reported(to: tourReport, g) } }
         }
         .onContinuousHover { phase in
             switch phase {
@@ -79,6 +86,14 @@ struct FlowBandsView: View {
             case .ended: hover = nil
             }
         }
+    }
+}
+
+extension FlowBandsView {
+    /// Tells keepmum.app's tour where these diagrams are and what moves on them; draws nothing.
+    func reported(to tour: TourReport, _ g: GeometryProxy) -> some View {
+        tour.report(g.frame(in: .named(TourReport.space)), FlowBands(flows: flows, size: g.size, open: open).tourData(pulses: pulses, origin: tour.origin))
+        return Color.clear
     }
 }
 
@@ -689,22 +704,65 @@ private struct FlowBands {
         return FlowRoute(layout: layout, links: links)
     }
 
+    /// A pulse's way, when it sets off, and whether it was stopped (a ring in red where it lands).
+    private func leg(_ pulse: Pulse) -> (route: FlowRoute, start: Date, stopped: Bool)? {
+        guard let route = route(pulse.kind, client: pulse.client, provider: pulse.provider) else { return nil }
+        var start = pulse.born
+        var stopped = false
+        switch pulse.kind {
+        case .out(let r):
+            stopped = r == "blocked" || r == "refused"
+        case .back(_, let result):
+            // A reply shares its request's born and sets off once that request has reached the provider.
+            let request = self.route(.out(result), client: pulse.client, provider: pulse.provider)?.length ?? route.length
+            start = start.addingTimeInterval(FlowGeometry.duration(request) + FlowGeometry.turnaround)
+            // A reply seen arriving sets off then, however long its request waited at the provider.
+            if let leaves = pulse.leaves { start = max(start, leaves) }
+        }
+        return (route, start, stopped)
+    }
+
+    /// A request waiting at a provider: its way, and the color its dot breathes in. A clean request's
+    /// band is the neutral grey, which a dot on it would vanish into.
+    private func waiting(_ pulse: Pulse) -> (route: FlowRoute, last: BandLayout.Link, color: Color)? {
+        guard let route = route(pulse.kind, client: pulse.client, provider: pulse.provider), let last = route.links.last else { return nil }
+        let color = if case .out("clean") = pulse.kind { Theme.textSecondary } else { last.color }
+        return (route, last, color)
+    }
+
+    /// keepmum.app's tour (Tour.stills): both diagrams' bands and bars, and the pulses on them, timed
+    /// in seconds from `origin`, for site/tour.js to draw moving over a still drawn without them.
+    func tourData(pulses: [Pulse], origin: Date) -> [String: Any] {
+        let rgba = TourReport.rgba
+        var index: [String: Int] = [:], links: [[String: Any]] = [], nodes: [String: Any] = [:]
+        for (d, layout) in [out, back].enumerated() {
+            for l in layout.links {
+                index["\(d)|\(l.from)|\(l.to)"] = links.count
+                links.append(["d": d, "from": l.from, "to": l.to, "x0": l.x0, "x1": l.x1, "y0": l.y0, "y1": l.y1, "t": l.t,
+                              "color": rgba(l.color)])
+            }
+            for (id, n) in layout.nodes {
+                nodes["\(d):\(id)"] = ["rect": [n.rect.minX, n.rect.minY, n.rect.width, n.rect.height], "color": rgba(n.color)]
+            }
+        }
+        func way(_ route: FlowRoute) -> [Int] {
+            let d = route.layout.links.first.map { l in out.links.contains { $0.from == l.from && $0.to == l.to } } == true ? 0 : 1
+            return route.links.compactMap { index["\(d)|\($0.from)|\($0.to)"] }
+        }
+        let moving: [[String: Any]] = pulses.compactMap { pulse in
+            leg(pulse).map { ["links": way($0.route), "start": $0.start.timeIntervalSince(origin), "stopped": $0.stopped] }
+        }
+        let waitingDots: [[String: Any]] = open.compactMap { pulse in
+            waiting(pulse).map { ["links": way($0.route), "born": pulse.born.timeIntervalSince(origin), "color": rgba($0.color)] }
+        }
+        return ["size": [size.width, size.height], "links": links, "nodes": nodes, "pulses": moving, "open": waitingDots,
+                "blocked": rgba(Theme.blocked)]
+    }
+
     private func drawPulses(_ ctx: inout GraphicsContext, now: Date, pulses: [Pulse], style: FlowPulseStyle) {
         for pulse in pulses {
-            guard let route = route(pulse.kind, client: pulse.client, provider: pulse.provider) else { continue }
+            guard let (route, start, stopped) = leg(pulse) else { continue }
             let duration = FlowGeometry.duration(route.length)
-            var start = pulse.born
-            var stopped = false
-            switch pulse.kind {
-            case .out(let r):
-                stopped = r == "blocked" || r == "refused"
-            case .back(_, let result):
-                // A reply shares its request's born and sets off once that request has reached the provider.
-                let request = self.route(.out(result), client: pulse.client, provider: pulse.provider)?.length ?? route.length
-                start = start.addingTimeInterval(FlowGeometry.duration(request) + FlowGeometry.turnaround)
-                // A reply seen arriving sets off then, however long its request waited at the provider.
-                if let leaves = pulse.leaves { start = max(start, leaves) }
-            }
             let elapsed = now.timeIntervalSince(start), u = elapsed / duration
             guard u >= 0 else { continue }
             ticks(&ctx, route, u: u, duration: duration, stopped: stopped)
@@ -728,8 +786,7 @@ private struct FlowBands {
     private func drawWaiting(_ ctx: inout GraphicsContext, now: Date) {
         var queued: [String: Int] = [:]
         for pulse in open.sorted(by: { $0.born < $1.born }) {
-            guard let route = route(pulse.kind, client: pulse.client, provider: pulse.provider),
-                  let last = route.links.last else { continue }
+            guard let (route, last, color) = waiting(pulse) else { continue }
             let age = now.timeIntervalSince(pulse.born) - FlowGeometry.duration(route.length)
             guard age >= 0 else { continue }  // still on its way: the pulse itself is drawn
             let key = last.from + "→" + last.to
@@ -739,8 +796,6 @@ private struct FlowBands {
             let end = last.point(1), p = CGPoint(x: end.x - 6 - CGFloat(i) * 9, y: end.y)
             let breath = 0.5 - 0.5 * cos(2 * .pi * age / 1.6), a = min(1, age / 0.2)
             let halo = 5 + 3 * CGFloat(breath)
-            // A clean request's band is the neutral grey, which a dot on it would vanish into.
-            let color = if case .out("clean") = pulse.kind { Theme.textSecondary } else { last.color }
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - halo, y: p.y - halo, width: 2 * halo, height: 2 * halo)),
                      with: .color(color.opacity(0.22 * a)))
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6)),

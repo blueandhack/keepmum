@@ -18,8 +18,12 @@
 <script src="analytics.js" defer></script>
 <!-- The newest release's build time in the visitor's time zone -->
 <script src="release.js" defer></script>
-<!-- The flow, drawn in the page in place of its video; then the app tour, which plays muted once it is on screen -->
+<!-- The flow and the app tour, drawn in the page in place of their videos (player.js plays both);
+     where they cannot be, the videos play muted once they are on screen (video.js) -->
+<script src="player.js" defer></script>
 <script src="flow.js" defer></script>
+<script src="tour-data.js" defer></script>
+<script src="tour.js" defer></script>
 <script src="video.js" defer></script>
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="keepmum">
@@ -346,7 +350,7 @@
           <source src="/video/keepmum-tour-46c3491c76.mp4" type="video/mp4">
           <a href="/video/keepmum-tour-46c3491c76.mp4">Watch the tour (MP4, 5 MB)</a>
         </video>
-        <figcaption id="tour-caption">A tour of the app in 58 seconds: the menu bar, the Overview’s live flow, Logs, a sample sent along the Protection map, and a turn under review. Preview data, made up; no sound, the captions are in the picture.</figcaption>
+        <figcaption id="tour-caption">A tour of the app in 58 seconds: the menu bar, the Overview’s live flow, Logs, a sample sent along the Protection map, and a turn under review. Preview data, made up; no sound. Also <a href="/video/keepmum-tour-46c3491c76.mp4">as a video</a> (MP4, 5 MB).</figcaption>
       </figure>
       <div class="cols">
         <div class="feature">

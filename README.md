@@ -37,7 +37,7 @@ Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned
 
 ▶ [See it on keepmum.app](https://keepmum.app/#video), drawn in the page, or [as a 110-second video](https://keepmum.app/video/keepmum-flow-8a1e7e88eb.mp4) of how a request travels through keepmum.
 
-▶ [Take the 58-second tour of the app](https://keepmum.app/video/keepmum-tour-46c3491c76.mp4): the menu bar, the live Overview, Logs, the Protection map and a turn under review, rendered from the app's own views on preview data ([keepmum.app](https://keepmum.app/#tour)).
+▶ [Take the 58-second tour of the app](https://keepmum.app/#tour): the menu bar, the live Overview, Logs, the Protection map and a turn under review, rendered from the app's own views on preview data, or [as a video](https://keepmum.app/video/keepmum-tour-46c3491c76.mp4).
 
 ![The keepmum dashboard: requests out and replies back, per coding agent](mac/docs/overview-light.png)
 
@@ -450,6 +450,7 @@ local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
 | The optional checks' models, only after `keepmum guard setup` | `~/.local/share/keepmum/guard/` (`prompt-injection-guard-small-v2.3/`, `content-safety-guard-small/`, `qwen3guard/`); `keepmum guard remove injection|harm` deletes them |
 | Check hits: check, tool, score, length and categories; never the text | Process memory (the stats feed, the last 200) and the audit log |
 | The Logs page's rows: per check hit the above and what came of it (answered on this Mac, handed back, your review's answers, why a rewrite did not pass); per masked value its type, rule, who found it and length. Never text, values or previews | `~/.config/keepmum/logs.jsonl` (0600), for `[log] keep_days` (30 by default; `keepmum log keep 7\|off`); `off` deletes it and keeps the Logs page in memory only |
+| Results the checks flagged, so a restart does not warn about a resent conversation again: per hit an HMAC of the text under the install key, the check, model, tool, score, length and categories; never the text | `~/.config/keepmum/flagged.jsonl` (0600), for `[log] keep_days`, the newest 4,096 per check; `off` deletes it and keeps them in memory only |
 | The Logs page's check details: the flagged text (up to 4,000 characters) and what the user had typed, every masked value and placeholder in them shown as its type | Process memory only, with the last 200 hits; `[log] context = false` turns it off and forgets what was kept |
 | Masked values, and which tool servers returned each | Process memory only, the 10,000 used most recently, cleared on exit |
 | The Logs page: per masked value its type, rule and length, and the first and last character of values of 8 or more characters | Previews: process memory only (the last 2,000), cleared on exit; `[log] previews = false` keeps types and rules only. The rows without previews: as above |

@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 ///
 ///   Keepmum --tour dir              every frame, dir/00000.png on, at 30 fps
 ///   Keepmum --tour dir 12.5 31      those moments only, to check them
+///   Keepmum --tour-stills dir       keepmum.app's tour: its screens as stills, and its timing (stills(dir:))
 ///
 /// The window is built from the dashboard's own parts (Sidebar and each page), as Dashboard lays
 /// them out, so a page can open on a selected row or a sample on its way. What moves (the
@@ -26,8 +27,21 @@ enum Tour {
     /// The menu bar panel, under the menu bar icon.
     static let iconX: CGFloat = 1128
     static let panel = CGPoint(x: 1016, y: 30)
-    /// How far the map page scrolls to show its sample buttons.
+    /// How far the map page scrolls to show its sample buttons: down, then back up to follow the sample.
     static let mapScroll: CGFloat = 420
+    static let scrollDown = (30.2, 31.2), scrollUp = (32.6, 33.4)
+    /// The dashboard's content area, in the window: right of the sidebar and its hairline, inside its padding.
+    static let content = CGRect(x: 208 + 1 + Space.xl, y: Space.xl, width: window.width - 209 - 2 * Space.xl,
+                                height: window.height - 2 * Space.xl)
+    /// When each window is on screen: the dashboard fades in and stays; the turn window and the menu
+    /// panel come and go (start, end, fade).
+    static let windowIn = (9.0, 9.5)
+    static let reviewShown = (41.0, 51.4, 0.4)
+    static let menuShown = (4.85, 9.2, 0.25)
+    /// The frame's own parts: the preview-data note, the title card going, the closing card coming.
+    static let previewShown = (3.2, 52.6, 0.5)
+    static let titleOut = (2.6, 3.3)
+    static let closingIn = (52.4, 53.2)
 
     static func run(dir: String, at moments: [Double]) {
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -48,6 +62,99 @@ enum Tour {
         guard let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else { return }
         CGImageDestinationAddImage(dest, image, nil)
         CGImageDestinationFinalize(dest)
+    }
+
+    // MARK: Stills, for keepmum.app
+
+    /// keepmum.app's tour (site/tour.js): the screens the tour shows, as stills, and its timing, as
+    /// tour.json; mac/tour-stills.sh makes them WebP and site/tour-data.js. The page draws the
+    /// desktop, the camera, the cursor and the captions itself, from the same keys as the video, so
+    /// this file stays the source of both. What moves inside a screen (the Overview's pulses, the
+    /// map's sample, the review's clock) is a still, or a few in turn, as of the moment each names.
+    static func stills(dir: String) {
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        NSApp.appearance = NSAppearance(named: .aqua)
+        let tour = Tour.State()
+        var shots: [[String: Any]] = []
+        func save(_ image: NSImage, _ name: String) {
+            guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { fatalError("tour: no still \(name)") }
+            write(cg, to: "\(dir)/\(name).png")
+        }
+        func rendered(_ view: some View, scale: CGFloat) -> NSImage {
+            let renderer = ImageRenderer(content: view.environment(\.colorScheme, .light).environment(\.isSnapshot, true))
+            renderer.scale = scale
+            return renderer.nsImage ?? NSImage()
+        }
+        /// A still of a window (the dashboard, the map's content area, or the turn window), drawn as
+        /// of `at`, on screen from `from` to `to`. The scale is how far the camera moves in on it. A
+        /// map is drawn without what moves on it (`quiet`): the page draws that.
+        let quiet = TourReport(origin: tour.start) { _, _ in }
+        func shot(_ kind: String, _ name: String, at: Double, from: Double, to: Double, scale: CGFloat, map: Bool = false) {
+            let report = map ? quiet : nil
+            switch kind {
+            case "window": save(tour.render(tour.page(at: at).environment(\.tourReport, report), size: window.size, scale: scale, t: at), name)
+            case "content": save(tour.render(tour.mapContent(at: at).environment(\.tourReport, report),
+                                             size: CGSize(width: content.width, height: content.height + mapScroll), scale: scale, t: at), name)
+            default: save(tour.render(tour.turnView(at: at), size: review.size, scale: scale, t: at), name)
+            }
+            shots.append(["kind": kind, "name": name, "from": from, "to": to, "map": map])
+        }
+        // The Overview without its pulses: they come with the timing, and the page draws them moving.
+        var flow: [String: Any] = [:]
+        let report = TourReport(origin: tour.start) { frame, data in
+            flow = data.merging(["frame": [frame.minX, frame.minY, frame.width, frame.height]]) { a, _ in a }
+        }
+        save(tour.render(tour.page(at: 15).environment(\.tourReport, report), size: window.size, scale: 2.5, t: 15), "overview")
+        shots.append(["kind": "window", "name": "overview", "from": windowIn.0, "to": 20.5, "flow": true])
+        shot("window", "logs", at: 21.5, from: 20.5, to: 22.9, scale: 2.25)
+        shot("window", "logs-open", at: 24, from: 22.9, to: 28.9, scale: 2.25)
+        shot("content", "map-top", at: 30, from: 28.9, to: 32.2, scale: 2.25, map: true)
+        shot("content", "map-sample", at: 33, from: 32.2, to: scrollUp.1, scale: 2.25, map: true)
+        for (i, at) in [33.6, 35.2, 36.8, 38.4, 40.0].enumerated() {
+            shot("window", "map-\(i + 1)", at: at, from: i == 0 ? 28.9 : at - 0.6, to: i == 4 ? duration : at + 1.0, scale: 2.25, map: true)
+        }
+        // What moves on the map, from its content area as the sample runs (where the page draws it).
+        var map: [String: Any] = [:]
+        let mapReport = TourReport(origin: tour.start) { frame, data in
+            map = data.merging(["frame": [frame.minX, frame.minY, frame.width, frame.height]]) { a, _ in a }
+        }
+        _ = tour.render(tour.mapContent(at: 33).environment(\.tourReport, mapReport),
+                        size: CGSize(width: content.width, height: content.height + mapScroll), scale: 1, t: 33)
+        shot("review", "review-drafting", at: 42.5, from: reviewShown.0, to: 43.6, scale: 2)
+        shot("review", "review-summary", at: 44, from: 43.6, to: 44.6, scale: 2)
+        shot("review", "review-original", at: 45.4, from: 44.6, to: 46.4, scale: 2)
+        shot("review", "review-rewrite", at: 47.5, from: 46.4, to: duration, scale: 2)
+        let menu = tour.menuImage(scale: 2)
+        save(menu, "menu")
+        for on in [0.0, 1.0] {
+            let bar = Desktop(t: 0, app: nil, appOn: 0, turn: nil, turnOn: 0, menu: nil, menuOn: on, pointer: .zero, click: nil).menuBar
+            save(rendered(bar, scale: 2.5), on > 0 ? "menubar-open" : "menubar")
+        }
+        save(rendered(AppIcon().frame(width: 1024, height: 1024).scaleEffect(200 / 1024).frame(width: 200, height: 200), scale: 2), "icon")
+
+        let point = { (p: CGPoint) -> [CGFloat] in [p.x, p.y] }
+        let rect = { (r: CGRect) -> [CGFloat] in [r.minX, r.minY, r.width, r.height] }
+        let timing: [String: Any] = [
+            "duration": duration, "desk": [desk.width, desk.height], "frame": [frame.width, frame.height], "menuBar": menuBar,
+            "window": rect(window), "review": rect(review), "content": rect(content), "panel": point(panel),
+            "menu": [menu.size.width, menu.size.height],
+            "cursor": cursor.map { [$0.0, $0.1.x, $0.1.y] },
+            "clicks": clicks,
+            "camera": camera.map { [$0.0, $0.1.0, $0.1.1.x, $0.1.1.y] },
+            "captions": captions.map { [$0.0, $0.1, $0.2] as [Any] },
+            "scroll": [[scrollDown.0, 0], [scrollDown.1, mapScroll], [scrollUp.0, mapScroll], [scrollUp.1, 0]],
+            "windowIn": [windowIn.0, windowIn.1],
+            "reviewShown": [reviewShown.0, reviewShown.1, reviewShown.2],
+            "menuShown": [menuShown.0, menuShown.1, menuShown.2],
+            "previewShown": [previewShown.0, previewShown.1, previewShown.2],
+            "titleOut": [titleOut.0, titleOut.1],
+            "closingIn": [closingIn.0, closingIn.1],
+            "stills": shots,
+            "flow": flow,
+            "map": map,
+        ]
+        guard let json = try? JSONSerialization.data(withJSONObject: timing, options: [.prettyPrinted, .sortedKeys]) else { fatalError("tour: timing") }
+        FileManager.default.createFile(atPath: "\(dir)/tour.json", contents: json)
     }
 
     // MARK: Timing
@@ -187,6 +294,7 @@ enum Tour {
             }
             .followsPalette()
             .background(Theme.canvas)
+            .coordinateSpace(name: TourReport.space)
         }
 
         func page(at t: Double) -> AnyView {
@@ -195,11 +303,39 @@ enum Tour {
                 return AnyView(dashboard(.logs, LogsPage(store: store, selectedHit: t >= 22.9 ? hit : nil, layout: .together)))
             }
             // Down to the sample buttons, a click, and back up to follow it along the map.
-            let scroll = Tour.mapScroll * CGFloat(Tour.p(t, 30.2, 31.2) * (1 - Tour.p(t, 32.6, 33.4)))
+            let scroll = Tour.mapScroll * CGFloat(Tour.p(t, scrollDown.0, scrollDown.1) * (1 - Tour.p(t, scrollUp.0, scrollUp.1)))
             let sample: MapSample? = t >= 32.2 ? .jailbreak : nil
             let map = ProtectionMapPage(store: store, engine: mapEngine, sample: sample, started: clock(32.2))
                 .frame(height: 1400, alignment: .top).offset(y: -scroll)
             return AnyView(dashboard(.map, map))
+        }
+
+        /// The map page alone, as the content area shows it unscrolled, and tall enough to scroll
+        /// through: keepmum.app's tour scrolls it itself.
+        func mapContent(at t: Double) -> some View {
+            ProtectionMapPage(store: store, engine: mapEngine, sample: t >= 32.2 ? .jailbreak : nil, started: clock(32.2))
+                .frame(height: 1400, alignment: .top)
+                .frame(width: Tour.content.width, height: Tour.content.height + Tour.mapScroll, alignment: .top)
+                .clipped()
+                .followsPalette()
+                .background(Theme.canvas)
+                .coordinateSpace(name: TourReport.space)
+        }
+
+        /// The turn window: you keep the original of one piece for a moment, then rewrite it.
+        func turnView(at t: Double) -> some View {
+            TurnReviewView(center: .shared, turn: turn(at: t), choices: t >= 44.6 && t < 46.4 ? ["1": "original"] : [:])
+                .background(Theme.canvas)
+        }
+
+        func menuImage(scale: CGFloat) -> NSImage {
+            if menuCache?.0 != scale {
+                let renderer = ImageRenderer(content: MenuPanel(store: store, engine: engine)
+                    .environment(\.colorScheme, .light).environment(\.isSnapshot, true))
+                renderer.scale = scale
+                menuCache = (scale, renderer.nsImage ?? NSImage())
+            }
+            return menuCache?.1 ?? NSImage()
         }
 
         func turn(at t: Double) -> PendingTurn {
@@ -226,24 +362,12 @@ enum Tour {
             let (zoom, focus) = Tour.track(camera, t) { a, b, k in (a.0 + (b.0 - a.0) * k, Tour.mix(a.1, b.1, k)) }
             // Each window is drawn at the density it shows at, so text stays sharp as the camera moves in.
             let scale = max(1.5, (base * zoom * 4).rounded(.up) / 4)
-            let windowOn = p(t, 9.0, 9.5)
-            let reviewOn = shown(t, 41.0, 51.4, fade: 0.4)
-            let menuOn = shown(t, 4.85, 9.2, fade: 0.25)
+            let windowOn = p(t, windowIn.0, windowIn.1)
+            let reviewOn = shown(t, reviewShown.0, reviewShown.1, fade: reviewShown.2)
+            let menuOn = shown(t, menuShown.0, menuShown.1, fade: menuShown.2)
             let app = windowOn > 0 ? render(page(at: t), size: Tour.window.size, scale: scale, t: t) : nil
-            let turnWindow = reviewOn > 0
-                ? render(TurnReviewView(center: .shared, turn: turn(at: t), choices: t >= 44.6 && t < 46.4 ? ["1": "original"] : [:]).background(Theme.canvas),
-                         size: Tour.review.size, scale: scale, t: t)
-                : nil
-            var menu: NSImage?
-            if menuOn > 0 {
-                if menuCache?.0 != scale {
-                    let renderer = ImageRenderer(content: MenuPanel(store: store, engine: engine)
-                        .environment(\.colorScheme, .light).environment(\.isSnapshot, true))
-                    renderer.scale = scale
-                    menuCache = (scale, renderer.nsImage ?? NSImage())
-                }
-                menu = menuCache?.1
-            }
+            let turnWindow = reviewOn > 0 ? render(turnView(at: t), size: Tour.review.size, scale: scale, t: t) : nil
+            let menu = menuOn > 0 ? menuImage(scale: scale) : nil
             let pointer = Tour.track(cursor, t) { a, b, k in Tour.mix(a, b, k) }
             let click = clicks.last { $0 <= t }.map { t - $0 }
 
@@ -413,9 +537,9 @@ enum Tour {
                     .background(Capsule().fill(.white.opacity(0.8)))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                     .padding(24)
-                    .opacity(Tour.shown(t, 3.2, 52.6, fade: 0.5))
-                card(title: "keepmum on your Mac", lines: ["A tour of the app"]).opacity(1 - Tour.p(t, 2.6, 3.3))
-                card(title: "Keep mum.", lines: ["Free and open source, for macOS", "keepmum.app"]).opacity(Tour.p(t, 52.4, 53.2))
+                    .opacity(Tour.shown(t, previewShown.0, previewShown.1, fade: previewShown.2))
+                card(title: "keepmum on your Mac", lines: ["A tour of the app"]).opacity(1 - Tour.p(t, titleOut.0, titleOut.1))
+                card(title: "Keep mum.", lines: ["Free and open source, for macOS", "keepmum.app"]).opacity(Tour.p(t, closingIn.0, closingIn.1))
             }
             .frame(width: Tour.frame.width, height: Tour.frame.height)
         }
