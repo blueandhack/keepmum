@@ -8,7 +8,7 @@
 # tools, destinations.SHELL_TOOLS and codemode.CODE_TOOLS for commands), add a case if it can touch
 # disk or network, then list it here. A tool no longer offered is only reported.
 #
-# Checked against Codex 0.147.0 and 0.167.0, Claude Code 2.1.310 and 2.1.319, the Antigravity CLI
+# Checked against Codex 0.147.0, 0.167.0 and 0.169.0 (Nov 17), Claude Code 2.1.310 and 2.1.319, the Antigravity CLI
 # 1.5.3, pi 0.84.2 and opencode 2.2.6 on Nov 8, 2026, with the e2e stub MCP server configured (mcp-01). Tools a personal login adds (ChatGPT's image generation and
 # connectors, claude.ai's) are not in CI and not listed.
 #
@@ -21,7 +21,7 @@
 "exec:exec_command" = "runs a shell command, from an exec script: destinations and commands checks, values quoted for the shell"
 "exec:write_stdin" = "types into a running command, from an exec script: its text is read as a command"
 "exec:apply_patch" = "writes files, from an exec script: values restored into the patch text"
-"exec:update_plan" = "the plan the user sees (gone in 0.167): restored as text"
+"exec:update_plan" = "the plan the user sees (not offered in 0.167 or 0.169): restored as text"
 "exec:view_image" = "opens a local image by path: restored"
 "exec:list_mcp_resources" = "lists an MCP server's resources: decided as that server's tool (no values in practice)"
 "exec:list_mcp_resource_templates" = "lists an MCP server's resource templates: decided as that server's tool"
@@ -30,6 +30,8 @@
 "exec:create_goal" = "starts Codex's goal for this thread, which the user sees (0.167): restored as text"
 "exec:get_goal" = "reads that goal (0.167): no values"
 "exec:update_goal" = "sets the goal's status (0.167): restored as text"
+"exec:image_gen__imagegen" = "makes or edits an image (0.169, API keys too): its prompt and the images it names go to OpenAI's image service, so placeholders are kept (restore.DEFAULT_POLICY image_gen__*); a path that names a masked file keeps its placeholder, so that image cannot be edited this way"
+"exec:request_plugin_install" = "asks the user to install a plugin from Codex's recommended list (0.169): installs nothing itself, its reason is shown to the user, restored as text; a plugin the user accepts is in ~/.codex/config.toml, which keepmum's extension watch reads"
 "wait" = "waits on a running exec script: no values"
 "request_user_input" = "asks the user a question: restored"
 "request_user_input_async" = "asks the user a question without waiting for the answer (0.167): restored"

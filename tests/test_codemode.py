@@ -282,3 +282,27 @@ def test_an_opencode_script_over_the_responses_api_is_credited_to_its_server():
     assert vault.origins_of("margaret.thornbury@gmail.com") == {"mcp__notes"}
     ph = next(iter(vault._values))
     assert "margaret.thornbury@gmail.com" in run_opencode(f'return await tools.notes.send_note({{text: "Reach Margaret at {ph}"}});', vault)
+
+
+def test_an_image_prompt_keeps_its_placeholders_and_the_command_beside_it_does_not(v):
+    """Codex 0.169 offers image generation in code mode (`tools.image_gen__imagegen`): its prompt
+    and referenced images go to OpenAI's image service, so a value keeps its placeholder there, as
+    in Antigravity's generate_image and opencode's experimental_image_generate. A command in the
+    same script still gets the real value."""
+    ph = v.ph
+    script = (f'await tools.exec_command({{cmd: "printf %s {ph["tok"]} > .token"}});\n'
+              f'const r = await tools.image_gen__imagegen({{prompt: "A poster for {ph["person"]} with the key {ph["tok"]}"}});\n'
+              'generatedImage(r);')
+    counts = Counter()
+    out = run(script, v, counts=counts)
+    assert f"printf %s {TOKEN} > .token" in out
+    assert f'prompt: "A poster for {ph["person"]} with the key {ph["tok"]}"' in out and PERSON not in out
+    assert counts[(TOOL, "image_gen__imagegen", "keep", "placeholders", "SECRET")] == 1
+
+
+def test_a_plugin_suggestion_shows_the_user_real_text(v):
+    """request_plugin_install (Codex 0.169) shows the user a reason, and installs nothing itself:
+    restored as text, as a question to the user is."""
+    person = v.ph["person"]
+    out = run(f'await tools.request_plugin_install({{plugin_id: "linear", suggest_reason: "Track {person}"}});', v)
+    assert f"Track {PERSON}" in out
