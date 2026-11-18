@@ -1,3 +1,7 @@
+// RETIRED (2026-11-18): the flow on keepmum.app is now site/flow.js, drawn in the page, and that is
+// its source. This file rendered the MP4 the page still links as the video version and names for
+// search engines (keepmum-flow-8a1e7e88eb.mp4); it is kept for that, and no longer kept in step.
+//
 // The flow video: how keepmum detects, masks, restores and guards, then a script that reads a
 // secret itself, as an H.264 MP4.
 //

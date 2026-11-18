@@ -33,9 +33,9 @@ Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned
 
 > **Status: alpha.** The latest release is [0.1.0 alpha 11](https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a11) (Nov 17, 2026); the first, 0.1.0 alpha 1, came out on Nov 3. keepmum works end to end, but it has not been audited, and things will change. Treat it as a safety layer, not a guarantee. See [Limitations](#limitations).
 
-[![Watch how a request travels through keepmum: detect, mask, send, restore, guard, a script that reads a secret itself, then a check's flagged turn and its review (110 seconds, no sound)](site/img/flow-poster.webp)](https://keepmum.app/video/keepmum-flow-8a1e7e88eb.mp4)
+[![Watch how a request travels through keepmum: detect, mask, send, restore, guard, a script that reads a secret itself, then a check's flagged turn and its review (110 seconds, no sound)](site/img/flow-poster.webp)](https://keepmum.app/#video)
 
-▶ [Watch the 110-second video](https://keepmum.app/video/keepmum-flow-8a1e7e88eb.mp4) of how a request travels through keepmum, or see it on [keepmum.app](https://keepmum.app/#video).
+▶ [See it on keepmum.app](https://keepmum.app/#video), drawn in the page, or [as a 110-second video](https://keepmum.app/video/keepmum-flow-8a1e7e88eb.mp4) of how a request travels through keepmum.
 
 ▶ [Take the 58-second tour of the app](https://keepmum.app/video/keepmum-tour-46c3491c76.mp4): the menu bar, the live Overview, Logs, the Protection map and a turn under review, rendered from the app's own views on preview data ([keepmum.app](https://keepmum.app/#tour)).
 
@@ -503,7 +503,7 @@ uv run coverage run -m pytest && uv run coverage report   # statement and branch
 mac/lint.sh                                  # SwiftLint on the Mac app (pinned, checked; mac/README.md)
 uv run python bench/gen.py                   # generate the benchmark datasets
 uv run python bench/run.py                   # accuracy and speed; see bench/README.md
-swift docs/video/flow.swift flow.mp4         # the 110-second flow video (detect, mask, send, restore, guard, a script that reads a secret itself, the checks, a flagged turn and its review), 1080p
+swift docs/video/flow.swift flow.mp4         # retired: the MP4 of the flow; keepmum.app draws it with site/flow.js, its source now
 ```
 
 The design and milestones are in [SPEC.md](docs/SPEC.md).

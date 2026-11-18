@@ -59,7 +59,7 @@ Optional: GitHub's API allows 60 unauthenticated requests an hour per address, s
 
 ## Video
 
-The website's flow video (`docs/video/flow.swift`) is too big for git, so it lives in an R2 bucket and the Worker serves it at `keepmum.app/video/`. Its name carries a hash of its content, so a new render gets a new name and each one can be cached for a year.
+keepmum.app draws the flow in the page (`site/flow.js`, its source since Nov 18, 2026). Its last MP4, from the retired `docs/video/flow.swift`, stays as the video version the page links and names for search engines; it and the app tour are too big for git, so they live in an R2 bucket and the Worker serves them at `keepmum.app/video/`. Its name carries a hash of its content, so a new render gets a new name and each one can be cached for a year.
 
 ```sh
 npx wrangler r2 bucket create keepmum-media                     # once

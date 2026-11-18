@@ -122,6 +122,65 @@ a { color: var(--ink); }
 .video { margin: 0; display: flex; flex-direction: column; gap: 14px; }
 .video video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 20px; background: #F4F4F5; border: 1px solid rgba(26, 15, 11, 0.08); box-shadow: 0 40px 80px -40px rgba(26, 15, 11, 0.35); }
 .video figcaption { font-size: 15px; color: var(--muted); }
+/* The flow (flow.js): a 1920 × 1080 stage drawn in the page and scaled to the column, in the
+   app's light theme. Its parts are placed by flow.js; these are the styles they share. */
+.flow { position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; cursor: pointer; border-radius: 20px; background: #F4F4F5; border: 1px solid rgba(26, 15, 11, 0.08); box-shadow: 0 40px 80px -40px rgba(26, 15, 11, 0.35); }
+.flow-stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; color: #1D1D1F; line-height: normal; text-wrap: wrap; font-optical-sizing: auto; }
+.flow-stage .fl-layer { position: absolute; inset: 0; }
+.flow-stage .fl-abs { position: absolute; }
+.flow-stage .fl-card { position: absolute; background: #fff; box-shadow: 0 6px 32px rgba(0, 0, 0, 0.06); }
+.flow-stage .fl-static { position: relative; }
+.flow-stage .fl-ring { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
+.flow-stage .fl-clip { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none; }
+.flow-stage .fl-scan { background: linear-gradient(to right, rgba(201, 63, 23, 0), rgba(201, 63, 23, 0.35), rgba(201, 63, 23, 0)); }
+.flow-stage .fl-row { display: flex; align-items: center; }
+.flow-stage .fl-col { display: flex; flex-direction: column; align-items: flex-start; }
+.flow-stage .fl-top { align-items: flex-start; }
+.flow-stage .fl-center { display: flex; align-items: center; justify-content: center; }
+.flow-stage .fl-grow { flex: 1; }
+.flow-stage .fl-t, .flow-stage .fl-line, .flow-stage .fl-coderow { white-space: pre; }
+.flow-stage .fl-p { white-space: normal; }
+.flow-stage .fl-loose { line-height: 1.45; }
+.flow-stage .fl-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.flow-stage .fl-icon svg { display: block; }
+.flow-stage .fl-badge { display: inline-flex; align-items: center; justify-content: center; flex: none; background: linear-gradient(#EC6843, #D9481F); }
+.flow-stage .fl-badge svg { display: block; }
+.flow-stage .fl-tile { border-radius: 18px; }
+.flow-stage .fl-num { display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: 50%; }
+.flow-stage .fl-pill { padding: 8px 14px; border-radius: 999px; }
+.flow-stage .fl-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.flow-stage .fl-chip { padding: 4px 11px; border-radius: 999px; }
+.flow-stage .fl-capsule { padding: 14px 30px; border-radius: 999px; }
+.flow-stage .fl-stack { display: inline-grid; }
+.flow-stage .fl-stack > * { grid-area: 1 / 1; justify-self: start; }
+.flow-stage .fl-end { margin-left: auto; }
+.flow-stage .fl-end > * { justify-self: end; }
+.flow-stage .fl-packet { display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+.flow-stage .fl-core { width: 22px; height: 22px; border-radius: 50%; }
+.flow-stage .fl-above { position: absolute; left: 50%; transform: translateX(-50%); }
+.flow-stage .fl-lines { position: relative; }
+.flow-stage .fl-val { position: relative; display: inline-block; padding: 0 4px; border-radius: 6px; vertical-align: bottom; }
+.flow-stage .fl-vclip { position: relative; display: inline-block; overflow: hidden; vertical-align: bottom; }
+.flow-stage .fl-over { position: absolute; left: 0; top: 0; }
+.flow-stage .fl-tag { position: absolute; left: 0; top: -24px; }
+.flow-stage .fl-pad { padding: 0 6px; border-radius: 6px; }
+.flow-stage .fl-entry { padding: 14px; border-radius: 14px; margin-bottom: 10px; }
+.flow-stage .fl-coderow { height: 60px; }
+.flow-stage .fl-prelude { white-space: pre; overflow: hidden; }
+.flow-stage .fl-read { border-radius: 5px; }
+.flow-stage .fl-ins { display: inline-block; overflow: hidden; white-space: pre; vertical-align: top; }
+.flow-stage .fl-caps { display: grid; justify-items: center; }
+.flow-stage .fl-caps > * { grid-area: 1 / 1; }
+.flow-stage .fl-shot { overflow: hidden; border-radius: 18px; border: 1px solid rgba(0, 0, 0, 0.09); box-shadow: 0 10px 48px rgba(0, 0, 0, 0.12); background: #fff; }
+.flow-stage .fl-shot img { width: 100%; height: 100%; }
+.flow-controls { display: flex; align-items: center; gap: 12px; }
+.flow-play { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; flex: none; border: 0; border-radius: 50%; background: var(--ink); color: #fff; cursor: pointer; }
+.flow-scrub { flex: 1; min-width: 0; accent-color: var(--coral); }
+.flow-time { font-family: var(--mono); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.flow-sub { display: none; min-height: 3em; font-size: 16px; font-weight: 500; color: var(--ink); }
+.flow-narrow .flow-sub { display: block; }
+.flow-narrow .flow-stage .fl-caps { visibility: hidden; }
+.flow-transcript { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .step { display: flex; flex-direction: column; gap: 12px; padding-top: 20px; border-top: 3px solid var(--ink); }
 .step .n { font-family: var(--mono); font-size: 14px; font-weight: 500; color: var(--number); }
 .step h3 { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
