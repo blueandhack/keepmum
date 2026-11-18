@@ -32,7 +32,7 @@ To check the download: `shasum -a 256 -c Keepmum-0.1.0a12.dmg.sha256`
 
 - **A screenshot in a Codex tool's output could break the session.** When a tool returns an image (Codex's `view_image`, or an MCP tool that takes a screenshot), the image goes to OpenAI as base64 text. keepmum scanned that text like any other tool output. Now and then a stretch of an image's base64 looked like a secret, and keepmum put a placeholder in the middle of it. OpenAI then refused the request: `Invalid '…image_url'. Expected a base64-encoded data URL … but got an invalid base64-encoded value.` In a test on 34 real PNGs, 2 were changed this way. Images and files in a tool's output now go out as they are, as they already did in a message and in Claude Code's and the Antigravity CLI's requests. Text next to them is still masked.
 
-  A session that already hit this error keeps failing after the update, because the broken image is in its history and is sent again with every request. Start a new session.
+  A session that hit this error works again once Keepmum is updated, with no need to start a new one: keepmum changed the image only on its way out, and the agent's own copy is intact.
 
 This release was checked with the unit tests and the scripted suite only. It was not run against real agents and models (the live suite), as earlier releases were.</description>
       <enclosure url="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a12/Keepmum-0.1.0a12.dmg" length="39647575" type="application/octet-stream" sparkle:edSignature="5VEpXRX0G4rX1Oq3nCyJOv1n+wxOyv4eduPkKfr/sgxrTtX/L+o15eVx+vgcZUEqQ2jOipUp8vyU1mk3j8E4AQ=="></enclosure>
@@ -464,6 +464,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: sSuw96hbqX/rykXCKJeDrq/QRRv+gv0nt7Hp3iyfEJPN4Qc2p0OLPNosriGKy4w607FoFa5AfkaY8np4RIcNBQ==
-length: 48549
+edSignature: kCDoj4rgUFZwYI9T8GLVz6MyuQP6khUfPlj8R37SksdjWuqrqVOfOCGa4zTOShSv5OKtJFR06fgjnu0mjzYdDw==
+length: 48560
 -->
