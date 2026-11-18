@@ -4,14 +4,14 @@
 
 Key facts:
 
-- Detection runs entirely on the Mac: 96 rules with entropy and checksum checks, then OpenAI Privacy Filter (an open-weight token classifier) on the Mac's GPU, then a deterministic step that drops UUIDs, hashes and documented example keys. Hex dumps and base64 of a secret are decoded and scanned too.
+- Detection runs entirely on the Mac: 96 rules with entropy and checksum checks, then OpenAI Privacy Filter (an open-weight token classifier) on the Mac's GPU, then a deterministic step that drops UUIDs, hashes and documented example keys. Hex dumps and base64 of a secret are decoded and scanned too, even folded across lines.
 - Placeholders come from a per-install key (HMAC-SHA256); the same value always gets the same placeholder, so the provider's prompt cache keeps working. Real values live only in memory.
 - Fails closed: a request keepmum cannot scan (an unknown endpoint, an unreadable body, a WebSocket) is blocked, never sent raw.
-- Tools that reach the network get less: web search and fetch keep placeholders, and an MCP server gets back only the values it returned itself.
+- Tools that reach the network get less: web search, fetch and image generation keep placeholders, and an MCP server gets back only the values it returned itself. When a Codex script reads a file itself and passes what it found to an MCP or network tool, keepmum's check in the script withholds any key in a provider's format (`[a secret, withheld by keepmum]`); the script still runs.
 - Optional checks, all local and off by default: prompt injection in tool results, harmful requests, and risky shell commands. Each can warn, block, or send a flagged request to a local model instead of the provider.
 - After a local turn, the conversation can go back to the cloud with only the flagged part replaced: a summary or rewrite of a tool result, or what the user typed with the flagged part taken out (checked to be removal only). The user can review it first: a panel per change, or the whole turn in one window, where each flagged piece is rewritten, sent as it was (after a warning) or removed.
 - Also watches what other apps add to agents' settings (plugins, hooks, MCP servers, skills, instruction files) and can take an entry back out.
-- Measured on synthetic, labeled datasets: secret recall 0.989 to 1; personal data recall 0.996 to 1; about 100 to 145 ms added at the 95th percentile for 4K tokens of new text; 8 to 9 ms with the rules alone.
+- Measured on synthetic, labeled datasets: secret recall 0.989 to 1; personal data recall 0.996 to 1; about 100 to 145 ms added at the 95th percentile for 4K tokens of new text; 8 to 9 ms with the rules alone. keepmum's own memory levels off at about 130 to 150 MB and its CPU at under 5 ms a request, however many requests it handles; the local model takes about 0.2 GB of memory, with its 1.6 GB file in macOS's cache.
 - Works in front of an existing gateway (LiteLLM, OpenRouter, a company proxy): agent → keepmum → gateway → provider.
 - Limitations: shell commands receive real values (pair keepmum with a sandbox that limits the network); local transcripts keep real values; images and PDFs are not scanned; the local model is strongest on English; macOS on Apple silicon only.
 - No telemetry. Besides the request it forwards, keepmum only downloads its models, and the Mac app checks for updates if you allow it.

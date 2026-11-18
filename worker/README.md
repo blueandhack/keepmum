@@ -65,7 +65,7 @@ The website's flow video (`docs/video/flow.swift`) is too big for git, so it liv
 npx wrangler r2 bucket create keepmum-media                     # once
 swift docs/video/flow.swift /tmp/flow.mov                      # from the repository root: a ProRes master, 1.4 GB
 ffmpeg -i /tmp/flow.mov -c:v libx264 -preset veryslow -tune animation -crf 24 -g 300 \
-  -pix_fmt yuv420p -movflags +faststart -an docs/video/keepmum-flow.mp4   # about 2.5 MB (brew install ffmpeg)
+  -pix_fmt yuv420p -movflags +faststart -an docs/video/keepmum-flow.mp4   # about 3 MB (brew install ffmpeg)
 H=$(shasum -a 256 docs/video/keepmum-flow.mp4 | cut -c1-10)
 cd worker && npx wrangler r2 object put "keepmum-media/keepmum-flow-$H.mp4" --remote \
   --file ../docs/video/keepmum-flow.mp4 --content-type video/mp4
