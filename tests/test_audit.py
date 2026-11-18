@@ -356,3 +356,23 @@ def test_pruning_never_reads_the_whole_file_into_memory(tmp_path, monkeypatch):
         log.append("request", outcome="masked", status=200)
     monkeypatch.setattr(Path, "read_bytes", lambda self: (_ for _ in ()).throw(AssertionError("read whole")))
     assert log.prune(now=time.time() + 400 * 86400) == 50
+
+
+def test_a_log_deleted_under_a_running_keepmum_starts_again(tmp_path):
+    """The entry it remembers is gone with the file: the next one starts a new chain, read from
+    disk, not one that says it follows an entry no longer there."""
+    path = tmp_path / "audit.jsonl"
+    log = AuditLog(path)
+    for _ in range(3):
+        log.append("request", outcome="masked", status=200)
+    path.unlink()
+    entry = log.append("request", outcome="masked", status=200)
+    assert entry["seq"] == 1 and entry["prev"] == GENESIS and verify(path)["ok"]
+
+
+def test_a_prune_by_size_says_so_in_the_log_view():
+    from keepmum.audit import summary
+
+    assert summary({"event": "pruned", "dropped": 120, "reason": "size", "max_bytes": 1 << 30}) == \
+        "120 oldest entries removed to keep the log under 1024 MB"
+    assert summary({"event": "pruned", "dropped": 5, "keep_days": 90}) == "5 entries older than 90 days removed"

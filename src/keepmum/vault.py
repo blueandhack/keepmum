@@ -200,6 +200,20 @@ class _Known:
             if a >= end:
                 yield _Found(a, b, v)
                 end = b
+        yield from self._levels_finditer(text)
+
+    def sub(self, repl, text: str) -> str:
+        """As re.Pattern.sub: each match replaced by repl(match), leftmost first, the longest
+        there, none overlapping, as one pattern over every value would."""
+        found = sorted(self.finditer(text), key=lambda m: (m.start(), m.start() - m.end()))
+        out, at = [], 0
+        for m in found:
+            if m.start() >= at:
+                out += [text[at:m.start()], repl(m)]
+                at = m.end()
+        return "".join(out) + text[at:]
+
+    def _levels_finditer(self, text: str):
         for p in self._patterns:
             pos = 0
             while (m := p.search(text, pos)) is not None:
@@ -306,17 +320,15 @@ class Vault:
         self._levels[0].values.append(value)
         self._levels[0].pattern = None
         self._in_levels += 1
-        size = FIRST_LEVEL
-        for i, level in enumerate(self._levels):
-            if len(level.values) <= size:
-                break
+        i, size = 0, FIRST_LEVEL
+        while len(self._levels[i].values) > size:  # full: into the next level up, made if need be
             if i + 1 == len(self._levels):
                 self._levels.append(_Level([]))
-            up = self._levels[i + 1]
+            level, up = self._levels[i], self._levels[i + 1]
             up.values += [v for v in level.values if self._keeps(v)]
             up.pattern = None
             level.values, level.pattern = [], None
-            size *= LEVEL_GROWTH
+            i, size = i + 1, size * LEVEL_GROWTH
         self._known = None
 
     def _evict(self) -> None:

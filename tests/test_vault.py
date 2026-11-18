@@ -173,3 +173,101 @@ def test_the_redactors_cache_holds_positions_never_text():
     assert not [s for entry in r._derived.values() for s in strings(entry)]
     assert any(entry[0] for entry in r._derived.values())  # the base64 block: flagged, not kept
     assert "KEEPMUM_SECRET_" in r.redact_text(texts[-1])  # and still masked when the text comes back
+
+
+def test_a_match_on_a_value_let_go_never_hides_one_kept_inside_it():
+    """The safeguard for a pattern that still holds a value the vault let go: "Anna Smith" gone
+    from the vault but still in a built level must not swallow "Anna", nor "Smith Co" starting in it.
+    _evict builds the levels again, so this is a value forgotten without that."""
+    v = Vault(b"k" * 32)
+    for value in ["Anna Smith", "Anna", "Smith Co", *[f"filler-{i:03d}" for i in range(40)]]:
+        v.placeholder("PERSON", value)
+    v.known_values()
+    assert any("Anna Smith" in level.values for level in v._levels[1:])  # in a compiled level
+    v._forget("Anna Smith")
+    v._known = None
+    assert _found(v, "Anna Smith Co. and filler-007") == ["Anna", "Smith Co", "filler-007"]
+    assert _found(v, "Annapolis") == []  # inside a longer word
+
+
+def test_a_match_let_go_steps_down_to_the_longest_value_kept():
+    """Two values let go, one inside the other: the safeguard steps down past both to "Anna";
+    and a value let go with nothing kept inside it is passed over."""
+    v = Vault(b"k" * 32)
+    for value in ["Anna Smith Jones", "Anna Smith", "Anna", "Zed Zebra", *[f"filler-{i:03d}" for i in range(40)]]:
+        v.placeholder("PERSON", value)
+    v.known_values()
+    for gone in ("Anna Smith Jones", "Anna Smith", "Zed Zebra"):
+        v._forget(gone)
+    v._known = None
+    assert _found(v, "Anna Smith Jones met Zed Zebra and filler-001") == ["Anna", "filler-001"]
+
+
+def test_eviction_puts_what_is_left_in_the_level_that_holds_it():
+    """Over 256 values left, they go a level up, under empty smaller ones, and are all found."""
+    rng = random.Random(7)
+    v = Vault(b"k" * 32, max_values=400)
+    values = [_token(rng) for _ in range(450)]
+    for value in values:
+        v.placeholder("SECRET", value)
+    kept = [x for x in values if x in v._kinds]
+    assert 360 <= len(kept) <= 400  # the oldest tenth went each time it passed 400
+    assert len(v._levels) >= 3 and len(v._levels[-1].values) >= 300  # past 256: a level up
+    assert all(len(level.values) <= 256 for level in v._levels[:-1])
+    sample = rng.sample(kept, 20)
+    assert _found(v, " ".join(sample)) == sorted(sample)
+
+
+def test_the_shared_sets_start_over_past_their_bound():
+    v = Vault(b"k" * 32)
+    for i in range(4100):
+        v._shared(frozenset({f"user:rule-{i}"}))
+    assert len(v._sets) <= 4097
+    same = v._shared(frozenset({"rules:github-token"}))
+    assert v._shared(frozenset({"rules:github-token"})) is same
+
+
+def test_touching_a_value_the_vault_does_not_hold_changes_nothing():
+    v = Vault(b"k" * 32)
+    v.placeholder("SECRET", "first-secret-value")
+    v.placeholder("SECRET", "second-secret-value")
+    order = list(v._kinds)
+    v._touch(None)
+    v._touch("never-seen-value")
+    assert list(v._kinds) == order
+
+
+def test_forgetting_a_value_leaves_a_form_another_value_holds():
+    v = Vault(b"k" * 32)
+    v.placeholder("SECRET", 'pa"ss/word')
+    other = v.placeholder("SECRET", "another-secret")
+    form = next(f for f in v._made['pa"ss/word'] if not f.startswith("KEEPMUM_"))
+    v._forms[form] = other  # the form is the other value's now
+    v._forget('pa"ss/word')
+    assert v._forms.get(form) == other
+
+
+def test_the_redactors_cache_keeps_its_size():
+    from keepmum.detect.pipeline import Pipeline
+    from keepmum.detect.rules import RulesDetector
+    from keepmum.redact import Redactor
+
+    r = Redactor(Pipeline(RulesDetector(), None), Vault(b"k" * 32), cache_size=3)
+    for i in range(6):
+        r.redact_text(f"note {i}: nothing to mask here")
+    assert len(r._derived) == 3 and len(r._cache) == 3
+
+
+def test_sub_replaces_as_one_pattern_over_every_value_would():
+    """The matcher stands in for a regex: sub() takes the leftmost, longest value, none overlapping,
+    across its levels (the e2e harness writes back what the model saw with it)."""
+    import re
+
+    rng = random.Random(8)
+    values = ["Anna", "Anna Smith", "Smith Co", "Margaret Thornbury", *[_token(rng) for _ in range(60)]]
+    v = Vault(b"k" * 32)
+    for value in values:
+        v.placeholder("PERSON", value)
+    text = f"Anna Smith Co. wrote Margaret Thornbury_resume.md, {values[20]} and {values[50]}; Annapolis."
+    one = re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(map(re.escape, sorted(values, key=len, reverse=True))) + r")(?![A-Za-z0-9])")
+    assert v.known_values().sub(lambda m: f"<{m.group()}>", text) == one.sub(lambda m: f"<{m.group()}>", text)

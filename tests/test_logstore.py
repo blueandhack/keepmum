@@ -127,3 +127,10 @@ def test_a_reply_that_never_came_does_not_stay_in_flight_forever(monkeypatch):
     monkeypatch.setattr(stats.time, "time", lambda: 10 ** 12)  # long after
     s.depart(("codex", "openai"), "scanned")
     assert len(s.inflight) == 1 and len(s._handed) == 0
+
+
+def test_a_file_that_cannot_be_written_never_fails_a_request(tmp_path):
+    (tmp_path / "not-a-folder").write_text("")
+    store = LogStore(path=tmp_path / "not-a-folder" / "logs.jsonl")
+    store.values([{"ts": time.time(), "type": "SECRET", "chars": 40}])  # no exception
+    assert store._appended == 0
