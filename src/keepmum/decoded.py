@@ -16,6 +16,10 @@ What counts as a block, and what is decoded:
 - hex bytes in other text: 8 or more two-digit hex bytes with spaces between them, or `0x` bytes
   in a list, after a label or across lines (`print("bytes:", " ".join(f"{x:02x}" ...))`, which a
   live run's model wrote for itself, and opencode's `HEX: 47 49 54 ...` both sent a token out so)
+- any of these folded or spaced however: lines of nothing but hex or base64 characters and spaces,
+  read as one with every space and line break taken out. A live opencode run (Nov 17, 2026) printed
+  .env as `base64 | fold -w8` and as `od -An -tx1 | fold -w24`, which splits a byte over two lines
+  (`… 54  4` / `8  55 …`); both went out before this was read
 
 Only text comes out of decoding: bytes that are not mostly printable UTF-8 (a hash, an image) are
 left alone. The decoded text is scanned by the rules and the values masked before, never by the
@@ -39,6 +43,9 @@ _B64_LINE = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
 _SPACED_HEX = re.compile(r"(?<![0-9A-Za-z])(?:[0-9a-fA-F]{2}[ \t]*[\r\n]?[ \t]*(?=[0-9a-fA-F]{2}(?![0-9A-Za-z]))[ \t]?){7,}"
                          r"[0-9a-fA-F]{2}(?![0-9A-Za-z])")
 _0X_HEX = re.compile(r"(?<![0-9A-Za-z])(?:0[xX][0-9a-fA-F]{2}[,;]?\s*){7,}0[xX][0-9a-fA-F]{2}(?![0-9A-Za-z])")
+# A line of encoded characters and spaces only, for the squeezed pass: hex or base64, any width.
+_SQUEEZE_LINE = re.compile(r"[ \t]*[A-Za-z0-9+/=_-]+(?:[ \t]+[A-Za-z0-9+/=_-]+)*[ \t]*")
+_HEX_ONLY = re.compile(r"[0-9a-fA-F]+")
 _OD_ESCAPES = {"\\n": "\n", "\\t": "\t", "\\r": "\r", "\\0": "\0", "\\v": "\v", "\\f": "\f", "\\b": "\b", "\\a": "\a"}
 
 
@@ -200,6 +207,37 @@ def blocks(text: str) -> list[tuple[int, int, str]]:
                 taken[:] = [(x, y) for x, y in taken if not (a <= x and y <= b)]
                 out.append((a, b, s))
                 taken.append((a, b))
+    # Folded or spaced however (`fold -w8`, a byte split over two lines): consecutive lines of
+    # encoded characters and spaces, squeezed. A run that decodes to text takes the place of the
+    # blocks it holds whole, as above (each of its lines read alone gives pieces of the secret). A
+    # word on a line of its own next to it (`done`) is encoded characters too: a run is also tried
+    # with a line or two off either end.
+    def squeezed_text(group):
+        squeezed = "".join("".join(line.split()) for _, _, line in group)
+        if len(squeezed) < 24 or (len(group) == 1 and not any(c.isspace() for c in group[0][2].strip())):
+            return None
+        raw = bytes.fromhex(squeezed) if _HEX_ONLY.fullmatch(squeezed) and len(squeezed) % 2 == 0 else _b64(squeezed)
+        return _text(raw) if raw else None
+
+    run: list = []
+    for item in [*lines, (len(text), len(text), "")]:
+        if item[2].strip() and _SQUEEZE_LINE.fullmatch(item[2]):
+            run.append(item)
+            continue
+        for lo, hi in ((0, 0), (0, 1), (1, 0), (1, 1), (0, 2), (2, 0)):
+            group = run[lo:len(run) - hi]
+            if not group or (s := squeezed_text(group)) is None:
+                continue
+            a, b = group[0][0], group[-1][1]
+            inside = [blk for blk in out if a <= blk[0] and blk[1] <= b]
+            if any(x < b and a < y for x, y, _ in out if (x, y, _) not in inside) or any(s == d for _, _, d in inside):
+                break  # part of something read already, or read whole already
+            out[:] = [blk for blk in out if blk not in inside]
+            taken[:] = [(x, y) for x, y in taken if not (a <= x and y <= b)]
+            out.append((a, b, s))
+            taken.append((a, b))
+            break
+        run = []
     return sorted(out)
 
 

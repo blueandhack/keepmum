@@ -53,6 +53,11 @@ def wrapped(s: str, n: int) -> str:
     return "\n".join(s[i:i + n] for i in range(0, len(s), n)) + "\n"
 
 
+def bsd_od_an_tx1(data: bytes) -> list[str]:
+    """macOS `od -An -tx1 -v`: 16 bytes a line, each right-aligned in 4 columns after 8 spaces."""
+    return ["        " + "".join(f"  {b:02x}" for b in data[o:o + 16]) for o in range(0, len(data), 16)]
+
+
 def gnu_od_an_c(data: bytes) -> str:
     """GNU od -An -c (Linux): no offset, no padding where it would be."""
     esc = {10: "\\n", 9: "\\t", 13: "\\r", 0: "\\0"}
@@ -86,6 +91,14 @@ FORMATS = {
                          + " ".join(f"{b:02x}" for b in ENV[30:]) + "\n",
     "0x list": "data = [" + ", ".join(f"0x{b:02x}" for b in ENV) + "]",
     "xxd -g 1": "\n".join(f"{o:08x}: " + " ".join(f"{b:02x}" for b in ENV[o:o + 16]) for o in range(0, len(ENV), 16)) + "\n",
+    # Found live (Nov 17, 2026): opencode printed .env folded, to "check for hidden characters":
+    # base64 at 8 columns, and od's hex at 24, which splits a byte over two lines.
+    "base64 | fold -w8": wrapped(base64.b64encode(ENV).decode(), 8),
+    "base64 | fold -w4": wrapped(base64.b64encode(ENV).decode(), 4),
+    "base64 | fold -w13": wrapped(base64.b64encode(ENV).decode(), 13),
+    "base64 spaced": " ".join(base64.b64encode(ENV).decode()[i:i + 4] for i in range(0, len(base64.b64encode(ENV)), 4)) + "\n",
+    "od -An -tx1 -v | fold -w24": "".join(wrapped(line, 24) for line in bsd_od_an_tx1(ENV)),
+    "od -An -tx1 -v | fold -w17": "".join(wrapped(line, 17) for line in bsd_od_an_tx1(ENV)),
 }
 
 
