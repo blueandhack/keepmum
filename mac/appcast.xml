@@ -7,6 +7,49 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a11</title>
+      <pubDate>Wed, 18 Nov 2026 07:06:11 GMT</pubDate>
+      <sparkle:version>10011</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a11</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a11</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The eleventh alpha of keepmum is about cost and two leaks. Its memory and CPU now stay flat however many requests it handles, and the local model takes about 0.2 GB of memory of its own instead of 1.7 GB. A secret a Codex script reads itself no longer reaches an MCP tool, and Codex's new image tool no longer gets real values.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a11.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2 through 0.1.0a10:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a11.dmg.sha256`
+
+## Fixes
+
+- **A secret a Codex script read itself could reach an MCP tool.** Codex runs a model's tool calls as one program, so a script could read `.env` with a command, pull out the token and pass it to a connector, and the token never went through keepmum. Codex's model wrote such a script on its own in testing; keepmum could only warn. keepmum writes the script Codex runs, so it now adds a check to it: a call that hands such a value to a network tool has every secret in a provider's format (GitHub, OpenAI, AWS, Slack and 74 more of keepmum's rules) replaced with `[a secret, withheld by keepmum]` as the script runs. Nothing is refused, and ordinary values go as they are. A secret with no telling shape, such as a bare password, still goes; for that keepmum warns, as before.
+- **Codex's image generation got real values.** Codex 0.169 offers image generation in its scripts, with API keys too. keepmum did not know the tool, so it put real values back into the prompt, which goes with any images it names to OpenAI's image service. It now keeps placeholders there, as it does for the Antigravity CLI's and opencode's image tools.
+- **One token in about 6,700 went unmasked.** A rule took any value with six identical characters in a row for a placeholder (`xxxxxx`), so a real token holding such a run by chance, such as about one Slack app token in 6,700, was let through. Runs now mark a placeholder only when they are at least a third of the value: of 1,520 real-format tokens with a run, 98.9% are now masked (none were), and no placeholder is.
+- **A file printed encoded and folded went out unmasked.** keepmum decodes a file a command prints as hex or base64, and masks it when it holds a secret. A model asked to check `.env` for hidden characters printed it as base64 folded at 8 characters a line, and as a hex dump folded so that a byte was split over two lines: keepmum read neither whole, and the token went to the provider. Lines of nothing but hex or base64 characters are now read as one, whatever their width or spacing.
+- **A review ran up to half a second past its deadline,** and a stopped keepmum waited up to a second. Both end on time now. After a privacy-filter request timed out, keepmum gave the stuck process 5 seconds before ending it; it ends it at once.
+
+## Changes
+
+- **The local model takes about 0.2 GB of memory, not 1.7 GB.** It used to copy its 1.6 GB file into its own memory. It now uses the file in place, on the GPU as on the CPU, so the weights stay in macOS's file cache, which macOS can let go when memory is short. Measured on an M5 Pro: 1,757 MB down to 210 MB (133 MB under load), starting in 250 ms instead of 560. It finds exactly what it found before, at the same speed.
+- **keepmum no longer grows with use.** Under steady agent traffic in a new load test (`bench/load.py`), keepmum used to take more memory and more CPU with every request: 136 MB more per 1,000 requests, and from 9 to 42 ms of CPU a request by the 2,000th. Now it uses 4.3 to 4.8 ms a request from the first to the 60,000th, and its memory levels off at about 130 to 150 MB.
+  - keepmum keeps the 10,000 masked values used most recently. A value still in use is masked with the same placeholder every turn; one that comes back after a long pause is masked with the same placeholder too, as after a restart.
+  - The history an agent resends with every request is no longer scanned again from the start; only values keepmum has learned since are looked for in it.
+- **The local model unloads after 10 minutes without a request,** as the injection and harm models already did.
+- **Files stay bounded.** keepmum's own log rotates at 5 MB. The audit log stays under 1 GB, about 2.8 million requests, in addition to its 90 days; when it drops its oldest entries it records that it did, so `keepmum audit verify` still checks the chain. Both now prune while keepmum runs, not only when it starts.
+- **Less CPU when idle:** about a fifth of what it was.
+
+This release was checked as 0.1.0a10 was: the unit tests, the scripted suite on every agent, the live suite on real cloud models, and the Antigravity CLI live. Codex was also given the connector task five times on a real model: it read `.env` in its own script twice, and the token never reached the connector.</description>
+      <enclosure url="https://keepmum.app/update/v0.1.0a11/Keepmum-0.1.0a11.dmg" length="39645868" type="application/octet-stream" sparkle:edSignature="6ejp/FE5R/p9aJE9b3+WEYHxGmEniO8ZbSRDggeqwfM4lD93wM4ydFmSDUuTjJZdlH+F9KjXeEQqyabLejXqAQ=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a10</title>
       <pubDate>Tue, 17 Nov 2026 06:34:34 GMT</pubDate>
       <sparkle:version>10010</sparkle:version>
@@ -390,6 +433,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 5CsUhWKsZlEErYDVkP/h6betzHjr35bJkNUtkecvrHFgYn9MgIv9QOX4He9Cr7atdYeptWlORrz2wPvvgV20Cw==
-length: 39464
+edSignature: /9MtBWLMgcLEwj/pvzW2w29irVNpYIKBNIvFkW307Xc9FerlV7E2ZCIFWr+9Fwe+4JDdd6V5TQKiqocrowlpBA==
+length: 45584
 -->
