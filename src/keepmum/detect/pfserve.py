@@ -181,9 +181,9 @@ class PfServe:
             time.sleep(min(60.0, self.idle_s))
             with self._lock:
                 if self.loaded() and time.monotonic() - self._used >= self.idle_s:
-                    self.close()
-                    self._idle = True
+                    self._idle = True  # recorded first: whoever sees it unloaded sees why
                     self.unloads += 1
+                    self.close()
 
     def detect(self, text: str) -> list[Span]:
         if not text.strip():

@@ -184,7 +184,7 @@ def test_an_idle_model_is_unloaded_and_loads_again_with_the_next_request(tmp_pat
     try:
         assert pf.loaded() and [s.type for s in pf.detect("hello Priya Raman")] == ["PERSON"]
         deadline = time.monotonic() + 5
-        while pf.loaded() and time.monotonic() < deadline:
+        while (pf.loaded() or pf.unloads == 0) and time.monotonic() < deadline:
             time.sleep(0.05)
         assert not pf.loaded() and pf.unloads == 1
         assert [s.type for s in pf.detect("and ghp_abc123 too")] == ["SECRET"]
