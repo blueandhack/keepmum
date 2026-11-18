@@ -237,6 +237,23 @@ _IBAN_COUNTRIES = frozenset(
 )
 
 
+# Runs of identical characters mark a placeholder when they are at least this share of the value
+# (rules.toml, filters.repeated). 0: any run, as before Nov 17, 2026.
+REPEATED_SHARE = 1 / 3
+
+
+class _Repeated:
+    """The `repeated` filter: matches (search) when runs of one character, six or more, are at least
+    REPEATED_SHARE of the value. A placeholder is mostly such runs; a real token has one by chance."""
+
+    def __init__(self, runs: re.Pattern[str]):
+        self.runs = runs
+
+    def search(self, value: str):
+        total = sum(m.end() - m.start() for m in self.runs.finditer(value))
+        return total > 0 and total >= REPEATED_SHARE * len(value)
+
+
 class RulesDetector:
     name = SOURCE
 
@@ -264,7 +281,9 @@ class RulesDetector:
         allow = cfg.get("allowlist", {})
         self.allowlist = Allowlist(allow.get("strings", ()), allow.get("patterns", ()))
         f = cfg.get("filters", {})
-        self._placeholder_filters = [re.compile(f[k]) for k in ("stopwords", "placeholder", "repeated", "public") if k in f]
+        self._placeholder_filters = [re.compile(f[k]) for k in ("stopwords", "placeholder", "public") if k in f]
+        if "repeated" in f:  # not a plain search: how much of the value its runs are (_Repeated)
+            self._placeholder_filters.append(_Repeated(re.compile(f["repeated"])))
         self._all_filters = self._placeholder_filters + [re.compile(f[k]) for k in ("reference", "numeric") if k in f]
         self._prose_filters = self._all_filters + [re.compile(f[k]) for k in ("identifier",) if k in f]
         self.entropy = cfg.get("entropy", {"enabled": False})

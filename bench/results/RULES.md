@@ -53,3 +53,20 @@ On held-out 1 to 4, the same negatives are flagged before and after, with the ru
 ## Speed
 
 The rules take 8 to 9 ms at the 95th percentile for 4K tokens (5.7 ms before) and 15 to 19 ms at 8K (11 ms before). With the model, this session measured about 230 ms at 4K both before and after the change; earlier sessions measured 95 to 110 ms on the same machine, so the difference is the machine's load, not the rules.
+
+## Repeated characters (Nov 17, 2026)
+
+The `repeated` filter dropped any value with a run of six identical characters, as a placeholder (`xxxxxx`, `000000`, `******`). A real token can hold such a run by chance: among random Slack app tokens, one in about 6,700 has six of a kind in its 90 characters, and went out unmasked (found by `test_provider_formats_with_no_telling_name`, which generates new tokens each run). Now runs of six or more mark a placeholder when they are at least a third of the value (`rules.REPEATED_SHARE`).
+
+A targeted set, since the data sets below hold no such value: 1,520 tokens in every provider format of `tests/test_formats.py`, each with a run of 6 to 8 of one of its own characters at a random place, and 36 placeholders written as people write them (`ghp_xxxx…`, `sk-proj-abc123xxxx…`, `AKIAXXXX…`, `xoxb-000000000000-…`, `******`), each in 5 contexts (`export X=…`, `KEY=…`, `api_key = "…"`, a sentence, a Bearer header):
+
+| Filter | Tokens with a run, masked | Placeholders masked |
+| --- | --- | --- |
+| any run (before) | 0/1,520 (0%) | 0/180 |
+| runs ≥ 20% of the value | 1,323/1,520 (87.0%) | 0/180 |
+| runs ≥ 25% | 1,433/1,520 (94.3%) | 0/180 |
+| **runs ≥ a third (after)** | **1,503/1,520 (98.9%)** | **0/180** |
+
+The 17 still missed are 24-character Alibaba access key IDs with an injected run of 8, a third of the value: by chance, practically never.
+
+On the data sets, nothing changed: `rules`, `rules+pf-serve`, `rules:pii` and `rules+pf-serve:pii` on dev, held-out 4 and held-out 5 have the same recall, precision and negatives flagged before and after, and the same lists of missed and flagged spans.

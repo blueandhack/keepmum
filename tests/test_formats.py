@@ -146,3 +146,42 @@ def test_personal_data_that_is_not_a_person(rules, text):
 def test_an_email_inside_a_password_is_part_of_the_secret(rules):
     text = 'DATABASE_URL="mongodb+srv://svc:a.cI%9x#Qp7Lmz@cluster0.x7k2p.mongodb.net/prod"'
     assert [(v, k) for v, k, _ in found(rules, text, pii=True)] == [("a.cI%9x#Qp7Lmz", "SECRET")]
+
+
+# A real token can hold a run of one character by chance; a placeholder is mostly such runs. The
+# filter used to drop any value with six of a kind in a row: every token below went unmasked, one
+# Slack app token in about 6,700 among random ones (Nov 17, 2026).
+# Built from pieces, as the tokens above are made at run time: a whole token in a provider's format
+# written in the source is, to GitHub's push protection, a secret committed.
+RUN_TOKENS = [
+    ("slack-app-token", "xapp" + "-1-ALVPJUUMHP0-8444444642701-381b256fd9f5aef869674b3148ab1fedae4f07eec431b1424da578ac4c9381c7"),
+    ("slack-app-token", "xapp" + "-1-ATT9OJ0IXLN-3427304062570-aebcaa054edd3977eea00b8de0d192ffae0d146f6a8cd00e4369bfffffff8822"),
+    ("openrouter-api-key", "sk-or" + "-v1-0c8f2e00000003b7d9a51c6e04f8b2a7d3c9e1f5b0a8d6c4e2f7a9b1c3d5e7f9"),
+    ("groq-api-key", "gsk" + "_Qm7ZxR2pLkW9vN4tYcH8jSaaaaaaaB3fD6gU1oE5iP0rT2wX7qMn"),
+]
+PLACEHOLDERS = [
+    "ghp" + "_" + "x" * 36, "sk-proj" + "-abc123" + "x" * 30, "AKIA" + "X" * 16,
+    "xoxb" + "-000000000000-000000000000-" + "x" * 24, "glpat" + "-" + "x" * 20, "sk_live" + "_" + "0" * 24,
+    "xapp" + "-1-AXXXXXXXXXX-0000000000000-" + "x" * 64, "*" * 24,
+]
+
+
+@pytest.mark.parametrize("rule,value", RUN_TOKENS, ids=[f"{r}-{i}" for i, (r, _) in enumerate(RUN_TOKENS)])
+def test_a_token_with_a_run_of_one_character_is_still_a_secret(rules, rule, value):
+    for text in (f"export SVC={value}\n", f"here it is: {value} (rotate it after the demo)"):
+        assert any(v == value and k == "SECRET" and f"rules:{rule}" in src for v, k, src in found(rules, text))
+
+
+@pytest.mark.parametrize("value", PLACEHOLDERS)
+def test_a_placeholder_made_of_runs_is_still_left_alone(rules, value):
+    for text in (f"export SVC={value}\n", f"GITHUB_TOKEN={value}\n", f'api_key = "{value}"\n', f"here it is: {value} (rotate it after the demo)"):
+        assert not [v for v, k, _ in found(rules, text) if k == "SECRET" and value in v], text
+
+
+def test_runs_mark_a_placeholder_from_a_third_of_the_value(rules):
+    from keepmum.detect import rules as rules_mod
+
+    assert rules_mod.REPEATED_SHARE == pytest.approx(1 / 3)
+    assert rules.looks_like_placeholder("xxxxxx") and rules.looks_like_placeholder("abcdefghijkl000000")  # 6 of 18
+    assert not rules.looks_like_placeholder("abcdefghijklmnopq000000")  # 6 of 23
+    assert not rules.looks_like_placeholder("abcdefghijklmnop00000")  # a run of 5 is no run
