@@ -440,10 +440,10 @@ local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
 | --- | --- |
 | Per-install key for placeholders | `~/.config/keepmum/salt` (0600), shared by the app, the CLI and the VS Code wrapper |
 | Stats token for the Mac app | `~/.config/keepmum/stats-token` (0600) |
-| Logs: paths, types, counts and timings, never values | `~/.config/keepmum/keepmum.log` (0600) |
+| Logs: paths, types, counts and timings, never values | `~/.config/keepmum/keepmum.log` (0600), 5 MB, then `keepmum.log.1` |
 | Running proxy's port | `~/.config/keepmum/runtime.json` (0600) |
 | Request history for the Activity page: time, endpoint, outcome, counts by type, tool calls' decisions; never values | `~/.config/keepmum/history.jsonl` (0600), last 20,000 requests |
-| Audit log: requests (counts, rules, restore decisions per tool), protection changes, starts and stops; never values | `~/.config/keepmum/audit.jsonl` (0600), with its head in `audit.head.json`; `[audit] keep_days`, 90 by default |
+| Audit log: requests (counts, rules, restore decisions per tool), protection changes, starts and stops; never values | `~/.config/keepmum/audit.jsonl` (0600), with its head in `audit.head.json`; `[audit] keep_days`, 90 by default, and at most 1 GB (about 2.8 million requests), the oldest going first |
 | Network tools seen: server and tool names, a hash of each tool's definition, kept-call counts per day and type; never values | `~/.config/keepmum/tools.json` (0600), counts for the last 30 days |
 | Agent extensions you already have: agent, kind, name, and when first seen; never settings or instruction text | `~/.config/keepmum/extensions.json` (0600) |
 | A copy of an agent's settings file before keepmum takes an entry out of it | `~/.config/keepmum/backups/` (0600), one file per removal |
@@ -451,7 +451,7 @@ local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
 | Check hits: check, tool, score, length and categories; never the text | Process memory (the stats feed, the last 200) and the audit log |
 | The Logs page's rows: per check hit the above and what came of it (answered on this Mac, handed back, your review's answers, why a rewrite did not pass); per masked value its type, rule, who found it and length. Never text, values or previews | `~/.config/keepmum/logs.jsonl` (0600), for `[log] keep_days` (30 by default; `keepmum log keep 7\|off`); `off` deletes it and keeps the Logs page in memory only |
 | The Logs page's check details: the flagged text (up to 4,000 characters) and what the user had typed, every masked value and placeholder in them shown as its type | Process memory only, with the last 200 hits; `[log] context = false` turns it off and forgets what was kept |
-| Masked values, and which tool servers returned each | Process memory only, cleared on exit |
+| Masked values, and which tool servers returned each | Process memory only, the 10,000 used most recently, cleared on exit |
 | The Logs page: per masked value its type, rule and length, and the first and last character of values of 8 or more characters | Previews: process memory only (the last 2,000), cleared on exit; `[log] previews = false` keeps types and rules only. The rows without previews: as above |
 | The Logs page's context: up to 80 characters each side of a masked value, with every masked value and placeholder in it shown as its type (`‹SECRET›`), as the provider received it | Process memory only, with the findings; `[log] context = false` turns it off and forgets what was kept |
 

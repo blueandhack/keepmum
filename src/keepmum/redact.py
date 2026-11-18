@@ -186,6 +186,12 @@ class Redactor:
         self.detector = detector
         self.vault = vault
         self._cache: OrderedDict[bytes, tuple[Span, ...]] = OrderedDict()
+        # Per text, beside the detector's spans: whether it has encoded blocks (decoded.encoded),
+        # and where the known values in it are, as of a vault mark. Both ran on every text of every
+        # request, the resent history too, and took about three quarters of keepmum's own time on
+        # agent traffic. Positions only, never text: a value the vault lets go leaves no copy here,
+        # and a block's decoded text is decoded again when the text comes back (few have any).
+        self._derived: OrderedDict[bytes, list] = OrderedDict()  # key -> [has blocks, mark, [(start, end)]]
         self._cache_size = cache_size
         self._generation = getattr(detector, "generation", 0)
         self.counts: Counter[str] = Counter()  # spans masked per type since the last reset
@@ -220,14 +226,19 @@ class Redactor:
         self.shown: dict[str, str] = {}
         self._role: str | None = None
 
-    def _detect(self, text: str) -> tuple[tuple[Span, ...], bool]:
+    @staticmethod
+    def _key(text: str) -> bytes:
+        return hashlib.sha256(text.encode("utf-8", "surrogatepass")).digest()
+
+    def _detect(self, text: str, key: bytes | None = None) -> tuple[tuple[Span, ...], bool]:
         """Detector spans, cached per text: the conversation history is resent every turn.
         Also says whether the text was seen before."""
         generation = getattr(self.detector, "generation", 0)
         if generation != self._generation:  # the settings changed: detect again
             self._cache.clear()
+            self._derived.clear()
             self._generation = generation
-        key = hashlib.sha256(text.encode("utf-8", "surrogatepass")).digest()
+        key = key or self._key(text)
         hit = self._cache.get(key)
         if hit is not None:
             self._cache.move_to_end(key)
@@ -243,28 +254,62 @@ class Redactor:
         return self._spans(text)[0]
 
     def _spans(self, text: str) -> tuple[list[Span], bool]:
-        found, seen = self._detect(text)
+        key = self._key(text)
+        found, seen = self._detect(text, key)
+        derived = self._derived.get(key)
+        blocks = None
+        if derived is None:
+            from .decoded import encoded
+
+            blocks = encoded(text)
+            derived = self._derived[key] = [bool(blocks), -1, []]
+            if len(self._derived) > self._cache_size:
+                self._derived.popitem(last=False)
+        else:
+            self._derived.move_to_end(key)
+            if not derived[0]:
+                blocks = []
         spans = list(found)
         known = self.vault.known_values()
         if known is not None:
             passed = getattr(self.detector, "pass_types", frozenset())
             released = getattr(self.detector, "lets_through", None)
-            spans += [Span(m.start(), m.end(), kind, 1.0, "known") for m in known.finditer(text)
-                      if (kind := self.vault.kind_of(m.group())) not in passed
-                      and not (released and released(m.group(), self.vault.sources_of(m.group()), kind))]
-        spans += self._encoded(text, spans, known)
+            spans += [Span(a, b, kind, 1.0, "known") for a, b, value in self._known_in(text, derived, known)
+                      if (kind := self.vault.kind_of(value)) not in passed
+                      and not (released and released(value, self.vault.sources_of(value), kind))]
+        spans += self._encoded(text, spans, known, blocks)
         return merge(narrow(spans, text)), seen
 
-    def _encoded(self, text: str, spans: list[Span], known) -> list[Span]:
+    def _known_in(self, text: str, derived: list, known) -> list[tuple[int, int, str]]:
+        """The known values in text, as (start, end, value): where they were the last time, with
+        only the values learned since looked for, or all of them again when that was too long ago.
+        The cache keeps positions; each value is read from the text in hand."""
+        from .vault import occurrences
+
+        mark, keeps = self.vault.mark(), self.vault.keeps
+        # A value found before and let go since may have hidden a shorter one still kept ("Anna" in
+        # "Anna Smith"): such a text is looked at again in full.
+        gone = any(not keeps(text[a:b]) for a, b in derived[2])
+        if derived[1] != mark or gone:
+            new = self.vault.learned_since(derived[1]) if derived[1] >= 0 and not gone else None
+            if new is None:
+                derived[2] = [(m.start(), m.end()) for m in known.finditer(text)]
+            else:
+                derived[2] = derived[2] + [where for v in new for where in occurrences(v, text)]
+            derived[1] = mark
+        return [(a, b, text[a:b]) for a, b in derived[2] if keeps(text[a:b])]
+
+    def _encoded(self, text: str, spans: list[Span], known, blocks=None) -> list[Span]:
         """Blocks a command printed encoded (a hex dump, `od -c`, plain hex, base64) whose decoded
-        text holds a secret, or a value masked before: each is masked whole (decoded.py)."""
+        text holds a secret, or a value masked before: each is masked whole (decoded.py). `blocks`:
+        decoded.encoded(text), when it was found before."""
         from .decoded import encoded
         from .detect import PRIORITY
         from .detect.rules import GUESSES
 
         out = []
         rules = getattr(self.detector, "rules", None) or self.detector
-        for start, end, decoded in encoded(text):
+        for start, end, decoded in (encoded(text) if blocks is None else blocks):
             if any(s.start <= start and end <= s.end for s in spans):
                 continue  # already masked
             kinds = [s.type for s in rules.detect(decoded) if s.source not in GUESSES]

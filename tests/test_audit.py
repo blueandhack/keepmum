@@ -305,3 +305,54 @@ def test_a_running_proxy_records_start_stop_and_edits_of_the_file(tmp_path, monk
     assert entries[1]["mode"] == "serve" and entries[1]["port"] == server.port
     assert entries[2]["by"] == "config file" and entries[2]["weakens"]
     assert verify(tmp_path / ".config" / "keepmum" / "audit.jsonl")["ok"]
+
+
+def test_two_processes_appending_in_turn_keep_one_chain(tmp_path):
+    """Each remembers its last entry, and reads the file again once the other has written."""
+    path = tmp_path / "audit.jsonl"
+    a, b = AuditLog(path), AuditLog(path)
+    for i in range(30):
+        (a if i % 3 else b).append("request", outcome="masked", status=200)
+    report = verify(path)
+    assert report["ok"], report["problems"]
+    assert [e["seq"] for e in read(path)] == list(range(1, 31))
+
+
+def test_a_log_over_its_size_loses_its_oldest_entries_and_still_verifies(tmp_path):
+    """A request is about 380 bytes: 100 million in the retention window were 38 GB."""
+    path = tmp_path / "audit.jsonl"
+    log = AuditLog(path)
+    log.max_bytes = 20_000
+    for _ in range(200):
+        log.append("request", client="claude", provider="anthropic", outcome="masked", status=200)
+    before = path.stat().st_size
+    dropped = log.prune()
+    assert dropped > 0 and path.stat().st_size <= 20_000
+    entries = read(path)
+    assert entries[-1]["event"] == "pruned" and entries[-1]["reason"] == "size" and entries[-1]["dropped"] == dropped
+    assert before > 20_000 and verify(path)["ok"]
+
+
+def test_the_running_service_prunes_as_it_goes(tmp_path, monkeypatch):
+    """It pruned only when it started: one running for months kept everything."""
+    from keepmum import audit
+
+    monkeypatch.setattr(audit, "PRUNE_EVERY", 50)
+    path = tmp_path / "audit.jsonl"
+    log = AuditLog(path)
+    log.max_bytes = 10_000
+    for _ in range(400):
+        log.append("request", client="claude", provider="anthropic", outcome="masked", status=200)
+    assert path.stat().st_size < 10_000 + 50 * 400
+    assert any(e["event"] == "pruned" for e in read(path)) and verify(path)["ok"]
+
+
+def test_pruning_never_reads_the_whole_file_into_memory(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path = tmp_path / "audit.jsonl"
+    log = AuditLog(path)
+    for _ in range(50):
+        log.append("request", outcome="masked", status=200)
+    monkeypatch.setattr(Path, "read_bytes", lambda self: (_ for _ in ()).throw(AssertionError("read whole")))
+    assert log.prune(now=time.time() + 400 * 86400) == 50

@@ -277,6 +277,7 @@ class LogStore:
 
     def __init__(self, keep_days: int = 30, path: Path | None = None):
         self.path, self.keep_days = path or logs_file(), keep_days
+        self._appended = 0
 
     def _append(self, rows: list[dict]) -> None:
         if self.keep_days <= 0 or not rows:
@@ -287,7 +288,13 @@ class LogStore:
             with os.fdopen(fd, "a") as f:
                 f.write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows))
         except OSError:
-            pass  # a convenience: never fail a request over it
+            return  # a convenience: never fail a request over it
+        # Compacted as it goes, not only at a start: an engine that runs for weeks kept every row,
+        # though the page shows LOGS_KEEP at most. The file stays under about twice that.
+        self._appended += len(rows)
+        if self._appended >= sum(LOGS_KEEP):
+            self._appended = 0
+            self.load()
 
     def checks(self, hits: list[dict]) -> None:
         self._append([{"t": "check", **{k: v for k, v in h.items() if k != "seq"}} for h in hits])
@@ -400,6 +407,11 @@ class Stats:
         `handed_back`: the strategy, when it is the first to carry a flagged result's replacement."""
         with self._lock:
             self._flight += 1
+            if len(self.inflight) > 1000:  # replies that never came, with no dashboard polling `live`
+                now = time.time()
+                for n in [n for n, f in self.inflight.items() if now - f["ts"] > FLIGHT_STALE]:
+                    del self.inflight[n]
+                    self._handed.pop(n, None)
             client, provider = origin or (None, None)
             self.inflight[self._flight] = {"id": self._flight, "ts": round(time.time(), 6), "client": client,
                                            "provider": provider, "kind": "handed" if handed_back else kind}
@@ -414,6 +426,7 @@ class Stats:
             # A request that never recorded (a crash between leaving and its reply) stops being drawn.
             for n in [n for n, f in self.inflight.items() if now - f["ts"] > FLIGHT_STALE]:
                 del self.inflight[n]
+                self._handed.pop(n, None)
             return {"now": round(now, 6), "inflight": list(self.inflight.values()),
                     "recent": [e for e in self.events if e["ts"] > after]}
 

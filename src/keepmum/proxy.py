@@ -40,6 +40,7 @@ import json
 import logging
 import re
 import secrets
+import sys
 import threading
 import time
 import zlib
@@ -48,6 +49,7 @@ from dataclasses import dataclass
 
 import anyio
 import httpx
+
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
@@ -84,6 +86,15 @@ from .responses import ResponsesStreamRestorer, restore_responses
 from .restore import DEFAULT_POLICY, StreamRestorer, ToolPolicy, restore_response, rule_for, take_tools, take_urls
 from .stats import Stats, client_of, flows, guard_summary, provider_of
 from .tools import BULK, CONTACTS, definitions
+
+# httpcore asks for sniffio on every call that takes a lock, to tell asyncio from trio, and goes on
+# with asyncio when it is not there. Python does not remember a module it could not find, so each
+# ask searched every folder on the path: about 3 a request, 5% of keepmum's CPU under load. Marked
+# missing once, the import fails at once, as it did anyway.
+try:
+    import sniffio  # noqa: F401
+except ImportError:
+    sys.modules.setdefault("sniffio", None)  # type: ignore[assignment]
 
 log = logging.getLogger("keepmum")
 

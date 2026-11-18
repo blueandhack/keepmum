@@ -173,3 +173,32 @@ def test_download_checks_size_and_hash(tmp_path, monkeypatch, served, ok):
             pfserve.download_model()
         assert not any(p.exists() for p in pfserve.model_candidates())
         assert not os.listdir(pfserve.model_candidates()[0].parent)  # no partial file left
+
+
+def test_an_idle_model_is_unloaded_and_loads_again_with_the_next_request(tmp_path, monkeypatch):
+    """It holds 1.7 GB while loaded: after IDLE_S without a request it goes, as the checks' do."""
+    import time
+
+    monkeypatch.setattr(PfServe, "idle_s", 0.2)
+    pf = PfServe(fake(tmp_path), "model.gguf")
+    try:
+        assert pf.loaded() and [s.type for s in pf.detect("hello Priya Raman")] == ["PERSON"]
+        deadline = time.monotonic() + 5
+        while pf.loaded() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not pf.loaded() and pf.unloads == 1
+        assert [s.type for s in pf.detect("and ghp_abc123 too")] == ["SECRET"]
+        assert pf.loaded() and pf.restarts == 0  # loaded again: not a crash
+    finally:
+        pf.close()
+
+
+def test_a_long_reply_is_read_whole(tmp_path):
+    """Replies are read in large pieces through one buffer: many spans, split across reads."""
+    pf = PfServe(fake(tmp_path), "model.gguf")
+    try:
+        text = " ".join(f"ghp_{i:06d}" for i in range(3000))
+        spans = pf.detect(text)
+        assert len(spans) == 3000 and text[spans[-1].start:spans[-1].end] == "ghp_002999"
+    finally:
+        pf.close()

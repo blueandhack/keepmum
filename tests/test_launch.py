@@ -254,3 +254,27 @@ def test_a_scan_failure_names_a_missing_module_and_nothing_else():
     assert failure(ModuleNotFoundError("No module named 'x'", name="keepmum.decoded")) == \
         "ModuleNotFoundError: keepmum.decoded"
     assert failure(KeyError("sk-ant-secret-from-the-request")) == "KeyError"
+
+
+def test_the_service_log_rotates_and_stays_private(tmp_path, monkeypatch):
+    """At the info level it gets a line a request: it grew for as long as keepmum ran."""
+    import logging
+
+    from keepmum import launch
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(launch, "LOG_MAX_BYTES", 2000)
+    root = logging.getLogger()
+    before = root.handlers[:], root.level
+    try:
+        launch.log_to_file("info")
+        for i in range(300):
+            logging.getLogger("keepmum").info("POST /v1/messages -> 200 (%d)", i)
+        files = sorted((tmp_path / ".config" / "keepmum").glob("keepmum.log*"))
+        assert [f.name for f in files] == ["keepmum.log", "keepmum.log.1"]
+        assert all(f.stat().st_size <= 2100 and f.stat().st_mode & 0o777 == 0o600 for f in files)
+    finally:
+        for h in root.handlers:
+            h.close()
+        root.handlers[:], _ = before
+        root.setLevel(before[1])

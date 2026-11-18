@@ -103,3 +103,27 @@ def test_the_config_and_the_cli(tmp_path, monkeypatch):
     assert run(app, ["log", "keep", "999"]).exit_code == 2
     assert run(app, ["log", "keep", "off"]).exit_code == 0 and load(cfg).log_keep_days == 0 and not kept.exists()
     assert run(app, ["log", "keep", "30"]).exit_code == 0 and "keep_days" not in cfg.read_text()
+
+
+def test_the_file_is_compacted_as_it_goes_not_only_at_a_start(tmp_path, monkeypatch):
+    """An engine that runs for weeks kept every row: the file stays near what the page can show."""
+    from keepmum import stats
+
+    monkeypatch.setattr(stats, "LOGS_KEEP", (5, 20))
+    store = LogStore(path=tmp_path / "logs.jsonl")
+    for i in range(500):
+        store.values([{"ts": time.time(), "type": "SECRET", "rule": "rules:github-token", "chars": 40 + i}])
+    rows = (tmp_path / "logs.jsonl").read_text().splitlines()
+    assert len(rows) <= 2 * 25
+    assert json.loads(rows[-1])["chars"] == 539  # the newest stay
+
+
+def test_a_reply_that_never_came_does_not_stay_in_flight_forever(monkeypatch):
+    from keepmum import stats
+
+    s = Stats()
+    for _ in range(1200):
+        s.depart(("codex", "openai"), "scanned", handed_back="answer")  # never recorded
+    monkeypatch.setattr(stats.time, "time", lambda: 10 ** 12)  # long after
+    s.depart(("codex", "openai"), "scanned")
+    assert len(s.inflight) == 1 and len(s._handed) == 0

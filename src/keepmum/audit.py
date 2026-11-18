@@ -19,7 +19,9 @@ What is recorded, and what never is:
 - start, stop: a keepmum proxy began or ended, so gaps in coverage show.
 - extension_removed, extensions_kept: a plugin, hook or MCP server taken out of a coding agent's
   settings, or new ones marked as yours (extensions.py). Names and files, never settings.
-- pruned: entries older than `[audit] keep_days` were removed; the chain continues from them.
+- pruned: entries older than `[audit] keep_days` were removed, or the oldest, to keep the file
+  under MAX_BYTES (a request is about 380 bytes: 100 million in the retention window were 38 GB);
+  the chain continues from them. The service checks every PRUNE_EVERY entries, not only at start.
 
 What the chain cannot do on its own: someone who can write the file can also rewrite it from
 some point on, recomputing every hash, or cut off its end. Both are caught only by comparing
@@ -36,12 +38,16 @@ import hashlib
 import hmac
 import json
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
 
 GENESIS = "0" * 64
 KEEP_DAYS = 90
+MAX_BYTES = 1 << 30  # the file, at most: the oldest entries go first, down to PRUNE_TO of it
+PRUNE_TO = 0.8
+PRUNE_EVERY = 10_000  # entries appended between checks for what is old or over MAX_BYTES
 
 
 def audit_dir() -> Path:
@@ -76,7 +82,13 @@ class AuditLog:
     def __init__(self, path: Path | None = None, keep_days: int = KEEP_DAYS):
         self.path = path or audit_file()
         self.keep_days = keep_days
+        self.max_bytes = MAX_BYTES
         self._lock = threading.Lock()
+        # What this process last wrote: the file's identity and size after it, its last entry, and
+        # the head's config and identity. While the files are as it left them, the next entry needs
+        # neither read; another process appending changes them, and they are read again.
+        self._seen: tuple | None = None
+        self._appends = 0
 
     @property
     def head_path(self) -> Path:
@@ -91,26 +103,44 @@ class AuditLog:
     def append(self, event: str, **fields) -> dict | None:
         try:
             with self._locked():
-                return self._append(event, fields)
+                entry = self._append(event, fields)
         except OSError as e:
             import logging
 
             logging.getLogger("keepmum").error("audit log not written (%s): %s", type(e).__name__, e)
             return None
+        self._appends += 1
+        if self._appends % PRUNE_EVERY == 0:
+            self.prune()
+        return entry
+
+    @staticmethod
+    def _identity(path: Path) -> tuple | None:
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        return st.st_ino, st.st_size, st.st_mtime_ns
 
     def _append(self, event: str, fields: dict, state: dict | None = None, after: dict | None = None) -> dict:
-        last = after if after is not None else self._last()
+        seen = self._seen if self._seen is not None and self._seen[0] == self._identity(self.path) else None
+        last = after if after is not None else seen[1] if seen else self._last()
         entry = {"seq": (last["seq"] + 1) if last else 1, "ts": round(time.time(), 3), "event": event,
                  **{k: v for k, v in fields.items() if v is not None}, "prev": last["hash"] if last else GENESIS}
         entry["hash"] = entry_hash(entry)
         fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "ab") as f:
-            if f.tell() and not self._ends_with_newline():
+            if f.tell() and not seen and not self._ends_with_newline():
                 f.write(b"\n")  # a torn last line (a crash mid-write) stays where it is, on its own line
             f.write(_canonical(entry) + b"\n")
-        head = self._head()
-        self._write_head({"seq": entry["seq"], "hash": entry["hash"], "ts": entry["ts"],
-                          "config": state if state is not None else head.get("config")})
+        if state is not None:
+            config = state
+        elif seen and seen[3] == self._identity(self.head_path):
+            config = seen[2]
+        else:
+            config = self._head().get("config")
+        self._write_head({"seq": entry["seq"], "hash": entry["hash"], "ts": entry["ts"], "config": config})
+        self._seen = (self._identity(self.path), entry, config, self._identity(self.head_path))
         return entry
 
     def note_config(self, cfg, by: str) -> dict | None:
@@ -137,30 +167,47 @@ class AuditLog:
                                        "weakens": any(c["weakens"] for c in changes)}, state)
 
     def prune(self, now: float | None = None) -> int:
-        """Drop entries older than keep_days, then record how many and the hash they ended with,
-        so the chain still checks from the first kept entry. Returns how many were dropped."""
+        """Drop entries older than keep_days, and the oldest while the file is over max_bytes (down
+        to PRUNE_TO of it), then record how many and the hash they ended with, so the chain still
+        checks from the first kept entry. Reads line by line: the file is never all in memory.
+        Returns how many were dropped."""
         cutoff = (now or time.time()) - self.keep_days * 86400
         try:
             with self._locked():
-                lines = self.path.read_bytes().splitlines() if self.path.exists() else []
-                drop = 0
-                for line in lines:
-                    try:
-                        if json.loads(line)["ts"] >= cutoff:
+                try:
+                    size = self.path.stat().st_size
+                except FileNotFoundError:
+                    return 0
+                target = int(self.max_bytes * PRUNE_TO) if size > self.max_bytes else None
+                drop = offset = 0
+                last, reason = None, "age"
+                with open(self.path, "rb") as f:
+                    for line in f:
+                        try:
+                            entry = json.loads(line)
+                            old = entry["ts"] < cutoff
+                        except (ValueError, KeyError, TypeError):
+                            break  # never prune past something unreadable: verify must still see it
+                        big = target is not None and size - offset > target
+                        if not (old or big):
                             break
-                    except (ValueError, KeyError, TypeError):
-                        break  # never prune past something unreadable: verify must still see it
-                    drop += 1
+                        if not old:
+                            reason = "size"
+                        drop, offset, last = drop + 1, offset + len(line), entry
                 if not drop:
                     return 0
-                last = json.loads(lines[drop - 1])
                 tmp = self.path.with_suffix(".tmp")
                 fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "wb") as f:
-                    f.write(b"".join(line + b"\n" for line in lines[drop:]))
+                with open(self.path, "rb") as src, os.fdopen(fd, "wb") as dst:
+                    src.seek(offset)
+                    shutil.copyfileobj(src, dst, 1 << 20)
+                rest = offset < size
                 tmp.replace(self.path)
-                self._append("pruned", {"dropped": drop, "through": {"seq": last["seq"], "hash": last["hash"]},
-                                        "keep_days": self.keep_days}, after=None if lines[drop:] else last)
+                self._seen = None
+                facts = {"dropped": drop, "through": {"seq": last["seq"], "hash": last["hash"]}, "keep_days": self.keep_days}
+                if reason == "size":
+                    facts |= {"reason": "size", "max_bytes": self.max_bytes}
+                self._append("pruned", facts, after=None if rest else last)
                 return drop
         except OSError:
             return 0
@@ -225,7 +272,7 @@ class AuditLog:
         tmp = self.head_path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            json.dump(head, f, separators=(",", ":"))
+            f.write(json.dumps(head, separators=(",", ":")))  # dumps: json.dump writes with the pure-Python encoder
         tmp.replace(self.head_path)
 
 
@@ -543,6 +590,8 @@ def summary(entry: dict) -> str:
         changed = entry.get("changed") or []
         return f"{entry.get('server')} trusted again" + (f" after its tools changed ({', '.join(changed)})" if changed else "")
     if e == "pruned":
+        if entry.get("reason") == "size":
+            return f"{entry.get('dropped')} oldest entries removed to keep the log under {(entry.get('max_bytes') or 0) >> 20} MB"
         return f"{entry.get('dropped')} entries older than {entry.get('keep_days')} days removed"
     if e == "guard":
         hits = entry.get("hits") or []

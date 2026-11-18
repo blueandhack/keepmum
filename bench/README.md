@@ -9,6 +9,15 @@ uv run python bench/run.py                                   # rules, rules+pf-s
 uv run python bench/run.py --detectors rules,rules+pf-serve  # a subset; --data, --out, --repeat, --limit
 ```
 
+Under load: `keepmum serve` against a fake provider, with requests shaped like an agent's (each
+conversation resent whole every turn) or all new (`--profile unique`), and keepmum's memory and CPU
+sampled every second. Memory that keeps growing with requests is a leak; CPU per request that grows
+is work that scales with what keepmum has seen.
+
+```sh
+uv run python bench/load.py --requests 20000 --concurrency 8   # --profile unique, --rules-only, --out samples.json
+```
+
 Held-out checks use new values and hand-written negatives never used for tuning:
 
 ```sh

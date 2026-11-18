@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
 import os
 import shutil
 import signal
@@ -22,6 +23,17 @@ def runtime_file() -> Path:
 
 def log_file() -> Path:
     return Path.home() / ".config" / "keepmum" / "keepmum.log"
+
+
+LOG_MAX_BYTES = 5 * 1024 * 1024  # keepmum.log, then keepmum.log.1: 10 MB at most
+
+
+class _PrivateRotatingHandler(logging.handlers.RotatingFileHandler):
+    """Rotates as RotatingFileHandler does, each new file readable only by its owner (0600)."""
+
+    def _open(self):
+        fd = os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        return os.fdopen(fd, self.mode.replace("w", "a"), encoding=self.encoding, errors=self.errors)
 
 # Settings or environment that would send Claude Code's traffic somewhere other than keepmum.
 BYPASS_KEYS = ("ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
@@ -243,6 +255,26 @@ def _clear_runtime() -> None:
         pass
 
 
+def _quiet_server(config):
+    """A uvicorn Server that wakes once a second, not ten times: its loop only stamps the Date
+    header (once a second anyway) and looks for a stop. An idle keepmum took about 1.5 ms of CPU a
+    second this way, all day, and every wakeup counts against a laptop's battery."""
+    import asyncio
+
+    import uvicorn
+
+    class Quiet(uvicorn.Server):
+        async def main_loop(self) -> None:
+            counter = 0
+            should_exit = await self.on_tick(counter)
+            while not should_exit:
+                counter = (counter + 10) % 864000  # on_tick does its once-a-second work at multiples of 10
+                await asyncio.sleep(1.0)
+                should_exit = await self.on_tick(counter)
+
+    return Quiet(config) if hasattr(uvicorn.Server, "on_tick") else uvicorn.Server(config)
+
+
 class BackgroundServer:
     """uvicorn in a thread, on a socket bound before it starts (port 0 picks a free one)."""
 
@@ -255,7 +287,7 @@ class BackgroundServer:
         self.port = self.sock.getsockname()[1]
         self.proxy = proxy
         config = uvicorn.Config(proxy.app, log_level="warning", access_log=False, lifespan="off")
-        self.server = uvicorn.Server(config)
+        self.server = _quiet_server(config)
         self.thread = threading.Thread(target=self.server.run, kwargs={"sockets": [self.sock]}, daemon=True)
 
     def start(self, timeout: float = 10) -> None:
@@ -302,7 +334,8 @@ def log_to_file(level: str) -> None:
     lf.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not lf.exists():
         os.close(os.open(lf, os.O_WRONLY | os.O_CREAT, 0o600))
-    handler = logging.FileHandler(lf)
+    # Rotated: at the info level it gets a line a request, and it grew for as long as keepmum ran.
+    handler = _PrivateRotatingHandler(lf, maxBytes=LOG_MAX_BYTES, backupCount=1)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     root = logging.getLogger()
     root.handlers[:] = [handler]

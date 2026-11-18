@@ -47,6 +47,10 @@ LABEL_TYPES = {
 }
 
 START_TIMEOUT = 120.0  # the first start after a build compiles Metal kernels
+# Unloaded after this long without a request, as the checks' models are (guard.IDLE_S): it holds
+# about 0.2 GB of its own while loaded (the weights are pages of its file, in macOS's cache:
+# native/pf-serve/patches/weights-shared-gpu.patch), and starts again in about 0.25 s on an M5 Pro.
+IDLE_S = 600.0
 
 
 def request_timeout(nbytes: int) -> float:
@@ -125,30 +129,39 @@ def download_model(progress=None) -> Path:
 
 
 class PfServe:
-    """Keeps one pf-serve process warm. Calls are serialized.
+    """Keeps one pf-serve process warm while requests come, and unloads it after IDLE_S without
+    one. Calls are serialized.
 
     Fail closed: a request that errors, times out or finds the process dead raises PfServeError,
     and the proxy blocks it. The next request starts a new process.
     """
+
+    idle_s = IDLE_S
 
     # 0: every decoded span comes back; the pipeline's refinement decides what to keep.
     def __init__(self, binary: str | Path, model: str | Path, threshold: float = 0.0, name: str = SOURCE):
         self.name = name
         self.args = [str(binary), str(model), repr(threshold)]
         self.restarts = 0
+        self.unloads = 0
         self._lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
+        self._buf = bytearray()
+        self._sel: selectors.BaseSelector | None = None
+        self._used = time.monotonic()
+        self._idle = False  # unloaded while idle: the next start is not a restart
+        self._reaper: threading.Thread | None = None
         self._start()
 
     def _start(self) -> None:
         self._proc = subprocess.Popen(self.args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.DEVNULL, bufsize=0)
+        self._buf = bytearray()
+        self._sel = selectors.DefaultSelector()
+        self._sel.register(self._proc.stdout.fileno(), selectors.EVENT_READ)
         deadline = time.monotonic() + START_TIMEOUT
-        line = b""
         try:
-            while not line.endswith(b"\n"):
-                line += self._read(1, deadline)
-            hello = json.loads(line)
+            hello = json.loads(self._line(deadline))
         except (PfServeError, ValueError) as e:
             hello = {"error": str(e) if isinstance(e, PfServeError) else "unreadable hello line"}
         if hello.get("error") or not hello.get("device"):
@@ -156,12 +169,28 @@ class PfServe:
             raise PfServeError(f"pf-serve did not start: {hello.get('error', 'no device')}")
         self.device = hello["device"]
         self.load_ms = hello.get("ms")
+        if self._reaper is None:
+            self._reaper = threading.Thread(target=self._reap, name="pf-serve-idle", daemon=True)
+            self._reaper.start()
+
+    def loaded(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def _reap(self) -> None:
+        while True:
+            time.sleep(min(60.0, self.idle_s))
+            with self._lock:
+                if self.loaded() and time.monotonic() - self._used >= self.idle_s:
+                    self.close()
+                    self._idle = True
+                    self.unloads += 1
 
     def detect(self, text: str) -> list[Span]:
         if not text.strip():
             return []
         raw = text.encode("utf-8", "replace")
         with self._lock:
+            self._used = time.monotonic()
             found = self._classify(raw)
         spans = []
         for start, end, score, label in found:
@@ -180,7 +209,10 @@ class PfServe:
     def _classify(self, raw: bytes) -> list[tuple[int, int, float, str]]:
         if self._proc is None or self._proc.poll() is not None:
             self.close()
-            self.restarts += 1
+            if self._idle:
+                self._idle = False
+            else:
+                self.restarts += 1
             self._start()
         deadline = time.monotonic() + request_timeout(len(raw))
         try:
@@ -210,19 +242,31 @@ class PfServe:
     def _u32(self, deadline: float) -> int:
         return struct.unpack("<I", self._read(4, deadline))[0]
 
+    def _fill(self, deadline: float) -> None:
+        """Whatever pf-serve has written, up to 64 KB, into the buffer. One selector for the
+        process's life, and replies read in large pieces: a reply was read a few bytes at a time,
+        each with a new selector, which cost more than the model did on a short text."""
+        wait = deadline - time.monotonic()
+        if wait <= 0 or not self._sel.select(wait):
+            raise PfServeError("pf-serve timed out")
+        chunk = os.read(self._proc.stdout.fileno(), 1 << 16)
+        if not chunk:
+            raise PfServeError("pf-serve closed its output")
+        self._buf += chunk
+
     def _read(self, n: int, deadline: float) -> bytes:
-        fd, buf = self._proc.stdout.fileno(), b""
-        with selectors.DefaultSelector() as sel:
-            sel.register(fd, selectors.EVENT_READ)
-            while len(buf) < n:
-                wait = deadline - time.monotonic()
-                if wait <= 0 or not sel.select(wait):
-                    raise PfServeError("pf-serve timed out")
-                chunk = os.read(fd, n - len(buf))
-                if not chunk:
-                    raise PfServeError("pf-serve closed its output")
-                buf += chunk
-        return buf
+        while len(self._buf) < n:
+            self._fill(deadline)
+        out = bytes(self._buf[:n])
+        del self._buf[:n]
+        return out
+
+    def _line(self, deadline: float) -> bytes:
+        while (end := self._buf.find(b"\n")) < 0:
+            self._fill(deadline)
+        out = bytes(self._buf[:end + 1])
+        del self._buf[:end + 1]
+        return out
 
     def _write(self, data: bytes, deadline: float) -> None:
         fd, view = self._proc.stdin.fileno(), memoryview(data)
@@ -236,6 +280,10 @@ class PfServe:
 
     def close(self) -> None:
         proc, self._proc = self._proc, None
+        if self._sel is not None:
+            self._sel.close()
+            self._sel = None
+        self._buf = bytearray()
         if proc is None:
             return
         if proc.poll() is None:
