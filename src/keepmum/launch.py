@@ -107,6 +107,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
         audit.keep_days = new.audit_keep_days
         if proxy.stats.logs is not None and proxy.stats.logs.keep_days != new.log_keep_days:
             proxy.stats.logs.set_keep(new.log_keep_days)
+        if flagged.keep_days != new.log_keep_days:
+            flagged.set_keep(new.log_keep_days)
         audit.note_config(new, "config file")
         pipeline.apply_settings(new.pass_types, new.mask_rules, new.allow_strings, new.allow_patterns, new.off_rules,
                                 pii=None if fixed_pii else new.pii)
@@ -125,15 +127,17 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
 
     observe = LiveConfig(cfg.path, cfg, on_change=apply)
     from .commands import CommandsCheck
-    from .guard import SHORT_CHARS, Guard
+    from .guard import SHORT_CHARS, FlaggedStore, Guard
     from .harm import HarmModel
 
-    # Models load on their first check and unload when idle; modes follow the config file.
+    # Models load on their first check and unload when idle; modes follow the config file. What they
+    # flagged is kept as the Logs page's rows are, so a restart does not warn about it again.
+    flagged = FlaggedStore(cfg.log_keep_days)
     injection = Guard(lambda: observe.config.guard_injection, threshold=cfg.guard_injection_threshold, name="injection",
-                      short_chars=SHORT_CHARS)
+                      short_chars=SHORT_CHARS, store=flagged)
     harm_model = HarmModel(cfg.guard_harm_model, cfg.guard_harm_sensitivity)
     harm = Guard(lambda: observe.config.guard_harm, harm_model, threshold=harm_model.threshold, name="harm",
-                 min_chars=8)
+                 min_chars=8, store=flagged)
     harm_model.guard = harm
     if mode == "serve" and cfg.guard_injection != "off":
         _update_injection_model(audit)

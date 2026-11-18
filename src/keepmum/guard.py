@@ -31,7 +31,10 @@ planted in a repository usually arrives inside a longer file.
 from __future__ import annotations
 
 import hashlib
+import hmac
+import json
 import math
+import os
 import re
 import threading
 import time
@@ -323,8 +326,104 @@ def _flat(text: str) -> list[str]:
     return [" ".join(_LINE_NUMBER.sub("", line, count=1).split()) for line in text.splitlines()]
 
 
-def _key(text: str) -> bytes:
-    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).digest()
+def _key(text: str, salt: bytes = b"") -> bytes:
+    data = text.encode("utf-8", "surrogatepass")
+    return hmac.new(salt, data, hashlib.sha256).digest() if salt else hashlib.sha256(data).digest()
+
+
+def flagged_file() -> Path:
+    """The checks' flagged results, kept across restarts for `[log] keep_days` (FlaggedStore)."""
+    return Path.home() / ".config" / "keepmum" / "flagged.jsonl"
+
+
+# What a flagged row keeps of its hit: never the text.
+FLAGGED_KEPT = ("check", "source", "score", "chars", "categories", "carried")
+
+
+class FlaggedStore:
+    """The texts each check flagged, on disk (0600), so a restarted keepmum knows them as it did before
+    it stopped: an agent resends its whole conversation every turn, and a warning in warn mode is given
+    once, not again after every restart (Nov 18: Codex's history warned about four times in 15 minutes).
+
+    Never text: each row is an HMAC of the text under the install salt (vault.install_salt), so a row
+    cannot be checked against a guess without it, with the hit's score, length, source and categories
+    and the model that scored it. A row of another model is passed over: its score is not this one's.
+    Rows older than `keep_days` (`[log] keep_days`, as the Logs page's rows) go when it loads; 0 keeps
+    nothing, and deletes the file. Append-only lines; the newest `keep` of each check are kept."""
+
+    def __init__(self, keep_days: int = 30, path: Path | None = None, salt: bytes | None = None, keep: int = 4096):
+        from .vault import install_salt
+
+        self.path, self.keep_days, self.keep = path or flagged_file(), keep_days, keep
+        self.salt = salt if salt is not None else install_salt()
+        self._lock = threading.Lock()
+        self._appended = 0
+        self._rows = self._load()
+
+    def rows(self, check: str, model: str | None) -> dict[bytes, dict]:
+        """The hits kept for this check and model, oldest first, by key."""
+        return {bytes.fromhex(r["key"]): {k: r[k] for k in FLAGGED_KEPT if k in r} for r in self._rows
+                if r.get("check") == check and r.get("model") == model}
+
+    def add(self, key: bytes, hit: dict, model: str | None) -> None:
+        if self.keep_days <= 0:
+            return
+        row = {"ts": time.time(), "key": key.hex(), "model": model, **{k: hit[k] for k in FLAGGED_KEPT if k in hit}}
+        with self._lock:
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                with os.fdopen(fd, "a") as f:
+                    f.write(json.dumps(row, separators=(",", ":")) + "\n")
+            except OSError:
+                return  # a convenience: never fail a check over it
+            self._appended += 1
+            if self._appended >= self.keep:  # compacted as it goes: an engine that runs for weeks
+                self._appended = 0
+                self._rows = self._load()
+
+    def set_keep(self, days: int) -> None:
+        self.keep_days = days
+        if days <= 0:
+            try:
+                self.path.unlink()
+            except OSError:
+                pass
+
+    def _load(self) -> list[dict]:
+        """The rows within `keep_days`, the newest of each key, at most `keep` a check; the file
+        rewritten with only those."""
+        if self.keep_days <= 0:
+            self.set_keep(0)
+            return []
+        try:
+            lines = self.path.read_text().splitlines()
+        except OSError:
+            return []
+        since = time.time() - self.keep_days * 86400
+        latest: dict[tuple, dict] = {}
+        for line in lines:
+            try:
+                r = json.loads(line)
+                bytes.fromhex(r["key"])
+            except (ValueError, TypeError, KeyError):
+                continue
+            if isinstance(r, dict) and r.get("ts", 0) >= since and isinstance(r.get("score"), (int, float)):
+                latest.pop((r.get("check"), r["key"]), None)
+                latest[(r.get("check"), r["key"])] = r  # insertion order: oldest first
+        per: dict[str, list[dict]] = {}
+        for r in latest.values():
+            per.setdefault(r.get("check"), []).append(r)
+        rows = sorted((r for rs in per.values() for r in rs[-self.keep:]), key=lambda r: r["ts"])
+        try:
+            tmp = self.path.with_suffix(".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows))
+            tmp.replace(self.path)
+        except OSError:
+            pass
+        return rows
 
 
 class Guard:
@@ -333,7 +432,7 @@ class Guard:
     asked only for a new hit."""
 
     def __init__(self, mode, model=None, threshold: float = THRESHOLD, keep: int = 4096, name: str = "injection",
-                 min_chars: int = MIN_CHARS, short_chars: int = 0):
+                 min_chars: int = MIN_CHARS, short_chars: int = 0, store: FlaggedStore | None = None):
         self._mode = mode if callable(mode) else (lambda: mode)
         self.model = model if model is not None else InjectionModel()
         self.threshold = threshold
@@ -342,11 +441,20 @@ class Guard:
         self.short_chars = short_chars  # the injection check's SHORT_CHARS; 0: one threshold for every length
         self._flagged: dict[bytes, dict] = {}  # text hash -> the hit, for texts flagged earlier
         # The injection check's flagged texts, flattened, with their hits (newest last): their pieces
-        # are flagged too when a later result repeats them. Kept in memory only, like the hits.
+        # are flagged too when a later result repeats them. Kept in memory only: they are text.
         self.carry = name == "injection"
         self._sources: list[tuple[str, dict]] = []
         self._keep = keep
         self._lock = threading.Lock()
+        # With a store, what was flagged before a restart is known after it (FlaggedStore): texts are
+        # keyed under the install salt then, as the store keeps them.
+        self._store = store
+        self._salt = store.salt if store is not None else b""
+        if store is not None:
+            self._flagged.update(list(store.rows(name, self._label()).items())[-keep:])
+
+    def _label(self) -> str | None:
+        return getattr(self.model, "label", None)
 
     def threshold_for(self, chars: int) -> float:
         return short_threshold(self.threshold) if chars < self.short_chars else self.threshold
@@ -365,7 +473,7 @@ class Guard:
         hits = []
         hit_keys: set[bytes] = set()  # the same text twice in one request (typed again, resent) is one hit
         for at, (source, text, new) in enumerate(items):
-            key = _key(text)
+            key = _key(text, self._salt)
             if key in hit_keys:
                 continue
             with self._lock:
@@ -403,6 +511,8 @@ class Guard:
                 self._flagged[key] = hit
                 if self.carry and carried is None:
                     self._sources = [*self._sources[-(CARRIED - 1):], ("\n".join(_flat(text)), hit)]
+            if self._store is not None:
+                self._store.add(key, hit, self._label())
             hits.append({**hit, "at": at})  # which of the items: the Logs page shows its text
             hit_keys.add(key)
         return hits

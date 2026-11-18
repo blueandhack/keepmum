@@ -104,10 +104,12 @@ def checks() -> list[tuple[str, str]]:
     from . import audit
     from .config import config_file
     from .protect import excluded_file
-    from .stats import history_file, token_file
+    from .guard import flagged_file
+    from .stats import history_file, logs_file, token_file
 
     af = audit.audit_file()
-    for f in (token_file(), launch.log_file(), launch.runtime_file(), af, af.with_name(af.stem + ".head.json"), history_file()):
+    for f in (token_file(), launch.log_file(), launch.runtime_file(), af, af.with_name(af.stem + ".head.json"), history_file(),
+              logs_file(), flagged_file()):
         if f.exists() and f.stat().st_mode & 0o077:
             _check(r, FAIL, f"{f} is readable by other users (mode {f.stat().st_mode & 0o777:o})")
     for f in (config_file(), excluded_file()):
