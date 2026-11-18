@@ -450,8 +450,9 @@ def observe(action: str = typer.Argument("status", help="on, off, or status")) -
 
 @app.command()
 def model(action: str = typer.Argument("status", help="on, off, or status")) -> None:
-    """The local model after the rules (on, the default), or the rules alone (off): faster and about
-    1.7 GB lighter, but they find only values with a known shape or a telling name."""
+    """The local model after the rules (on, the default), or the rules alone (off): faster and lighter
+    (no model process, nor its file in macOS's cache), but they find only values with a known shape or
+    a telling name."""
     from .config import ConfigError
     from .detect.pfserve import find_binary, find_model
 

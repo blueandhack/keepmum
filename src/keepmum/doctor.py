@@ -173,7 +173,8 @@ def checks() -> list[tuple[str, str]]:
     return r
 
 
-# Memory each optional check's model takes while loaded (measured on an M5 Pro), next to pf-serve's 1.7 GB.
+# Memory each optional check's model takes while loaded (measured on an M5 Pro), next to pf-serve's 0.2 GB
+# (its 1.6 GB file in macOS's cache besides).
 GUARD_MEMORY = {"injection": "0.4 GB", "small": "0.4 GB", "0.6b": "1.1 GB", "4b": "4.9 GB"}
 
 

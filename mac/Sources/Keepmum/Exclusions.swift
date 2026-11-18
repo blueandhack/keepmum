@@ -88,7 +88,7 @@ struct MaskingSection: View {
             Hairline()
             FormRow(title: "Detector",
                     detail: model ? "Rules, then the local model: also names, addresses, and secrets with no known shape"
-                                  : "Rules only: faster and about 1.7 GB lighter, but names, addresses and unlabeled secrets go out unmasked") {
+                                  : "Rules only: faster and lighter, but names, addresses and unlabeled secrets go out unmasked") {
                 Segmented(options: [(true, "Rules + model"), (false, "Rules only")],
                           selection: Binding(get: { model }, set: { new in Task { await engine.setModel(new) } }))
                     .disabled(!engine.isBundled || engine.busy || engine.download != nil)

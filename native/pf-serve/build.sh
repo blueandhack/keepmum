@@ -5,7 +5,11 @@
 # pf-serve runs OpenAI Privacy Filter on privacy-filter.cpp (ggml) for keepmum's L2 detector
 # (src/keepmum/detect/pfserve.py). pf-serve.cpp, CMakeLists.txt and patches/ come from magpie
 # (MIT, LICENSE-magpie) at commit MAGPIE_COMMIT, except patches/classify-reset-error.patch,
-# keepmum's own (one failed request no longer fails every later one); privacy-filter.cpp (MIT) is fetched at
+# keepmum's own (one failed request no longer fails every later one), patches/weights-paged.patch,
+# from magpie's b85475e (pf-v4: on the CPU the model file is mapped, not read into memory), and
+# patches/weights-shared-gpu.patch, keepmum's own (the same on Metal: the GPU takes the mapped file
+# as its buffer; pf-serve's own memory 1.75 GB -> 0.21 GB, start 550 -> 240 ms, the same spans;
+# PF_NOMAP=1 copies the weights as before); privacy-filter.cpp (MIT) is fetched at
 # PF_COMMIT with its pinned ggml submodule. cmake and ninja run through uvx, so nothing is
 # installed system-wide. Windows and Linux targets (Vulkan, CPU) come later; magpie's
 # build.sh shows how.

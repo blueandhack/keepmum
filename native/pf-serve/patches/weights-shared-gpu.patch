@@ -1,0 +1,37 @@
+diff --git a/src/model.cpp b/src/model.cpp
+index 8ca5555..b09e763 100644
+--- a/src/model.cpp
++++ b/src/model.cpp
+@@ -139,6 +139,32 @@ bool model::realize_weights(const std::string & gguf_path) {
+         return true;
+     }
+ 
++    // Device path, shared: a device that can use host memory in place (Metal
++    // on Apple silicon, whose GPU shares the memory) takes the file's mapping
++    // as its buffer, as the CPU does: the weights are pages of the file, which
++    // the system can let go under pressure and read in again, not 1.6 GB of
++    // the process's own memory, and nothing is copied at load. PF_NOMAP, or a
++    // device that cannot, copies them into the device's buffer below.
++    if (!std::getenv("PF_NOMAP")) {
++        ggml_backend_dev_t dev = ggml_backend_get_device(be.be);
++        ggml_backend_dev_props props;
++        ggml_backend_dev_get_props(dev, &props);
++        if (props.caps.buffer_from_host_ptr && file.map(gguf_path)) {
++            size_t max_tensor = 0;
++            for (ggml_tensor * t = ggml_get_first_tensor(file.ctx); t; t = ggml_get_next_tensor(file.ctx, t)) {
++                max_tensor = std::max(max_tensor, ggml_nbytes(t));
++            }
++            weights_buf = ggml_backend_dev_buffer_from_host_ptr(dev, file.data, file.data_size, max_tensor);
++            if (weights_buf) {
++                for (ggml_tensor * t = ggml_get_first_tensor(file.ctx); t; t = ggml_get_next_tensor(file.ctx, t)) {
++                    t->buffer = weights_buf;
++                }
++                return true;
++            }
++        }
++        file.error.clear();
++    }
++
+     // Device path: mirror weights into a no_alloc ctx, allocate on the
+     // backend, upload, and repoint the layer struct at the device tensors.
+     size_t n_tensors = 0;
