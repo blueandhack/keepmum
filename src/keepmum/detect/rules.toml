@@ -58,8 +58,9 @@ max_len = 256
 # Shannon entropy as a fraction of the maximum possible for the string's length.
 min_ratio = 0.88
 confidence = 0.5
-# Skip candidates preceded by these markers (hashes, digests, inline data).
-skip_before = '''(?i)(?:sha(?:1|224|256|384|512)[-:=]|md5[-:=]|integrity|checksum|digest|h1:|base64,|oid |nonce|@sha256:|ssh-rsa|ssh-ed25519|ssh-dss|ecdsa-sha2-nistp\d+)\s*["']?$'''
+# Skip candidates preceded by these markers (hashes, digests, inline data), as `nonce="…"` too:
+# a page's CSP nonce is public, sent with the page.
+skip_before = '''(?i)(?:sha(?:1|224|256|384|512)[-:=]|md5[-:=]|integrity|checksum|digest|h1:|base64,|oid |nonce|@sha256:|ssh-rsa|ssh-ed25519|ssh-dss|ecdsa-sha2-nistp\d+)\s*=?\s*\\*["']?$'''
 
 [luhn]
 enabled = true

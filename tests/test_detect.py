@@ -228,6 +228,70 @@ def test_claude_product_names_are_not_people(rules, text, name):
 
 # --- File names are not secrets ------------------------------------------------------------------
 
+def test_a_search_tool_s_grounding_link_is_not_a_secret_but_a_webhook_is(rules):
+    # agy's search_web returns Google's redirect links: masked, the model lost its sources (wf-03, Nov 18).
+    link = ("https://vertexaisearch.cloud.google.com/grounding-api-redirect/"
+            "AUZIYQEsslAtGzmpmdN8qEk2McvApB3VNMT2DlpHZtQZbEQBZNWE8Xt5rmJmT3Kw6DilGflr3UuooIMYc8AvpRAGx828_ojEM7iW8Y1TZF5Jj_0VUiM7ONsxGsg=")
+    for text in (f"1. python.org: {link}\n", f'{{"web": {{"uri": "{link}", "title": "python.org"}}}}'):
+        assert rules.detect(text) == []
+    hook = "https://hooks.slack.com/services/" + "T0123ABCD/B0456EFGH/aB3dE5fG7hJ9kL1mN3pQ5rS7"  # split: GitHub's push protection takes a whole fake key for a real one
+    elsewhere = link.replace("vertexaisearch.cloud.google.com/grounding-api-redirect", "example.com/share")
+    assert rules.detect(f"post to {hook}") and rules.detect(f"see {elsewhere}")  # other hosts: still guessed at
+    # The model takes pieces of the handle for secrets too (wf-03 live): a guess inside the link goes.
+    for url in (link, elsewhere):
+        text = f'"uri": "{url}"'
+        piece = url[-60:-10]
+        pf = _FakePF([Span(text.index(piece), text.index(piece) + len(piece), "SECRET", 0.9, "pf-serve")])
+        got = values(text, Pipeline(rules, pf, pii=False).detect(text))
+        assert (got == []) if url == link else any(piece in g or g in piece for g in got)
+
+
+@pytest.mark.parametrize("text, piece, kept", [
+    # What the model took for secrets in wf-01 live (Nov 18): macOS's temp folder, an agent's own folder.
+    ("Active Workspaces:\\n- /private/var/folders/ng/f6k2b2nj0k92xndsgmh6bqrh0000gn/T/keepmum-e2e-9l1ld436/w/ws\\n",
+     "ng/f6k2b2nj0k92xndsgmh6bqrh0000gn/T/keepmum-e2e-9l1ld436/w", False),
+    ("File: file:///private/var/folders/ng/f6k2b2nj0k92xndsgmh6bqrh0000gn/T/x/photos/a.png", "f6k2b2nj0k92xndsgmh6bqrh0000gn", False),
+    ('{"path": "/Users/me/.gemini/antigravity/brain/23594f88-5e6f-42a5-bbd4-5e59d395f5f8/x.png"}',
+     "brain/23594f88-5e6f-42a5-bbd4-5e59d395f5f8", False),
+    # Not a path on this Mac: a URL's path, a key with slashes, a loose token next to a path.
+    ("see https://example.com/Users/AUZIYQEsslAtGzmpmdN8qEk2McvApB3VNMT2DlpHZtQ now", "AUZIYQEsslAtGzmpmdN8qEk2McvApB3VNMT2DlpHZtQ", True),
+    ("aws_secret = wJalrXUtnFEMI/K7MDENG/bPxRfiCYzq8vX2mN4pL7k", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYzq8vX2mN4pL7k", True),
+    ("token: Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE8gUi and /tmp/x", "Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE8gUi", True),
+])
+def test_a_guess_inside_a_path_on_this_mac_is_not_a_secret(rules, text, piece, kept):
+    pf = _FakePF([Span(text.index(piece), text.index(piece) + len(piece), "SECRET", 0.9, "pf-serve")])
+    got = values(text, Pipeline(rules, pf, pii=False).detect(text))
+    assert any(piece in g or g in piece for g in got) is kept
+
+
+def test_a_csp_nonce_is_not_a_secret_but_an_assigned_key_is(rules):
+    # A page's nonce goes to every browser that loads it (fe-01, Nov 18): the entropy check took it.
+    value = "r4nd0mN0nc3Vb8xQ2kL9pZ7wT5yH"
+    for text in (f'<script nonce="{value}" src="app.mjs">', f"'nonce-{value}'"):
+        assert rules.detect(text) == []
+    assert values(f"API_KEY = '{value}'", rules.detect(f"API_KEY = '{value}'")) == [value, value]
+
+
+@pytest.mark.parametrize("text, piece, kept", [
+    # What the model took for secrets live (Nov 18): pins by hash, and a page's nonce.
+    ("FROM python:3.12-slim@sha256:2f7e1b0d3f1a6c5e4b8a9d0c7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f\n",
+     "python:3.12-slim@sha256:2f7e1b0d3f1a6c5e4b8a9d0c7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f", False),
+    ("      - uses: actions/setup-node@16d7db0cade58ea39e455f285a3fdc3d0b9bdb73 # v4.1.0",
+     "actions/setup-node@16d7db0cade58ea39e455f285a3fdc3d0b9bdb73", False),
+    ("      - uses: actions/setup-node@16d7db0cade58ea39e455f285a3fdc3d0b9bdb73", "@16d7db0cade58ea39e455f285a3fdc3d0b9bdb73", False),
+    ('<script nonce="q7Xv2LmP9kR4tW8z" src="app.mjs">', "q7Xv2LmP9kR4tW8z", False),
+    ('12:   <script nonce=\\"q7Xv2LmP9kR4tW8z\\" type=\\"module\\">', "q7Xv2LmP9kR4tW8z", False),  # JSON text in a string
+    ("script-src 'self' 'nonce-q7Xv2LmP9kR4tW8z'", "nonce-q7Xv2LmP9kR4tW8z", False),
+    # Not a pin or a nonce: a token after an @, a value assigned to a key.
+    ("ping me @Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE8gUi", "Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE8gUi", True),
+    ("key='q7Xv2LmP9kR4tW8z'", "q7Xv2LmP9kR4tW8z", True),
+])
+def test_a_pin_by_hash_or_a_nonce_is_not_a_secret(rules, text, piece, kept):
+    pf = _FakePF([Span(text.index(piece), text.index(piece) + len(piece), "SECRET", 0.9, "pf-serve")])
+    got = values(text, Pipeline(rules, pf, pii=False).detect(text))
+    assert any(piece in g or g in piece for g in got) is kept
+
+
 def test_file_names_the_entropy_check_or_the_model_took_for_secrets_are_not_masked(rules):
     names = ["bench/results/PHASE0", "bench/results/guard-20261104-231405.md", "docs/Zq7Xw2Lm9Pk4Rt6Vb1Nc8.json"]
     text = f"Read {names[0]}.md, then {names[1]}, and {names[2]}.\n"

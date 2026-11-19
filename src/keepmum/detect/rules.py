@@ -175,6 +175,64 @@ def is_path(value: str) -> bool:
     return "/" in value and bool(_PATH_OF_WORDS.fullmatch(value))
 
 
+# An absolute path on this Mac (or a Linux box), from a root folder, as tools print them: a workspace,
+# macOS's per-user temp folder (/var/folders/ng/f6k2…0000gn/T/), an agent's own folders by UUID
+# (~/.gemini/antigravity/brain/<uuid>/). The model takes their random-looking pieces for secrets
+# (wf-01 live, Nov 18). Not a URL's path: `https://host/Users/…` starts after a host, not at a root.
+_SYSTEM_PATH = re.compile(r"(?:(?<=file://)|(?<![\w.~/:-]))(?:~|/(?:Users|private|var|tmp|home|opt|Library|Applications|"
+                          r"Volumes|System|usr|etc|root|mnt|srv|workspaces?))(?:/[\w.@+~-]+)+/?")
+
+
+def in_system_path(text: str, start: int, end: int) -> bool:
+    """text[start:end] lies inside an absolute file-system path (_SYSTEM_PATH)."""
+    if "/" not in text[max(0, start - 1):end + 1]:
+        return False
+    begin = max(0, text.rfind(" ", 0, start), text.rfind("\n", 0, start))  # the token the path is in
+    for m in _SYSTEM_PATH.finditer(text, begin):
+        if m.start() > start:
+            return False
+        if end <= m.end():
+            return True
+    return False
+
+
+# A pin: something fixed to a hash so it can be checked, made to be copied. A Docker image by digest
+# (python:3.12-slim@sha256:<64 hex>), an Action or a module pinned to a commit (actions/setup-node@<40
+# hex>), a bare digest. The model takes them for secrets (deploy-01, code-02 live, Nov 18). Hex of a
+# hash's length only: a key in hex is caught by its own rule, never by its look alone.
+_PIN = re.compile(r"(?:[\w./-]*(?::[\w.-]+)?@)?(?:sha(?:1|224|256|384|512):)?[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24}|[0-9a-fA-F]{56}"
+                  r"|[0-9a-fA-F]{88})?")
+_HASH_MARK = re.compile(r"@|sha(?:1|224|256|384|512):")
+# A nonce, sent to every browser that loads the page: `nonce="…"`, CSP's `'nonce-…'` (fe-01, Nov 18).
+_NONCE_BEFORE = re.compile(r"(?i)nonce(?:-|\s*=\s*\\*[\"']?)$")  # a quote escaped too: JSON text in a string
+
+
+def is_pin(value: str) -> bool:
+    """value is a pin by hash (_PIN): it says which hash it is (`@`, `sha256:`), or is one alone."""
+    return bool(_PIN.fullmatch(value)) and (bool(_HASH_MARK.search(value)) or bool(_HEX_ONLY.fullmatch(value)))
+
+
+def after_nonce(text: str, start: int, end: int) -> bool:
+    """text[start:end] is a nonce: it starts with `nonce-`, or a nonce marker comes right before it."""
+    return text[start:end].lower().startswith("nonce-") or bool(_NONCE_BEFORE.search(text, max(0, start - 12), start))
+
+
+def public_shape(text: str, start: int, end: int) -> bool:
+    """A guess (entropy, the model) at text[start:end] is not a secret: it is a file name or path, a
+    link a provider's search tool issued, a path on this Mac, a pin by hash, or a page's nonce. A token
+    rule that knows a key's format still masks it wherever it is."""
+    value = text[start:end]
+    return (is_file_name(text, start, end) or is_path(value) or in_issued_link(text, start, end)
+            or in_system_path(text, start, end) or is_pin(value) or after_nonce(text, start, end))
+
+
+def in_issued_link(text: str, start: int, end: int) -> bool:
+    """text[start:end] lies inside a link a provider's own search tool issued (_ISSUED_LINK)."""
+    if "grounding-api-redirect/" not in text:
+        return False
+    return any(m.start() <= start and end <= m.end() for m in _ISSUED_LINK.finditer(text))
+
+
 def is_file_name(text: str, start: int, end: int) -> bool:
     """text[start:end] is a file name or path: it ends in a known extension, or one follows it."""
     value = _ESCAPES_AT_END.sub("", text[start:end])  # a path in JSON text: notes/plan.md\\n
@@ -218,12 +276,18 @@ def iban_valid(iban: str) -> bool:
 _PROSE_WORD = re.compile(r"[a-z]+")
 _PROSE_NEXT = re.compile(r" [a-z]")
 _ENTROPY_CANDIDATE = re.compile(r"[A-Za-z0-9+/_-]{20,}={0,2}")
-_DIGEST_PREFIX = re.compile(r"(?i)(?:sha(?:1|224|256|384|512)|md5)[-:]")
+_DIGEST_PREFIX = re.compile(r"(?i)(?:sha(?:1|224|256|384|512)|md5|nonce)[-:]")  # CSP: 'sha256-…', 'nonce-…'
 _HEX = re.compile(r"[0-9a-fA-F]+")
+_HEX_ONLY = _HEX
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 # 13-19 digits, optionally grouped by single spaces or hyphens.
 # Public keys and certificates are long base64 by design; entropy hits inside them are noise.
 _PUBLIC_PEM = re.compile(r"-----BEGIN (?:PUBLIC KEY|RSA PUBLIC KEY|CERTIFICATE|X509 CRL|SSH2 PUBLIC KEY|PGP PUBLIC KEY BLOCK)-----[\s\S]*?-----END [A-Z0-9 ]+-----")
+# Links a provider's own search tool hands the model: Google's grounding redirects (the Antigravity
+# CLI's search_web, Gemini CLI's google_web_search). Their opaque handle is Google's own, made for the
+# model; masked, the model loses its sources and Google learns nothing (wf-03, Nov 18). Only these
+# hosts: a token in another URL (a Slack webhook, a presigned link) is still a guess worth masking.
+_ISSUED_LINK = re.compile(r"https?://vertexaisearch\.cloud\.google\.com/grounding-api-redirect/[A-Za-z0-9_=-]+")
 _CARD = re.compile(r"(?<![\d-])\d(?:[ -]?\d){12,18}(?![\d-])")
 # Issuer prefixes for Visa, Mastercard, Amex, Discover; cuts Luhn-valid noise like timestamps.
 _CARD_IIN = re.compile(r"4|5[1-5]|2[2-7]|3[47]|6(?:011|5)")
@@ -353,6 +417,8 @@ class RulesDetector:
         e = self.entropy
         out = []
         public = [m.span() for m in _PUBLIC_PEM.finditer(text)] if "-----BEGIN" in text else []
+        if "grounding-api-redirect/" in text:
+            public += [m.span() for m in _ISSUED_LINK.finditer(text)]
         for m in _ENTROPY_CANDIDATE.finditer(text):
             if any(a <= m.start() < b for a, b in public):
                 continue
