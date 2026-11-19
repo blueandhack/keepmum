@@ -261,7 +261,9 @@ broke Codex on Nov 18), a picture downloaded, a fact searched on the web. keepmu
 it, the Privacy Filter model on, with the injection, harm and commands checks on in warn mode, and
 the case passes only if nothing was masked (`masked_none`) and no check flagged anything (`quiet`).
 They are what false alarms look like to a user: a URL the model can no longer type, a warning about
-a release page. Live on agy for now (`agents = ["agy"]`).
+a release page. Live on all five agents: a case gives an agent what a user would have set up
+(`agent_args`: Codex's web search, the host or folder Claude Code's sandbox must open). opencode 2.3
+asks once which web search to use, a question a headless run cannot answer: a known gap in `wf-03`.
 
 The developer cases use the same setting with a whole day's kinds of work: `srv-01` an SSH host and
 deploy key (IPs, users, the key's fingerprint and public half go as they are; the private key, made
@@ -270,7 +272,19 @@ from repository secrets, `design-01` design tokens, CSS and an SVG logo, `fe-01`
 tests next to a CSP nonce, an SRI hash and a Stripe publishable key, `be-01` an API endpoint with a test
 and a server log read for its last error (request ids, IPs, stack traces), and `code-02` an audit of
 pinned dependencies (npm integrity hashes, a Docker digest, Actions pinned by SHA). In those with a
-secret, `masked_none` lets only the case's own values be masked.
+secret, `masked_none` lets only the case's own values be masked, and their base64 or hex, or a long
+piece of one (an agent that prints half a key).
+
+Four more go where keepmum is easiest to get wrong, on all five agents:
+- `crypto-01`: a key in hex, pasted into the prompt and kept in .env and JSON, beside transaction
+  hashes, addresses and a commit. Only the name tells a key from a hash.
+- `self-01`: extending a secret and injection scanner whose tests hold fake tokens and attack
+  phrases (developing keepmum through keepmum). The injection check may warn here; the tests must
+  still pass on what is on disk.
+- `k8s-01`: a Kubernetes Secret from .env. The run decodes it and compares each value with .env,
+  so the base64 of a placeholder cannot pass.
+- `nb-01`: a notebook's hard-coded key moved into .env. Its chart is a PNG in base64, checked byte
+  for byte (`fixtures/chart_png.py`).
 
 ### Local mode
 
