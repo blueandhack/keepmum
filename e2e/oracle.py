@@ -22,6 +22,7 @@ leak, residue, false-mask, task and health fail a run; shown, unexercised and ke
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import re
 import urllib.parse
@@ -69,6 +70,27 @@ def _shown_residue(text: str):
         if not _WEB_RUN.search(text, max(0, m.start() - 4096), m.start()):
             return m
     return None
+
+
+_BASE64_BLOB = re.compile(rb"[A-Za-z0-9+/]{200,}={0,2}")
+_STREAM = re.compile(rb"stream\r?\n(.*?)\r?\nendstream", re.S)
+
+
+def _attached(body: bytes) -> list[bytes]:
+    """Every file a request carries as base64, decoded, and each compressed stream in it inflated."""
+    import zlib
+
+    out = []
+    for m in _BASE64_BLOB.finditer(body.replace(b"\\n", b"").replace(b"\\/", b"/")):
+        try:
+            data = base64.b64decode(m.group() + b"=" * (-len(m.group()) % 4))
+        except ValueError:
+            continue
+        out.append(data)
+        for st in _STREAM.finditer(data):
+            with contextlib.suppress(zlib.error):
+                out.append(zlib.decompress(st.group(1)))
+    return out
 
 
 def _encodes(value: str, declared) -> bool:
@@ -125,6 +147,18 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
             blob = ex.sent()
             if any(f in blob for f in forms(v.text) if len(f) >= 4):
                 out.append(Finding("leak", f"{{{{v:{v.name}}}}} reached the provider", f"request {i}: {ex.method} {ex.path}"))
+                break
+
+    # leak, in a file sent whole: a PDF, an image or any file an agent attached as base64 (Claude
+    # Code's document block, Codex's input_file, Gemini's inline_data), its compressed streams opened.
+    # The key printed in a vendor's PDF went out this way (doc-02, Nov 18), unseen by the checks above.
+    for v in case.values.values():
+        if not v.must_mask or len(v.text) < 8:
+            continue
+        for i, ex in sent:
+            if any(v.text.encode() in data for data in _attached(ex.body)):
+                out.append(Finding("leak", f"{{{{v:{v.name}}}}} reached the provider inside an attached file (a PDF or image sent whole)",
+                                   f"request {i}: {ex.method} {ex.path}"))
                 break
 
     # leak, encoded: a protected value in a hex dump, `od -c`, plain hex or base64 that left (a

@@ -69,6 +69,10 @@ def _gen(kind: str) -> str:
         pem = subprocess.run(["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256"],
                              check=True, capture_output=True).stdout
         return base64.b64encode(pem).decode()
+    if kind == "slack-webhook":
+        return ("https://hooks.slack.com/services/T" + "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+                + "/B" + "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(10))
+                + "/" + "".join(secrets.choice(_ALNUM) for _ in range(24)))
     if kind == "fly-token":
         return "fo1_" + "".join(secrets.choice(_ALNUM + "_-") for _ in range(43))
     if kind == "ssh-ed25519":  # a real OpenSSH private key, new each run, so ssh-keygen can read it

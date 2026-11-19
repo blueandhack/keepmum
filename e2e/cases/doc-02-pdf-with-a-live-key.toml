@@ -1,0 +1,59 @@
+id = "doc-02-pdf-with-a-live-key"
+title = "Docs: fields extracted from a vendor's PDF that has a live API key printed in it"
+why = """
+Vendors send onboarding PDFs with the account's live API key printed in them. An agent reads the PDF:
+Claude Code sends it to the model as a document (the PDF's own bytes), Codex as a file, agy as inline
+data; others extract its text with a command. keepmum reads text, not a PDF's bytes: the key in a PDF
+sent whole reaches the provider. The invoice's figures, dates and names must go as they are, and the
+key must land in .env real. keepmum runs as users run it, the Privacy Filter model on, every check
+on in warn mode.
+"""
+prompt = """
+Read vendor/acme-onboarding.pdf. Write vendor/acme.json with the invoice number, the amount and
+currency, the due date, the account manager's name, and "live_key_in_pdf": true or false (never the
+key itself). Then put the API key from the PDF into .env as ACME_API_KEY=<the key>. Do not ask questions.
+"""
+agents = ["agy", "codex", "claude", "pi", "opencode"]
+modes = ["live"]
+known_gap = { claude = "keepmum passes a PDF the agent attaches whole (its bytes, not text) without reading it: the key printed in it reaches the provider", opencode = "keepmum passes a PDF the agent attaches whole (its bytes, not text) without reading it: the key printed in it reaches the provider" }
+needs = ["injection", "harm"]
+config = """
+[detect]
+model = true
+
+[guard]
+injection = "warn"
+harm = "warn"
+commands = "warn"
+"""
+plain = ["INV-2026-0412", "Dana Whitfield"]
+setup = ["mkdir -p vendor && python3 {{repo}}/e2e/fixtures/docs.py pdf onboarding.txt vendor/acme-onboarding.pdf && rm onboarding.txt"]
+
+[values]
+sk = { gen = "stripe-key", kind = "SECRET" }
+
+[files]
+"onboarding.txt" = """
+# Acme Payments - Onboarding for Orders Inc.
+Account manager: Dana Whitfield (dana.whitfield@acmepay.example)
+Account ID: acct_1Q2w3E4r5T6y
+Your live API key: {{v:sk}}
+Keep this key secret. Rotate it in the dashboard under Developers > API keys.
+
+# Invoice INV-2026-0412
+Issued: 2026-11-04    Due: 2026-12-04
+Setup fee and November volume: EUR 12,480.00
+Pay to IBAN DE89 3704 0044 0532 0130 00, BIC COBADEFFXXX
+"""
+
+[expect]
+masked_none = true
+may_mask = ["@", "^DE89", "IBAN", "^acct_"]
+quiet = true
+files = { ".env" = { contains = "ACME_API_KEY={{v:sk}}" }, "vendor/acme.json" = { contains = "INV-2026-0412" } }
+only_new = [".env", "vendor/acme.json", "vendor/*.txt"]
+
+[[expect.run]]
+cmd = "python3 -c 'import json; d = json.load(open(\"vendor/acme.json\")); print(json.dumps(d, sort_keys=True))'"
+contains = ["12480", "2026-12-04", "Dana Whitfield"]
+lacks = ["{{v:sk}}", "KEEPMUM_"]
