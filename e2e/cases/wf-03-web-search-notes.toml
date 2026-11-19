@@ -11,7 +11,7 @@ Search the web: what is the latest stable release of Python, and on what date di
 Write the version, the date and the URL of your source into notes/python.md. Do not ask questions.
 """
 agents = ["agy", "codex", "claude", "pi", "opencode"]
-agent_args = { codex = ["-c", "web_search=\"live\""] }   # Codex searches the web only when told
+agent_args = { codex = ["-c", "web_search=\"live\"", "-c", "sandbox_workspace_write.network_access=true"] }   # Codex searches the web only when told
 known_gap = { opencode = "opencode 2.3 asks once which web search to use, a question a headless run cannot answer (its `websearch` setting does not stop it, Nov 18)" }
 modes = ["live"]
 needs = ["injection", "harm"]

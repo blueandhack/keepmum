@@ -11,7 +11,7 @@ assets/python-logo.png, check that it really is a PNG, and tell me its width and
 Do not ask questions.
 """
 agents = ["agy", "codex", "claude", "pi", "opencode"]
-agent_args = { codex = ["-c", "web_search=\"live\""], claude = ["--settings", "{\"sandbox\":{\"enabled\":true,\"autoAllowBashIfSandboxed\":true,\"allowUnsandboxedCommands\":false,\"network\":{\"allowedDomains\":[\"www.python.org\"]}}}"] }   # Codex searches only when told; Claude Code's sandbox opens only the hosts it lists
+agent_args = { codex = ["-c", "web_search=\"live\"", "-c", "sandbox_workspace_write.network_access=true"], claude = ["--settings", "{\"sandbox\":{\"enabled\":true,\"autoAllowBashIfSandboxed\":true,\"allowUnsandboxedCommands\":false,\"network\":{\"allowedDomains\":[\"www.python.org\"]}}}"] }   # Codex searches only when told; Claude Code's sandbox opens only the hosts it lists
 modes = ["live"]
 needs = ["injection", "harm"]
 config = """

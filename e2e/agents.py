@@ -159,6 +159,10 @@ class Codex(Agent):
                 elif kind == "command_execution":
                     t.commands.append(item.get("command", ""))
                     t.shown.append(item.get("aggregated_output", ""))
+                    # With network access in its sandbox Codex may read the page with curl instead
+                    # of its search tool, the page back through keepmum all the same (wf-03, Nov 19).
+                    if _FETCH.search(t.commands[-1]):
+                        t.web_calls += 1
                 elif kind == "file_change":
                     t.tool_inputs.append(json.dumps(item.get("changes", []), ensure_ascii=False))
                 elif kind == "mcp_tool_call":
@@ -337,7 +341,8 @@ class Antigravity(Agent):
 DUMMY_ANTHROPIC_KEY = "sk-ant-api03-e2e-dummy-not-a-key-" + "0" * 60 + "AA"
 
 
-_FETCH = re.compile(r"\b(?:curl|wget)\b[^|;&\n]*https?://")
+# A command that reads a page: curl or wget, or a script's fetch of a URL (pi used Python's urllib, Nov 19).
+_FETCH = re.compile(r"\b(?:curl|wget)\b[^|;&\n]*https?://|(?:urlopen|requests\.get|httpx\.get|fetch)\s*\([^)]*https?://|https?://[^\s'\"]+['\"][^\n]*\n[^\n]*(?:urlopen|requests\.get|httpx\.get)\s*\(", re.S)
 
 
 class Pi(Agent):
