@@ -92,3 +92,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - run: e2e/ci.sh
+      # A failed case's transcript, requests and workspace (e2e/results), to see why without a rerun.
+      # Scripted runs hold dummy keys and the cases' made-up values only; the agents' auth headers
+      # are never written (e2e/servers.py SECRET_HEADERS).
+      - name: Keep the e2e results of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-results
+          path: e2e/results/
+          retention-days: 7
+          if-no-files-found: ignore
