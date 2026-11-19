@@ -14,6 +14,8 @@ In `config` only, filled when the run starts:
   {{local}}          the local model server's URL, through the tap (local mode's `local_servers`)
   {{local_model}}    the model there (KEEPMUM_E2E_LOCAL_MODEL)
   {{ws}}             the workspace's path on disk
+
+In `setup` only: {{repo}}, this repository's folder (`cp {{repo}}/site/og.png photos/`).
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ from __future__ import annotations
 import re
 import secrets
 import string
+import subprocess
+import tempfile
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +45,14 @@ def _gen(kind: str) -> str:
         return "sk-ant-api03-" + "".join(secrets.choice(_ALNUM + "-_") for _ in range(93)) + "AA"
     if kind == "stripe-key":
         return "sk_live_" + "".join(secrets.choice(_ALNUM) for _ in range(24))
+    if kind == "password":  # no telling shape: found by where it is (a connection string, PASSWORD=)
+        return "".join(secrets.choice(_ALNUM) for _ in range(18))
+    if kind == "fly-token":
+        return "fo1_" + "".join(secrets.choice(_ALNUM + "_-") for _ in range(43))
+    if kind == "ssh-ed25519":  # a real OpenSSH private key, new each run, so ssh-keygen can read it
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "deploy@ci", "-f", f"{d}/k"], check=True)
+            return Path(f"{d}/k").read_text()
     raise ValueError(f"unknown generator {kind!r}")
 
 
@@ -93,6 +105,9 @@ class Case:
     # llama-server), "harm" (the harm check's default model and llama-server), "local" (a local model
     # server with KEEPMUM_E2E_LOCAL_MODEL).
     needs: list[str] = field(default_factory=list)
+    # Commands run in the workspace before the agent starts, after its files are written (templates
+    # allowed): `git init` and a first commit, for a case about a repository.
+    setup: list[str] = field(default_factory=list)
     timeout: int = 300
     raw: dict = field(default_factory=dict)
 
@@ -156,7 +171,8 @@ def load_case(path: Path) -> Case:
         prompt=raw.get("prompt", "").strip(), values=values, plain=raw.get("plain", []),
         files=raw.get("files", {}), workspace_dir=raw.get("workspace_dir", "ws"), script=raw.get("script", []),
         expect=raw.get("expect", {}), known_gap=raw.get("known_gap"),
-        mcp=bool(raw.get("mcp", False)), needs=list(raw.get("needs", [])), timeout=raw.get("timeout", 300), raw=raw,
+        mcp=bool(raw.get("mcp", False)), needs=list(raw.get("needs", [])),
+        setup=list(raw.get("setup", [])), timeout=raw.get("timeout", 300), raw=raw,
     )
 
 

@@ -111,6 +111,14 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         p = ws / case.resolve(rel, salt)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(case.resolve(content, salt))
+    # Commands of the case's own, before and after the agent: in the run's HOME, so the user's git
+    # config (signing, hooks, their name) is not what a case's repository gets.
+    shell_env = {**os.environ, "HOME": str(khome), "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
+    for cmd in case.setup:
+        cmd = case.resolve(cmd, salt).replace("{{repo}}", str(Path(__file__).resolve().parent.parent))  # files of this repo
+        done = subprocess.run(cmd, shell=True, cwd=ws, env=shell_env, capture_output=True, text=True)
+        if done.returncode:
+            raise RuntimeError(f"{case.id}: setup `{case.shown(cmd)}` failed: {case.shown(done.stderr or done.stdout)}")
     before = oracle.snapshot(ws)
 
     scripted = None
@@ -193,6 +201,8 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         masked = {ph: (ph.split("_")[1], value) for ph, value in vault._values.items()}
         events = list(proxy.stats.events)
         keepmum = {"unresolved": proxy.stats.unresolved,
+                   "hits": [{k: h.get(k) for k in ("check", "action", "source", "score", "chars")}
+                            for h in proxy.stats.snapshot()["guard"]["hits"]],
                    "warned": sorted({h.get("check") for h in proxy.stats.snapshot()["guard"]["hits"]
                                      if h.get("action") == "warned"}),
                    # Refused: blocked, or meant for a local model that did not answer (sent nowhere).
@@ -217,12 +227,21 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
                     getattr(model, "unload", lambda: None)()
         os.environ["HOME"] = REAL_HOME
     after = oracle.snapshot(ws)
+    outputs = []
+    for want in case.expect.get("run", []):
+        try:
+            done = subprocess.run(case.resolve(want["cmd"], salt), shell=True, cwd=ws, env=shell_env,
+                                  capture_output=True, text=True, timeout=want.get("timeout", 60))
+            outputs.append((want, done.returncode, done.stdout + done.stderr))
+        except subprocess.TimeoutExpired:
+            outputs.append((want, None, ""))
     transcript = agent.transcript(stdout, out)
     mcp_log = (out / "mcp.jsonl").read_text() if (out / "mcp.jsonl").exists() else ("" if case.mcp else None)
     provider = [ex for ex in tap.exchanges if ex.target != "local"]
     local = [ex for ex in tap.exchanges if ex.target == "local"]  # stays on this Mac: real values belong there
     findings = oracle.judge(case, salt, provider, before, after, transcript, masked, keepmum, code,
                             scripted.served if scripted else None, mcp_log, local)
+    findings += oracle.ran(case, salt, outputs)
     failed = [f for f in findings if f.failing()]
     # The provider refused to answer (a usage limit): the run says nothing about keepmum.
     limited = any(e["status"] == 429 for e in keepmum["errors"]) and not any(f.cls == "leak" for f in findings)
