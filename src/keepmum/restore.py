@@ -303,7 +303,7 @@ def _command_texts(value, name: str | None = None):
 
 def _wrong_destinations(name: str, value, found: Counter, vault: Vault, policy: dict) -> set[str]:
     """The placeholders a shell command would send to a host their issuer does not use (destinations.py)."""
-    from .destinations import ISSUERS, SHELL_TOOLS, allowed_hosts, hosts_in, shown, wrong_hosts
+    from .destinations import ISSUERS, SHELL_TOOLS, allowed_hosts, carried_to, hosts_in, shown, wrong_hosts
 
     if name not in SHELL_TOOLS or not found:
         return set()
@@ -318,7 +318,8 @@ def _wrong_destinations(name: str, value, found: Counter, vault: Vault, policy: 
     for ph in (ph for ph in found if ph in commands):
         sources = vault.sources_of(vault.value(ph))
         allowed = allowed_hosts(sources, getattr(policy, "destinations", None))
-        bad = wrong_hosts(hosts, allowed) if allowed is not None else []
+        # Only the steps that carry this value: the line's other steps go where they go without it.
+        bad = wrong_hosts(set().union(*(carried_to(t, ph) for t in texts)), allowed) if allowed is not None else []
         if bad:
             wrong.add(ph)
             extra = getattr(policy, "destinations", None) or {}
