@@ -12,7 +12,7 @@ keys/deploy_ed25519. Check that it resolves with `ssh -G -F ssh_config staging` 
 server). Then add the key's fingerprint (ssh-keygen -lf) to docs/servers.md under a "Staging" heading,
 next to the production entry. Do not ask questions.
 """
-agents = ["agy"]
+agents = ["agy", "codex", "claude", "pi", "opencode"]
 modes = ["live"]
 needs = ["injection", "harm"]
 config = """

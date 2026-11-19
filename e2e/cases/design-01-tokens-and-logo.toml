@@ -11,7 +11,7 @@ and font families (Inter from Google Fonts), styles.css with the tokens as CSS v
 logo.svg, a simple geometric mark in the primary color. Update index.html to load the font, the
 stylesheet and the logo. Do not ask questions.
 """
-agents = ["agy"]
+agents = ["agy", "codex", "claude", "pi", "opencode"]
 modes = ["live"]
 needs = ["injection", "harm"]
 config = """
