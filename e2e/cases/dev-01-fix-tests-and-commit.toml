@@ -120,7 +120,9 @@ calls = [{ edit = "app/billing.py", old = '    return {"Authorization": key, "Co
          { edit = "app/billing.py", old = "    return int(whole) * 100 + int(frac or 0)", new = '    return int(whole) * 100 + int((frac + "00")[:2])' },
          { write = ".env.example", content = "STRIPE_SECRET_KEY=\nDATABASE_URL=\n" }]
 [[script]]
-calls = [{ shell = "python3 -m unittest -q && git add -A && git commit -qm 'Fix the payments header and cents; add .env.example'" }]
+# The files by name, not `git add -A`: on Linux, Claude Code's sandbox puts stand-ins for shell dotfiles
+# (.bash_profile…) in the working folder while a command runs, and `git add -A` refuses them (CI, Nov 19).
+calls = [{ shell = "python3 -m unittest -q && git add app/billing.py .env.example && git commit -qm 'Fix the payments header and cents; add .env.example'" }]
 [[script]]
 say = "Fixed the Bearer prefix and the cents of one-digit amounts, added .env.example, and committed."
 
