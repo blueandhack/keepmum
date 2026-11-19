@@ -489,6 +489,10 @@ def test_a_model_span_is_cut_at_a_name_and_at_escaped_breaks(rules, text, piece,
     ("script-src 'self' 'nonce-q7Xv2LmP9kR4tW8z'", "-q7Xv2LmP9kR4tW8z", "SECRET"),
     ("- Key: keys/deploy_ed25519", "ploy_ed25519", "SECRET"),
     ("256 SHA256:tsr02mISijUYvTRENTacI6TVaZdJLqUJp02U0osx4Xs deploy@ci (ED25519)", "tsr02mISijUYvTRENTacI6TVaZdJLqUJp02U0osx4Xs", "SECRET"),
+    ("Check doc for secret markers and show .gitignore", ".gitignore", "SECRET"),
+    ("grep -nE 'password\\|secret\\|KEEPMUM\\|AKIA\\|client-key' docs/infra.md", "KEEPMUM\\|AKIA", "SECRET"),
+    ("grep -nE 'password\\|secret\\|KEEPMUM\\|AKIA\\|client-key' docs/infra.md", "\\|client-key", "SECRET"),
+    ("cp .env.example .env && cat .npmrc", ".env.example", "SECRET"),
     ("13:> Authorization: Bearer [omitted]\\n18:< x-request-id: 4e8a1c2f-7b3d-4a6e-9f05-c1d2b3a4e5f6\\n",
      "4e8a1c2f-7b3d-4a6e-9f05-c1d2b3a4e5f6", "SECRET"),
 ])
@@ -573,6 +577,19 @@ def test_a_secret_that_starts_with_a_slash_is_masked(rules, value):
                                   "private_key = ~/.ssh/id_ed25519", "token_file: ../shared/secrets.env"])
 def test_a_path_after_a_secret_word_is_still_a_path(rules, text):
     assert Pipeline(rules, None, pii=False).detect(text) == []
+
+
+def test_a_guess_across_json_list_entries_is_cut_at_the_quotes(rules):
+    # Claude Code lists its sandbox's folders as a JSON list; the model ran a span across two entries
+    # (`…/commands","/private/…/agents`), which no path check could call a path (release check, Nov 19).
+    base = "/private/var/folders/ng/f6k2b2nj0k92xndsgmh6bqrh0000gn/T/keepmum-e2e-zfjy5fap/out/claude-config"
+    for q in ('"', '\\"'):
+        text = f'Filesystem: {{"write":{{"allowOnly":[{q}{base}/commands{q},{q}{base}/agents{q},{q}/tmp/claude{q}]}}}}'
+        piece = f"{base[1:]}/commands{q},{q}{base}/agents"
+        assert Pipeline(rules, _FakePF(_guess(text, piece)), pii=False).detect(text) == [], q
+    # A key next to a quote is still masked.
+    text = 'token = "Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE", next'
+    assert values(text, Pipeline(rules, _FakePF(_guess(text, 'Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE", next')), pii=False).detect(text))
 
 
 def test_a_token_made_of_letters_is_still_a_secret(rules):

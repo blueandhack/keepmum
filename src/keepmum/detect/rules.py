@@ -292,6 +292,14 @@ def in_path_token(text: str, start: int, end: int) -> bool:
     return (a, b) != (start, end) and is_path(token)
 
 
+# A dot-file's name: .gitignore, .npmrc, .env.example (cloud-01 on Claude Code: "show .gitignore", Nov 19).
+_DOTFILE = re.compile(r"\.[a-z][a-z0-9_-]{1,30}(?:\.[a-z0-9_-]{1,12})*")
+
+
+def is_dotfile(value: str) -> bool:
+    return bool(_DOTFILE.fullmatch(value))
+
+
 def is_markup(value: str) -> bool:
     """A tag's text: `</STEP_9>`, an agent's own `<…_OUTPUT>` (agy, doc-03)."""
     return "</" in value or "><" in value
@@ -330,7 +338,7 @@ def in_hostname(text: str, start: int, end: int) -> bool:
 # A pattern, not a value: a character class with a range, an alternation, an escape class
 # (`STRIPE_KEY|STRIPE_SECRET_KEY|sk_(live|test)_`, `?-?[A-Za-z0-9+/=]+`: an agent's grep, Nov 18;
 # `openai|langchain_openai|google.generativeai|…`, in Claude Code's own instructions).
-_REGEX_SHAPE = re.compile(r"\[[^\]]*\w-\w[^\]]*\]|\([^()]*\|[^()]*\)|\\[dwsbS]|^[\w.()|-]+\|[\w.()|-]+$")
+_REGEX_SHAPE = re.compile(r"\[[^\]]*\w-\w[^\]]*\]|\([^()]*\|[^()]*\)|\\[dwsbS]|^[\w.()|-]+\|[\w.()|-]+$|\\\|")  # `\|`: grep's alternation
 
 
 def is_regex(value: str) -> bool:
@@ -369,7 +377,7 @@ def public_shape(text: str, start: int, end: int) -> bool:
             or in_system_path(text, start + _tag_end(value), end) or in_encoded_file(text, start, end) or is_pin(value) or is_bare_hash(text, start, end) or is_package_ref(value)
             or is_constant_name(value) or is_labeled_digest(value) or is_object_id(value) or is_hostname(value)
             or in_labeled_digest(text, start, end) or in_hostname(text, start, end) or is_regex(value)
-            or is_reference(value) or is_markup(value) or in_path_token(text, start, end)
+            or is_reference(value) or is_markup(value) or in_path_token(text, start, end) or is_dotfile(value)
             # A word: `contexts`, a YAML key; `HttpOnly` (cloud-01, debug-01). Not a token made of letters,
             # which has capitals all through it.
             or value.isalpha() and len(value) <= 16 and sum(c.isupper() for c in value) <= 2

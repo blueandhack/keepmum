@@ -17,11 +17,12 @@ from .merge import merge, narrow
 from .rules import RulesDetector, shannon_entropy
 
 _PIECE = re.compile(r"\S+")
-_EDGE = "/=:\"'`,;()[]{}<>\\"
+_EDGE = "/=:\"'`,;()[]{}<>\\|"
 # A CSV row's fields: the model ran a span over `5e1f0c9a-…,us` (nb-01, Nov 18). A secret has no comma.
 _FIELD = re.compile(r"[^\s,]+")
 # A line break escaped in JSON text ends a piece as a real one does (`None\nfor`: git-01, Nov 18).
 _ESCAPED_BREAK = re.compile(r"\\[nrt]")
+_PIECE_BREAK = re.compile(r"\\+[nrt]|\\*\"")
 # A `name=` inside a piece: what follows is the value (`registry.npmjs.org/:_authToken=npm_…`: git-01).
 _LINE_BREAK = re.compile(r"\n|\\n")
 _PII_CUT = re.compile(r"\\+[nrt]|\n|,(?! )")
@@ -33,9 +34,11 @@ def _pieces(text: str, start: int, end: int) -> list[tuple[int, int]]:
     fields (two or more commas, or a comma after an id)."""
     out = []
     for m in _PIECE.finditer(text, start, end):
-        if _ESCAPED_BREAK.search(m.group()):
+        if _ESCAPED_BREAK.search(m.group()) or '"' in m.group():
+            # An escaped line break or a quote ends a piece: a span over `…/commands","/private/…/agents`
+            # ran across two entries of a JSON list (Claude Code's sandbox paths, Nov 19).
             at = m.start()
-            for brk in _ESCAPED_BREAK.finditer(text, m.start(), m.end()):
+            for brk in _PIECE_BREAK.finditer(text, m.start(), m.end()):
                 if brk.start() > at:
                     out.append((at, brk.start()))
                 at = brk.end()
