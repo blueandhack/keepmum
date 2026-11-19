@@ -45,18 +45,18 @@ jobs:
     timeout-minutes: 20
     env:
       UV_PYTHON: "3.15"
-      CODEX_VERSION: 0.167.0
-      CLAUDE_CODE_VERSION: 2.1.319
-      PI_VERSION: 1.5.0
+      CODEX_VERSION: 0.170.0
+      CLAUDE_CODE_VERSION: 2.1.327
+      PI_VERSION: 1.5.2
       # opencode 2.x is not on npm: its GitHub release, checked against the digest GitHub records.
-      OPENCODE_VERSION: 2.2.6
-      OPENCODE_SHA256: f2d27600c367e45057d6a16f6a5c2aa8d77b41a9b10d4bc3d849c2f88870e944
+      OPENCODE_VERSION: 2.3.2
+      OPENCODE_SHA256: 9d10185acdb72336e086e699ca363a6065f410fd3c1caed0dc8046e95ac06ccb
       # The Antigravity CLI's own installer only installs the latest: the release is pinned by its
       # URL (from https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_arm64.json)
       # and that manifest's SHA-512.
-      AGY_VERSION: 1.5.3
-      AGY_URL: https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.3-6604829099950080/linux-arm/cli_linux_arm64.tar.gz
-      AGY_SHA512: c2fac818b3c1bb224079df03a714ccba99728b6a3a41d86d247ab2feb8582a43840c5032f1c2b75e72667623d5503e7ffda2712c4f37b6ee19f99c3fcfb25bae
+      AGY_VERSION: 1.5.12
+      AGY_URL: https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.12-5281398513336320/linux-arm/cli_linux_arm64.tar.gz
+      AGY_SHA512: 1030d89ce9e5cb39509e272cb89b71fde0e0d5d6527b7392525d5ef2683da54fb49230449107486d91c02ded39a678faaa649b2041304a6cf82a3a332d5819d9
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
