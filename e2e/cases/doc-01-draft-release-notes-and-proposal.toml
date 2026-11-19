@@ -70,5 +70,6 @@ only_new = ["docs/release-notes-2.4.md", "docs/proposal-search.md"]
 
 [[expect.run]]
 cmd = "cat docs/release-notes-2.4.md docs/proposal-search.md"
-contains = ["Tomás", "Priya", "Dec"]
+contains = ["Tomás", "Priya"]
+regex = "(?i)\\bdec|-12-0?[29]\\b"   # the timeline's dates, as "Dec 2" or "2026-12-02" (Claude Haiku, Nov 19)
 lacks = ["{{v:hook}}", "OPS-2291", "KEEPMUM_"]

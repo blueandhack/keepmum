@@ -16,6 +16,7 @@ the top customer's name and email. Do not ask questions.
 """
 agents = ["agy", "codex", "claude", "pi", "opencode"]
 modes = ["live"]
+known_gap = { cheap = "masked whole, an email shows no domain: the cheapest models will not count by domain from placeholders (Claude Haiku, gpt-6-luna, Nov 19), stronger ones do. Emails stay masked whole: a domain can name an employer" }
 needs = ["injection", "harm"]
 config = """
 [detect]

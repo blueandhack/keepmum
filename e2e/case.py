@@ -165,9 +165,14 @@ class Case:
 
     def gap(self, agent: str, mode: str | None = None) -> str | None:
         """The case's known gap for an agent: a string for every agent, or a table by agent, or by
-        agent and mode ("codex.live": a real model can take a path the scripted run does not)."""
+        agent and mode ("codex.live": a real model can take a path the scripted run does not), or
+        "cheap": a run on the cheapest models (`--cheap`, e2e/release-check.sh), which fail a task
+        stronger ones pass."""
         if isinstance(self.known_gap, dict):
-            return self.known_gap.get(f"{agent}.{mode}") or self.known_gap.get(agent)
+            from .agents import AUTH
+
+            cheap = self.known_gap.get("cheap") if AUTH.get("cheap") and mode == "live" else None
+            return self.known_gap.get(f"{agent}.{mode}") or self.known_gap.get(agent) or cheap
         return self.known_gap
 
     def placeholder(self, name: str, salt: bytes) -> str:

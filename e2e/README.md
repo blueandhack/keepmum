@@ -193,7 +193,7 @@ agents = ["codex", "claude"]           # default: all five (codex, claude, agy, 
 modes = ["scripted", "live"]           # default: both
 plain = ["guard-20261104-231405.md"]   # must reach the provider unmasked
 workspace_dir = "ws"                   # the workspace folder's name (templates allowed)
-known_gap = "…"                        # or { codex = "…" }: see below
+known_gap = "…"                        # or { codex = "…" }, or { cheap = "…" }: only on --cheap models; see below
 mcp = true                             # give the agent the stub MCP server `notes` (below)
 mcp_reply = "…"                        # what its `lookup` tool returns (templates allowed)
 setup = ["git init -q", "git add -A", "git commit -qm init"]   # run in the workspace before the agent, in the run's HOME

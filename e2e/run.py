@@ -273,6 +273,9 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
             time.sleep(0.1)
         drained = time.monotonic() - drained
         masked = {ph: (ph.split("_")[1], value) for p in proxies for ph, value in p.redactor.vault._values.items()}
+        # Which detectors masked each value (rules:<id>, pf-serve, known, decoded): never the value, so a
+        # false mask names its cause in results.json.
+        sources = {ph: sorted(p.redactor.vault.sources_of(value) or ()) for p in proxies for ph, value in p.redactor.vault._values.items()}
         events = [e for p in proxies for e in p.stats.events]
         hits = [h for p in proxies for h in p.stats.snapshot()["guard"]["hits"]]
         posts = [ex for ex in tap.exchanges if ex.method == "POST" and "t1" in ex.meta and "t0" in ex.meta]
@@ -343,7 +346,10 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         else ("fail" if failed else "pass"),
         "reason": "the provider's usage limit (429): nothing was tested" if limited else None,
         "known_gap": case.gap(agent.name, mode), "findings": oracle.as_dicts(findings), "exit": code,
-        "requests": len(provider), "local_requests": len(local), "masked": len(masked),
+        "requests": len(provider), "local_requests": len(local), "masked": len(masked), "sources": sources,
+        # KEEPMUM_E2E_VALUES=1: what each placeholder stood for, to debug a false mask. Off by default: a
+        # case's secrets are made up, but a results folder is no place for values.
+        **({"values": {ph: v for ph, (_, v) in masked.items()}} if os.environ.get("KEEPMUM_E2E_VALUES") else {}),
         "turns": [s["turn"] for s in scripted.served] if scripted else None,
         "tools": sorted(scripted.tools) if scripted else None,
         "code_mode": next((s.get("code_mode") for s in (scripted.served if scripted else []) if "code_mode" in s), None),
