@@ -93,6 +93,8 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
             continue
         if c in "\"'" and _AFTER_QUOTE.match(text, i + 1):
             break
+        if c == "<" and text.startswith("</", i):  # a closing tag ends it: a .docx's XML (doc-03, Nov 18)
+            break
         i += 1
     return i
 
@@ -260,6 +262,22 @@ def is_hostname(value: str) -> bool:
     return bool(_HOSTNAME.fullmatch(value))
 
 
+# A ticket's, an invoice's or an order's reference (OPS-2291, INV-2026-0412): made to be quoted
+# (doc-01, doc-02 on Codex, Nov 18). Capitals, then numbers between hyphens.
+_REFERENCE = re.compile(r"[A-Z]{2,10}(?:-\d{1,8})+")
+# A key's prefix alone (`sk_live_`), words and separators only: what a key looks like, not one (doc-02).
+_PREFIX_ONLY = re.compile(r"[A-Za-z]+(?:[_-][A-Za-z]+)*[_-]")
+
+
+def is_reference(value: str) -> bool:
+    return bool(_REFERENCE.fullmatch(value) or _PREFIX_ONLY.fullmatch(value))
+
+
+def is_markup(value: str) -> bool:
+    """A tag's text: `</STEP_9>`, an agent's own `<…_OUTPUT>` (agy, doc-03)."""
+    return "</" in value or "><" in value
+
+
 def is_labeled_digest(value: str) -> bool:
     return bool(_LABELED_DIGEST.fullmatch(value))
 
@@ -329,6 +347,7 @@ def public_shape(text: str, start: int, end: int) -> bool:
             or in_system_path(text, start, end) or in_encoded_file(text, start, end) or is_pin(value) or is_bare_hash(text, start, end) or is_package_ref(value)
             or is_constant_name(value) or is_labeled_digest(value) or is_object_id(value) or is_hostname(value)
             or in_labeled_digest(text, start, end) or in_hostname(text, start, end) or is_regex(value)
+            or is_reference(value) or is_markup(value)
             # A word: `contexts`, a YAML key; `HttpOnly` (cloud-01, debug-01). Not a token made of letters,
             # which has capitals all through it.
             or value.isalpha() and len(value) <= 16 and sum(c.isupper() for c in value) <= 2

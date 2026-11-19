@@ -37,7 +37,7 @@ patterns = [
 # Regexes searched in a captured value. Any match drops the value. keepmum_<type>_: keepmum's own
 # placeholder, even cut short by the model (self-01, Nov 18).
 stopwords = '''(?i)^(?:true|false|null|none|nil|undefined|required|optional|string|str|bool|boolean|int|integer|number|object|any|bearer|basic|password|passwd|pass|pwd|secret|secrets|token|changeme|example|sample|dummy|test|testing|placeholder|redacted|hidden|masked|todo|tbd|fixme|n/?a|\*+|x{3,}|\.{3,})$'''
-placeholder = '''(?i)^(?:my[_-]|insert[_-]|replace[_-]|enter[_-]|sample|dummy|fake|<|\{\{|\[\[|keepmum_[a-z]+_)|(?:^|[_-])your[_-]|example|placeholder|redacted|(?:\.{3}|…)$'''
+placeholder = '''(?i)^(?:my[_-]|(?:my|your)(?:pass(?:word)?|secret|token|api_?key)\d*$|insert[_-]|replace[_-]|enter[_-]|sample|dummy|fake|<|\{\{|\[\[|keepmum_[a-z]+_)|(?:^|[_-])your[_-]|example|placeholder|redacted|(?:\.{3}|…)$'''
 # References to a value held elsewhere: env vars, template variables (f"token = {GITHUB}", self-01),
 # attribute access, calls.
 reference = '''^(?:\$|%\(|\{[A-Za-z_]|%[A-Z_]+%|process\.env|os\.(?:environ|getenv)|getenv|ENV\[|env\(|secrets\.|vault:|ref\+|!Ref|!Sub|self\.|this\.|config\.|settings\.)|\$\{|^[\w.]+[(\[]|^[A-Za-z_]\w{0,30}(?:\.[A-Za-z_]\w{0,30})+$|^[A-Z][A-Z0-9]*_[A-Z0-9_]+$|^[a-z]+(?:[-_.][a-z]+)+$|^[a-z][a-z0-9+.-]*://|^(?:\.{0,2}/|~/)'''

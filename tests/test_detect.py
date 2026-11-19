@@ -491,6 +491,27 @@ def test_more_public_text_the_model_took_for_secrets(rules, text, piece, kind):
     assert Pipeline(rules, pf, pii=False).detect(text) == []
 
 
+@pytest.mark.parametrize("text, piece", [
+    # Documents (doc-01..03, Nov 18).
+    ("</JETSKI_OUTPUT></STEP_9>", "JETSKI_OUTPUT></STEP_9"),
+    ("Invoice INV-2026-0412, due 2026-12-04", "INV-2026-0412"),
+    ("- OPS-2291: search results rank exact SKU matches first", "OPS-2291"),
+    ("The key starts with sk_live_ and must stay in .env", "sk_live_"),
+])
+def test_document_text_the_model_took_for_secrets(rules, text, piece):
+    assert Pipeline(rules, _FakePF(_guess(text, piece)), pii=False).detect(text) == []
+
+
+def test_a_password_in_word_xml_ends_at_its_tag(rules):
+    pw = "Kq7vX2mLp9RtW4zB8n"
+    text = f'<w:p><w:r><w:t xml:space="preserve">Staging admin: admin / password: {pw}</w:t></w:r></w:p></w:body>'
+    assert values(text, Pipeline(rules, None, pii=False).detect(text)) == [pw]
+
+
+def test_a_stand_in_password_is_no_password(rules):
+    assert Pipeline(rules, None, pii=False).detect("PASSWORD=mypassword") == []
+
+
 def test_a_token_made_of_letters_is_still_a_secret(rules):
     text = "here: QmXkZpRtWvBnLsJd"
     assert values(text, Pipeline(rules, _FakePF(_guess(text, "QmXkZpRtWvBnLsJd")), pii=False).detect(text)) == ["QmXkZpRtWvBnLsJd"]
