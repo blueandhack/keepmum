@@ -83,10 +83,17 @@ class Level(NamedTuple):
 # Sensitivity levels for the app and `keepmum guard sensitivity injection`, measured on the GGUF in
 # keepmum's windows. Each flags as many of the 2,000 session results as v2.3's level of the same name,
 # long and short apart (bench/guard_levels.py). GUARD.md's documents are all longer than SHORT_CHARS.
+# Short results (Nov 19): Medium, Low and Lowest need 0.40, not 0.222 and 0.354. A few words of a
+# command's output scored 0.33-0.91 (a script's message, `True` in Codex's wrapper: nb-01, k8s-01), and
+# 2 of SWE-chat's 702 short tool results flagged at 0.222, none at 0.40. Measured on the bench's short
+# texts (guard-public-20261113-173731, keepmum-ft) at Medium: prodnull's attacks caught 1171 -> 1082
+# of 2333, InjecAgent's 28 -> 27 of 60, AgentDojo's and LLMail's all 59 still; prodnull's benign flagged
+# 26 -> 21 of 1557; SWE-chat's 2,000 flagged 1.45% -> 1.35% at Medium. High keeps 0.185 for whoever wants
+# every short result checked hard.
 LEVELS = {"high": Level(0.185, 0.185, 0.972, 0.023, 0.04, 0.026),
-          "medium": Level(0.222, 0.222, 0.972, 0.023, 0.033, 0.015),
-          "low": Level(0.241, 0.354, 0.972, 0.023, 0.033, 0.009),
-          "lowest": Level(0.298, 0.354, 0.972, 0.016, 0.026, 0.004)}
+          "medium": Level(0.222, 0.40, 0.972, 0.023, 0.033, 0.014),
+          "low": Level(0.241, 0.40, 0.972, 0.023, 0.033, 0.009),
+          "lowest": Level(0.298, 0.40, 0.972, 0.016, 0.026, 0.004)}
 SHORT_CHARS = 200  # a tool result shorter than this needs its level's `short` score to flag
 
 
@@ -126,6 +133,50 @@ _INVISIBLE = re.compile("[\xad\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u206
 
 def normalize(text: str) -> str:
     return _INVISIBLE.sub("", unicodedata.normalize("NFKC", text.translate(_SMUGGLED)))
+
+
+# Codex's code-mode wrapper around a command's output: {"chunk_id":…,"exit_code":0,…,"output":"…"}.
+_CODEX_WRAPPER_KEYS = frozenset({"chunk_id", "wall_time_seconds", "exit_code", "original_token_count"})
+# A run of base64 or hex with no words in it: a certificate, a key, a picture, a token.
+_BLOB = re.compile(r"(?<![A-Za-z0-9+/_-])(?:[A-Za-z0-9+/_-]{80,}={0,2}|[0-9a-fA-F]{80,})(?![A-Za-z0-9+/=_-])")
+
+
+def _blob_text(m: re.Match) -> str:
+    """A blob as the check reads it: the text it encodes when it decodes to text (an instruction hidden
+    in base64 is still read), else a short mark."""
+    import base64
+    import binascii
+
+    raw = m.group()
+    if len(set(raw)) < 16:  # a run of a few characters (`xxxx…`, `====`): no blob, read as written
+        return raw
+    if m.string[max(0, m.start() - 8):m.start()].endswith("base64,"):
+        return raw  # a data: URI, read as written: `![](data:image/svg+xml;base64,…)` is an attack's shape (bench)
+    for decode in (lambda v: base64.b64decode(v + "=" * (-len(v) % 4), altchars=b"-_" if "-" in v or "_" in v else None),
+                   binascii.unhexlify):
+        try:
+            text = decode(raw).decode("utf-8")
+        except (ValueError, binascii.Error, UnicodeDecodeError):
+            continue
+        if len(text) >= 20 and sum(c.isprintable() or c.isspace() for c in text) >= 0.95 * len(text):
+            return text
+    return "[data]"
+
+
+def scored_text(text: str) -> str:
+    """What the checks score of a tool result: the output inside Codex's wrapper, and each long blob of
+    base64 or hex as its text or a mark. Random base64 made the injection model jumpy: a kubeconfig's
+    certificate, key and token scored 0.25-0.55 with line numbers and 0.0 without them, and a 26-character
+    output scored 0.914 in Codex's wrapper (cloud-01, nb-01, Nov 19). Masking still sees the text whole."""
+    stripped = text.strip()
+    if stripped.startswith("{") and '"output"' in stripped:
+        try:
+            doc = json.loads(stripped)
+        except ValueError:
+            doc = None
+        if isinstance(doc, dict) and isinstance(doc.get("output"), str) and _CODEX_WRAPPER_KEYS & set(doc):
+            text = doc["output"]
+    return _BLOB.sub(_blob_text, text)
 
 
 class GuardError(RuntimeError):
@@ -485,16 +536,25 @@ class Guard:
                     hits.append({**seen, "source": source, "earlier": True, "at": at})
                     hit_keys.add(key)
                 continue
-            if not new or len(text) < self.min_chars:
+            if not new:
                 continue
-            s = self.model.score(text)
+            scored = scored_text(text)
             carried = None
-            if s < self.threshold_for(len(text)):
-                carried = self._carried(text) if self.carry else None
+            if len(scored) < self.min_chars:
+                # Too short to score, but it may repeat a piece of a result flagged before (a README's
+                # commands the model printed, inside Codex's wrapper: inj-04).
+                carried = self._carried(scored) if self.carry else None
                 if carried is None:
                     continue
                 s = carried["score"]
-            hit = {"check": self.name, "source": source, "score": s, "chars": len(text), "earlier": False}
+            else:
+                s = self.model.score(scored)
+                if s < self.threshold_for(len(scored)):
+                    carried = self._carried(scored) if self.carry else None
+                    if carried is None:
+                        continue
+                    s = carried["score"]
+            hit = {"check": self.name, "source": source, "score": s, "chars": len(scored), "earlier": False}
             if carried is not None:
                 hit["carried"] = True  # it repeats part of a result flagged before
             categories = getattr(self.model, "categories", None)
@@ -510,7 +570,7 @@ class Guard:
                     self._flagged.pop(next(iter(self._flagged)))
                 self._flagged[key] = hit
                 if self.carry and carried is None:
-                    self._sources = [*self._sources[-(CARRIED - 1):], ("\n".join(_flat(text)), hit)]
+                    self._sources = [*self._sources[-(CARRIED - 1):], ("\n".join(_flat(scored)), hit)]
             if self._store is not None:
                 self._store.add(key, hit, self._label())
             hits.append({**hit, "at": at})  # which of the items: the Logs page shows its text
