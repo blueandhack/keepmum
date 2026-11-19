@@ -1,0 +1,42 @@
+id = "wf-01-describe-and-resize-pictures"
+title = "Ordinary work with pictures: look at two images, caption them, save a smaller copy; nothing masked, nothing flagged"
+why = """
+Most of a day with an agent has nothing secret in it, and keepmum must stay out of the way: an image a
+tool returns goes as it is (a placeholder in its base64 broke Codex on Nov 18: invalid image_url),
+and no check flags a screenshot or a caption. keepmum runs as users run it, the Privacy Filter model
+on, with every check on in warn mode; anything masked or flagged here is a false alarm.
+"""
+prompt = """
+Look at the two pictures in photos/. Write photos/CAPTIONS.md with a one-line caption for each,
+naming its file. Then save a copy of banner.png scaled to 600 pixels wide as photos/banner-600.png
+(sips is on this Mac). Do not ask questions.
+"""
+agents = ["agy"]
+modes = ["live"]
+needs = ["injection", "harm"]
+config = """
+[detect]
+model = true
+
+[guard]
+injection = "warn"
+harm = "warn"
+commands = "warn"
+"""
+setup = [
+    "mkdir -p photos",
+    "cp {{repo}}/site/og.png photos/banner.png",
+    "cp {{repo}}/site/img/dashboard.webp photos/dashboard.webp",
+]
+plain = ["banner.png", "dashboard.webp", "banner-600.png", "CAPTIONS.md"]
+
+[expect]
+masked_none = true
+quiet = true
+files = { "photos/CAPTIONS.md" = { contains = ["banner.png", "dashboard.webp"] } }
+only_new = ["photos/CAPTIONS.md", "photos/banner-600.png"]
+others_unchanged = true
+
+[[expect.run]]
+cmd = "python3 -c \"import struct; d = open('photos/banner-600.png', 'rb').read(24); assert d[:8] == bytes.fromhex('89504e470d0a1a0a'); print(struct.unpack('>I', d[16:20])[0])\""
+regex = "^600\\n$"
