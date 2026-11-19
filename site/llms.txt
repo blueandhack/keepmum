@@ -19,6 +19,7 @@ Key facts:
 ## Pages
 
 - [keepmum.app](https://keepmum.app/): what keepmum does, how it works, the optional checks, the Mac app, measured accuracy and speed, limitations, and install
+- [keepmum for Claude Code](https://keepmum.app/claude-code): what Claude Code sends to Anthropic, the ways to set keepmum up for it (Mac app, `keepmum claude`, `keepmum protect on`, VS Code), what it masks, and where it stops
 - [Privacy](https://keepmum.app/privacy): what keepmum and keepmum.app collect
 - [Download for Mac](https://github.com/blueandhack/keepmum/releases/latest): the latest release (a .dmg with everything included)
 

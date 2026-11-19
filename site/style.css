@@ -287,7 +287,7 @@ footer { display: flex; flex-wrap: wrap; align-items: flex-start; justify-conten
 footer p { max-width: 620px; line-height: 1.5; }
 footer nav { display: flex; flex-wrap: wrap; gap: 8px 24px; font-weight: 600; }
 
-/* Text pages (privacy) */
+/* Text pages (privacy, claude-code) */
 .doc-top { background: var(--coral); }
 .doc { padding-top: 72px; padding-bottom: 104px; }
 .doc .wrap > * { max-width: 720px; }
@@ -300,6 +300,14 @@ footer nav { display: flex; flex-wrap: wrap; gap: 8px 24px; font-weight: 600; }
 .doc strong { color: var(--ink); font-weight: 700; }
 .doc a { text-underline-offset: 3px; }
 .doc code { font-family: var(--mono); font-size: 0.86em; background: var(--sand); padding: 2px 6px; border-radius: 6px; }
+/* Guides (claude-code): a breadcrumb, sub-headings, command blocks and a closing button */
+.doc .kicker { margin: 0 0 20px; font-size: 16px; font-weight: 600; color: var(--muted); }
+.doc .kicker a { color: inherit; }
+.doc h3 { margin-top: 32px; font-size: 20px; line-height: 1.25; font-weight: 800; letter-spacing: -0.01em; }
+.doc pre { margin-top: 16px; padding: 20px; border-radius: 14px; background: var(--code); overflow-x: auto; font-family: var(--mono); font-size: 14px; line-height: 1.8; color: #fff; }
+.doc pre code { background: none; padding: 0; font-size: inherit; border-radius: 0; }
+.doc pre .cmt { color: rgba(255, 255, 255, 0.55); }
+.doc .doc-cta { margin-top: 56px; }
 .doc-footer { background: var(--coral); }
 .doc-footer .wrap { padding-top: 32px; padding-bottom: 40px; }
-@media (max-width: 600px) { .doc { padding-top: 48px; } .doc p, .doc li { font-size: 17px; } }
+@media (max-width: 600px) { .doc { padding-top: 48px; } .doc p, .doc li { font-size: 17px; } .doc pre { font-size: 13px; } }
