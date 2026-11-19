@@ -588,6 +588,15 @@ confidence = 0.8
 prose_guard = true
 
 [[rule]]
+id = "session-cookie"
+# A session cookie is a login: `Cookie: session=…`, `Set-Cookie: sessionid=…`, curl's `-b "sid=…"`. In
+# `curl -v` output and request logs; no other rule knew it (debug-01 on Codex, Nov 18).
+regex = '''(?i)(?<![\w.-])(?:[\w.-]*sess(?:ion)?(?:id|_id|-id)?|sid|connect\.sid|phpsessid|jsessionid|_[\w-]+_session|remember_(?:user_)?token|auth_token|access_token|refresh_token)=([A-Za-z0-9%._~+/:=-]{12,})'''
+group = 1
+keywords = ["sess", "sid", "token"]
+filters = "all"
+
+[[rule]]
 id = "secret-flag"
 # A command-line flag named for a secret: --token VALUE, --api-key=VALUE, --password VALUE.
 regex = '''(?i)(?<![\w-])--?(?:[a-z0-9]+[-_])*(?:passw(?:or)?d|pass|pwd|passphrase|token|secret|api[-_]?key|apikey|access[-_]?key|secret[-_]?key|auth|auth[-_]?token|private[-_]?key|client[-_]?secret|credentials?)(?:=|[ \t]+)(?!-)["']?([^\s"'`;|&<>]{8,200})'''

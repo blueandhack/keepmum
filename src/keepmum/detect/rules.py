@@ -241,6 +241,68 @@ def is_constant_name(value: str) -> bool:
         part.isalpha() or part.isdigit() for part in value.split("_"))
 
 
+# A checksum that says what it is: Subresource Integrity (`sha512-…`, npm and pnpm lockfiles) and
+# Go's module hashes (`h1:…`). The model took them for secrets (lock-01, Nov 18).
+_LABELED_DIGEST = re.compile(r"(?:sha(?:1|256|384|512)-|h1:)[A-Za-z0-9+/]+={0,2}")
+# An object's id, made to be shown and quoted: Stripe's and its imitators' prefixed ids (ord_7Hc2:
+# debug-01). Never a key's prefix (sk_, rk_, whsec_), which their own rules mask.
+_OBJECT_ID = re.compile(r"(?:ord|cus|ch|pi|pm|in|il|ii|sub|si|prod|price|evt|req|acct|txn|re|po|src|card|seti|"
+                        r"cs|usr|org|prj|inv|item|sku|cart|ship)_[A-Za-z0-9]{2,32}")
+
+
+# A host's name, with its port: an RDS endpoint or an EKS server has a random-looking label, which the
+# model took for a secret (cloud-01, Nov 18). Dotted labels ending in a known top-level domain.
+_HOSTNAME = re.compile(r"(?i)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|dev|app|ai|cloud|co|"
+                       r"internal|local|lan|corp|edu|gov|us|uk|de|fr|jp|cn|eu)(?::\d{1,5})?")
+
+
+def is_hostname(value: str) -> bool:
+    return bool(_HOSTNAME.fullmatch(value))
+
+
+def is_labeled_digest(value: str) -> bool:
+    return bool(_LABELED_DIGEST.fullmatch(value))
+
+
+_B64_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+_DIGEST_LABEL_BEFORE = re.compile(r"(?:sha(?:1|256|384|512)-|h1:)$")
+
+
+def in_labeled_digest(text: str, start: int, end: int) -> bool:
+    """text[start:end] is part of a labeled checksum: the model masked the base64 alone, or a piece of
+    it, without its `h1:` or `sha512-` (lock-01, Nov 18)."""
+    a = start
+    while a > 0 and text[a - 1] in _B64_CHARS:
+        a -= 1
+    return bool(_DIGEST_LABEL_BEFORE.search(text, max(0, a - 7), a))
+
+
+_HOST_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:")
+
+
+def in_hostname(text: str, start: int, end: int) -> bool:
+    """text[start:end] is part of a host's name: the model stopped an RDS endpoint at `.rds` (cloud-01)."""
+    a, b = start, end
+    while a > 0 and text[a - 1] in _HOST_CHARS:
+        a -= 1
+    while b < len(text) and text[b] in _HOST_CHARS:
+        b += 1
+    return "." in text[start:end] and is_hostname(text[a:b].strip(".:-"))
+
+
+# A pattern, not a value: a character class with a range, an alternation, an escape class
+# (`STRIPE_KEY|STRIPE_SECRET_KEY|sk_(live|test)_`, `?-?[A-Za-z0-9+/=]+`: an agent's grep, Nov 18).
+_REGEX_SHAPE = re.compile(r"\[[^\]]*\w-\w[^\]]*\]|\([^()]*\|[^()]*\)|\\[dwsbS]|^[\w()|]+\|[\w()|]+$")
+
+
+def is_regex(value: str) -> bool:
+    return bool(_REGEX_SHAPE.search(value))
+
+
+def is_object_id(value: str) -> bool:
+    return bool(_OBJECT_ID.fullmatch(value))
+
+
 def is_bare_hash(text: str, start: int, end: int) -> bool:
     """text[start:end] is hex of a hash's length (a commit, a digest, a transaction or block hash
     written 0x…) with no secret word in the 40 characters before it: hex named a key is one (Nov 18)."""
@@ -259,13 +321,17 @@ def after_nonce(text: str, start: int, end: int) -> bool:
 def public_shape(text: str, start: int, end: int) -> bool:
     """A guess (entropy, the model) at text[start:end] is not a secret: it is a file name or path, a
     link a provider's search tool issued, a path on this Mac, a pin by hash, a commit or digest
-    not named a secret, a package or plugin id, a constant's name, a
-    file in base64, or a page's nonce. A token
+    not named a secret, a package or plugin id, a constant's name, a labeled
+    checksum, an object's id, a lowercase word, a file in base64, or a page's nonce. A token
     rule that knows a key's format still masks it wherever it is."""
     value = text[start:end]
     return (is_file_name(text, start, end) or is_path(value) or in_issued_link(text, start, end)
             or in_system_path(text, start, end) or in_encoded_file(text, start, end) or is_pin(value) or is_bare_hash(text, start, end) or is_package_ref(value)
-            or is_constant_name(value)
+            or is_constant_name(value) or is_labeled_digest(value) or is_object_id(value) or is_hostname(value)
+            or in_labeled_digest(text, start, end) or in_hostname(text, start, end) or is_regex(value)
+            # A word: `contexts`, a YAML key; `HttpOnly` (cloud-01, debug-01). Not a token made of letters,
+            # which has capitals all through it.
+            or value.isalpha() and len(value) <= 16 and sum(c.isupper() for c in value) <= 2
             or after_nonce(text, start, end))
 
 
@@ -343,7 +409,8 @@ _PUBLIC_PEM = re.compile(r"-----BEGIN (?:PUBLIC KEY|RSA PUBLIC KEY|CERTIFICATE|X
 # Its lines may be wrapped, by new lines or, in JSON text, by escaped ones (GitHub's contents API wraps
 # at 60). A secret never starts with a file's magic bytes; the model flagged the last line of a PNG
 # Codex fetched (wf-02 on Codex, Nov 18).
-_FILE_MAGIC = r"(?:iVBORw0KGgo|/9j/|R0lGOD[lh]h|UklGR|JVBERi0|UEsDB)"
+# A certificate or a public key, PEM in base64 (a kubeconfig's certificate-authority-data: cloud-01).
+_FILE_MAGIC = r"(?:iVBORw0KGgo|/9j/|R0lGOD[lh]h|UklGR|JVBERi0|UEsDB|LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t|LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS)"
 _FILE_MAGIC_HINT = re.compile(_FILE_MAGIC)
 _ENCODED_FILE = re.compile(r"(?<![A-Za-z0-9+/])" + _FILE_MAGIC + r"(?:[A-Za-z0-9+/]|\\{1,3}[nr]|\r?\n)*={0,2}")  # padding ends it
 _ISSUED_LINK = re.compile(r"https?://vertexaisearch\.cloud\.google\.com/grounding-api-redirect/[A-Za-z0-9_=-]+")
@@ -468,6 +535,8 @@ class RulesDetector:
                 continue
             for m in rule.regex.finditer(text):
                 if rule.scan == "assignment":
+                    if text[max(0, m.start("key") - 3):m.start("key")] == "://":
+                        continue  # a URL's user and password (https://x-access-token:ghp_…@github.com): the URL rule's (git-01)
                     start, opening = m.end(), m.group("open") or ""
                     if opening and closes_a_string(text, start - len(opening), opening):
                         continue

@@ -20,6 +20,12 @@ _PIECE = re.compile(r"\S+")
 _EDGE = "/=:\"'`,;()[]{}<>\\"
 # A CSV row's fields: the model ran a span over `5e1f0c9a-…,us` (nb-01, Nov 18). A secret has no comma.
 _FIELD = re.compile(r"[^\s,]+")
+# A line break escaped in JSON text ends a piece as a real one does (`None\nfor`: git-01, Nov 18).
+_ESCAPED_BREAK = re.compile(r"\\[nrt]")
+# A `name=` inside a piece: what follows is the value (`registry.npmjs.org/:_authToken=npm_…`: git-01).
+_LINE_BREAK = re.compile(r"\n|\\n")
+_PII_CUT = re.compile(r"\\+[nrt]|\n|,(?! )")
+_INNER_LABEL = re.compile(r"[A-Za-z_][\w.-]*=(?=\S{8,}$)")
 
 
 def _pieces(text: str, start: int, end: int) -> list[tuple[int, int]]:
@@ -27,6 +33,15 @@ def _pieces(text: str, start: int, end: int) -> list[tuple[int, int]]:
     fields (two or more commas, or a comma after an id)."""
     out = []
     for m in _PIECE.finditer(text, start, end):
+        if _ESCAPED_BREAK.search(m.group()):
+            at = m.start()
+            for brk in _ESCAPED_BREAK.finditer(text, m.start(), m.end()):
+                if brk.start() > at:
+                    out.append((at, brk.start()))
+                at = brk.end()
+            if at < m.end():
+                out.append((at, m.end()))
+            continue
         piece = m.group()
         if piece.count(",") >= 2 or ("," in piece and _IDENTIFIER.fullmatch(piece.split(",", 1)[0])):
             out += [f.span() for f in _FIELD.finditer(text, m.start(), m.end())]
@@ -64,6 +79,28 @@ log = logging.getLogger("keepmum")
 
 # Texts whose raw model output is kept: as many as the redactor caches.
 MODEL_CACHE = 4096
+
+
+# Places a name alone does not make an address: China's municipalities, provinces and largest cities.
+_PLACES = frozenset("""北京 上海 天津 重庆 广州 深圳 杭州 南京 苏州 成都 武汉 西安 长沙 郑州 青岛 济南 沈阳 大连 厦门
+福州 宁波 无锡 合肥 昆明 哈尔滨 长春 石家庄 太原 南昌 南宁 贵阳 兰州 海口 三亚 珠海 东莞 佛山 香港 澳门 台北
+河北 山西 辽宁 吉林 黑龙江 江苏 浙江 安徽 福建 江西 山东 河南 湖北 湖南 广东 海南 四川 贵州 云南 陕西 甘肃
+青海 台湾 内蒙古 广西 西藏 宁夏 新疆
+Beijing Shanghai Tianjin Chongqing Guangzhou Shenzhen Hangzhou Nanjing Suzhou Chengdu Wuhan Xian Changsha
+Zhengzhou Qingdao Xiamen Hong Kong Macau Taipei""".split())
+_MONTH_OR_DIGITS = re.compile(r"(?i)\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|[\d\s:,./-]+")
+
+
+def _plausible_address(value: str) -> bool:
+    """A model ADDRESS that is one: not a number or a listing's date (`128 Nov 18`: i18n-01 on Codex),
+    and not a city's name alone (北京, Paris), which a street, a number or more words would make one."""
+    words = [w for w in re.split(r"[\s,;/()0-9]+", value) if w]
+    if words and all(w.rstrip("市") in _PLACES for w in words):
+        return False  # a list of cities with their counts: `Beijing (3), Shanghai` (i18n-01)
+    letters = _MONTH_OR_DIGITS.sub("", value)
+    if len(letters) < 2 or not any(c.isdigit() for c in value) and len(value.strip()) <= 6 and " " not in value.strip():
+        return False
+    return value.rstrip("市") not in _PLACES
 
 
 class Pipeline:
@@ -113,7 +150,7 @@ class Pipeline:
         if self.pii and self.refine_pii_spans:
             # The rules' personal data gets the same noise checks as the model's: reserved
             # addresses, fictional numbers. Your own rules are kept as written.
-            spans = [t for s in spans if (t := self.trim_pii(text, s)) is not None
+            spans = [t for s in spans for piece in self.split_pii(text, s) if (t := self.trim_pii(text, piece)) is not None
                      and (t.type == "SECRET" or t.source.startswith("user:") or self.keep_pii(text, t))]
         if not self.pii:  # your own rules apply whatever their type
             spans = [s for s in spans if s.type == "SECRET" or s.source.startswith("user:")]
@@ -270,7 +307,7 @@ class Pipeline:
                     b -= 2
                 else:
                     break
-            label = _LABEL.match(text, a, b)
+            label = _LABEL.match(text, a, b) or _INNER_LABEL.search(text, a, b)
             if label:
                 a = label.end()
             digest = _DIGEST.match(text, a, b)
@@ -286,7 +323,9 @@ class Pipeline:
             value = text[a:b]
             if len(value) < 8:
                 continue
-            if self.rules and self.rules.looks_like_placeholder(value):
+            # A reference is not the value (os.environ["STRIPE_SECRET_KEY"], a header's name: rotate-01,
+            # debug-01, Nov 18): every filter the rules apply to an assigned value, for the model too.
+            if self.rules and self.rules.looks_like_placeholder(value, "all"):
                 continue
             # The model often starts a span partway into an id (".../accounts/e|65d2c19-..."):
             # judge the whole run of hex digits and hyphens around the piece.
@@ -297,10 +336,30 @@ class Pipeline:
                 hi += 1
             run = text[lo:hi]
             if _IDENTIFIER.fullmatch(value) or (run != value and _IDENTIFIER.fullmatch(run) and len(run.strip("-")) >= 16):
-                before = text[max(0, lo - 40) : lo]
+                # The secret word must be on the id's own line: `Authorization: Bearer …` a line above
+                # a request id made it a secret (debug-01 on Codex, Nov 18).
+                before = _LINE_BREAK.split(text[max(0, lo - 40) : lo])[-1]
                 if before.endswith("/") or not _KEYWORD_BEFORE.search(before):
                     continue
             out.append(Span(a, b, span.type, span.confidence, span.source))
+        return out
+
+    @staticmethod
+    def split_pii(text: str, span: Span) -> list[Span]:
+        """A model personal-data span cut into the fields it ran over: at a line break escaped in JSON
+        text, and at a comma with no space after it (a CSV row). The model gave one ADDRESS over
+        `张伟,+86 138 0013 8000,110101199003071234`, and one PERSON over two lines (i18n-01, Nov 18). An
+        address's own `, ` keeps it whole."""
+        if span.type == "SECRET" or not span.source.startswith("pf"):
+            return [span]
+        cuts = [m.span() for m in _PII_CUT.finditer(text, span.start, span.end)]
+        if not cuts:
+            return [span]
+        out, at = [], span.start
+        for a, b in cuts + [(span.end, span.end)]:
+            if a > at:
+                out.append(Span(at, a, span.type, span.confidence, span.source))
+            at = b
         return out
 
     @staticmethod
@@ -313,6 +372,9 @@ class Pipeline:
             a += 1
         while b > a and text[b - 1] in _PII_EDGE:
             b -= 1
+        if span.type == "PHONE":  # a number starts at a digit, +, or (: not at the name before it (i18n-01)
+            while a < b and not (text[a].isdigit() or text[a] in "+("):
+                a += 1
         if span.type not in ("EMAIL", "URL") and a < b:
             # A name in a path or file name: not the folders before it, nor the rest of the file
             # name after it (clients/Margaret Thornbury_resume.md is Margaret Thornbury). Every type
@@ -351,11 +413,20 @@ class Pipeline:
         if span.type == "URL":
             return "://" in value  # an API path is not a personal URL
         if span.type == "EMAIL":
+            # A domain without a dot is no mail domain: Codex's plugin ids, gmail@openai-curated-remote (Nov 18).
+            if "." not in value.rpartition("@")[2]:
+                return False
             return not (_RESERVED_EMAIL.search(value) or _ROLE_EMAIL.match(value))
         if span.type == "PHONE":
             return not _FICTIONAL_PHONE.search(value)
         if span.type == "PERSON":
-            return not _IDENTIFIER_WORD.fullmatch(value)  # a name has a capital or a space
+            # A name has a capital or a space; it is no dot-file (.git, .codex in a listing), no
+            # handle or path, and no city (北京 in a table of cities: i18n-01, Nov 18).
+            return not (_IDENTIFIER_WORD.fullmatch(value) or value[:1] in ".@" or "/" in value or "@" in value
+                        or value.rstrip("市") in _PLACES
+                        or value.isascii() and " " not in value.strip() and not any(c.isupper() for c in value))  # n-rw-r--r
+        if span.type == "ADDRESS":
+            return _plausible_address(value)
         return True
 
 

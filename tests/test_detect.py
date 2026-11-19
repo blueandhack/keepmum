@@ -407,6 +407,126 @@ def test_a_variable_in_an_expression_is_not_a_password(rules, text, masked):
     assert bool(Pipeline(rules, None, pii=False).detect(text)) is masked
 
 
+def test_a_token_in_a_git_remote_is_masked_alone(rules):
+    # `git remote -v` with a token in the URL: the host and repository stay readable (git-01, Nov 18).
+    tok = "ghp_6TzJ7vdMTJmVIR0kiTOK1Fi6mP2TuhaaGwUc"
+    text = f"origin\thttps://x-access-token:{tok}@github.com/acme/orders.git (fetch)\n"
+    assert values(text, Pipeline(rules, _FakePF(_guess(text, f"{tok}@github.com/acme/orders.git")), pii=False).detect(text)) == [tok]
+
+
+@pytest.mark.parametrize("text, piece", [
+    ("  integrity sha512-Z4jtVdSClePIEelBxFvNUshyE0MlW0ctYN2sR+wZeJbR01ScVkrUAGoUh0TMvJJOGeIcUPajaB7Fq0mcoKtGhw==",
+     "sha512-Z4jtVdSClePIEelBxFvNUshyE0MlW0ctYN2sR+wZeJbR01ScVkrUAGoUh0TMvJJOGeIcUPaja"),
+    ("golang.org/x/crypto v0.31.0/go.mod h1:kLxQiBxrJ0JAHbCXUGC7/dwLyB1GRmqHQFMDA9Jan1Q=", "h1:kLxQiBxrJ0JAHbCXUGC7/dwLyB1GRmqHQFMDA9Jan1Q"),
+    ('stripe.api_key = os.environ["STRIPE_SECRET_KEY"]', 'os.environ["STRIPE_SECRET_KEY'),
+    ("< set-cookie: session=…; Path=/", "set-cookie"),
+    ("GET /v2/orders/ord_7Hc2 HTTP/2", "ord_7Hc2"),
+    ("9: contexts:\n10: - name: orders-prod", "contexts"),
+    ('"endpoint": "orders-prod.c8x2kq1v9wze.us-west-2.rds.amazonaws.com:5432"', "orders-prod.c8x2kq1v9wze.us-west-2.rds.amazonaws.com:5432"),
+])
+def test_public_text_the_model_took_for_secrets(rules, text, piece):
+    assert Pipeline(rules, _FakePF(_guess(text, piece)), pii=False).detect(text) == []
+
+
+@pytest.mark.parametrize("text, piece, kind", [
+    ("drwxr-xr-x  3 yoga staff  96 Nov 18 18:01 .codex", ".codex", "PERSON"),
+    ("- Gmail (gmail@openai-curated-remote)", "gmail@openai-curated-remote", "EMAIL"),
+    ("-rw-r--r--  1 yoga staff  128 Nov 18 18:01 report.md", "128 Nov 18", "ADDRESS"),
+    ("| 北京 | 3 |", "北京", "ADDRESS"),
+    ("| 北京 | 3 |", "北京", "PERSON"),
+    ("total 8\\n-rw-r--r--  1 yoga  staff  1418 Nov 18 report.md", "n-rw-r--r", "PERSON"),  # JSON text: an escaped new line
+])
+def test_personal_data_guesses_that_are_not(rules, text, piece, kind):
+    pf = _FakePF([Span(text.index(piece), text.index(piece) + len(piece), kind, 0.9, "pf-serve")])
+    assert Pipeline(rules, pf, pii=True).detect(text) == []
+
+
+@pytest.mark.parametrize("text, piece, kind", [
+    ("Ship to 北京市朝阳区建国路88号", "北京市朝阳区建国路88号", "ADDRESS"),
+    ("Contact 张伟 for access", "张伟", "PERSON"),
+    ("mail margaret.thornbury@gmail.com today", "margaret.thornbury@gmail.com", "EMAIL"),
+])
+def test_personal_data_guesses_that_are(rules, text, piece, kind):
+    pf = _FakePF([Span(text.index(piece), text.index(piece) + len(piece), kind, 0.9, "pf-serve")])
+    assert values(text, Pipeline(rules, pf, pii=True).detect(text)) == [piece]
+
+
+@pytest.mark.parametrize("text", [
+    # A session cookie is a login (debug-01 on Codex, Nov 18).
+    "> Cookie: session=Kq7vX2mLp9RtW4zB8n; theme=dark",
+    "< set-cookie: sessionid=Kq7vX2mLp9RtW4zB8n; Path=/; HttpOnly",
+    'curl -b "connect.sid=s%3AKq7vX2mLp9RtW4zB8n.abc" https://x.example',
+    "Set-Cookie: _shop_session=Kq7vX2mLp9RtW4zB8nQ; path=/",
+])
+def test_a_session_cookie_is_masked(rules, text):
+    got = values(text, Pipeline(rules, None, pii=False).detect(text))
+    assert any("Kq7vX2mLp9RtW4zB8n" in g for g in got) and not any("theme" in g or "Path" in g for g in got)
+
+
+@pytest.mark.parametrize("text, piece, kept", [
+    # The model's span over a whole .npmrc line, and over code with an escaped line break (git-01).
+    ("//registry.npmjs.org/:_authToken=npm_8Hi4ikv5wNJXBooVCaQr60IS6UmSVl4kWB5w\n",
+     "registry.npmjs.org/:_authToken=npm_8Hi4ikv5wNJXBooVCaQr60IS6UmSVl4kWB5w", "npm_8Hi4ikv5wNJXBooVCaQr60IS6UmSVl4kWB5w"),
+    ('"    return None\\nfor line in lines:"', "None\\nfor", None),
+])
+def test_a_model_span_is_cut_at_a_name_and_at_escaped_breaks(rules, text, piece, kept):
+    got = values(text, Pipeline(rules, _FakePF(_guess(text, piece)), pii=False).detect(text))
+    assert got == ([kept] if kept else [])
+
+
+@pytest.mark.parametrize("text, piece, kind", [
+    # Found by the live matrix of Nov 18.
+    ('"endpoint": "orders-prod.c8x2kq1v9wze.us-west-2.rds.amazonaws.com:5432"', "orders-prod.c8x2kq1v9wze.us-west-2.rds", "SECRET"),
+    ("golang.org/x/crypto v0.31.0 h1:68RbgsSwMRnuFwGRYM5pbHUGTV0kGOXOutW9t/kK3sk=", "68RbgsSwMRnuFwGRYM5pbHUGTV0kGOXOutW9t/kK3sk", "SECRET"),
+    ("integrity sha512-Z4jtVdSClePIEelBxFvNUshyE0MlW0ctYN2sR+wZeJbR01ScVkrUAGoUh0TMvJJOGeIcUPajaB7Fq0mcoKtGhw==",
+     "BxFvNUshyE0MlW0ctYN2sR+wZeJbR01ScVkrUAGoUh0TMvJJOGeIcUPajaB7Fq0mcoKtGhw", "SECRET"),
+    ("rg -n 'STRIPE_KEY|STRIPE_SECRET_KEY|sk_(live|test)_' .", "STRIPE_KEY|STRIPE_SECRET_KEY|sk_(live|test)_", "SECRET"),
+    ("grep -oE 'sha512?-?[A-Za-z0-9+/=]+' web/yarn.lock", "?-?[A-Za-z0-9+/=]+", "SECRET"),
+    ("< set-cookie: session=x; Path=/; HttpOnly; Secure", "HttpOnly", "SECRET"),
+    ("13:> Authorization: Bearer [omitted]\\n18:< x-request-id: 4e8a1c2f-7b3d-4a6e-9f05-c1d2b3a4e5f6\\n",
+     "4e8a1c2f-7b3d-4a6e-9f05-c1d2b3a4e5f6", "SECRET"),
+])
+def test_more_public_text_the_model_took_for_secrets(rules, text, piece, kind):
+    pf = _FakePF([Span(text.index(piece), text.index(piece) + len(piece), kind, 0.9, "pf-serve")])
+    assert Pipeline(rules, pf, pii=False).detect(text) == []
+
+
+def test_a_token_made_of_letters_is_still_a_secret(rules):
+    text = "here: QmXkZpRtWvBnLsJd"
+    assert values(text, Pipeline(rules, _FakePF(_guess(text, "QmXkZpRtWvBnLsJd")), pii=False).detect(text)) == ["QmXkZpRtWvBnLsJd"]
+
+
+def test_a_request_id_after_a_secret_word_on_its_line_is_still_one(rules):
+    text = "token: 4e8a1c2f-7b3d-4a6e-9f05-c1d2b3a4e5f6"
+    assert values(text, Pipeline(rules, _FakePF(_guess(text, "4e8a1c2f-7b3d-4a6e-9f05-c1d2b3a4e5f6")), pii=False).detect(text))
+
+
+def test_a_key_in_a_sed_expression_is_masked_alone(rules):
+    sk = "sk_live_" + "qwEOgtmUFB7ZdVOlpTzVnW32"  # split: GitHub's push protection takes a whole fake key for a real one
+    text = f"sed -i 's/{sk}/$STRIPE_SECRET_KEY/' app/payments.py"
+    assert values(text, Pipeline(rules, _FakePF(_guess(text, f"s/{sk}/")), pii=False).detect(text)) == [sk]
+
+
+@pytest.mark.parametrize("text, piece, kind, kept", [
+    ("张伟,+86 138 0013 8000,110101199003071234", "张伟,+86 138 0013 8000", "PHONE", "+86 138 0013 8000"),
+    # A row with its line breaks escaped (JSON text): one ADDRESS over three fields (i18n-01 on Claude Code).
+    ("地址\\n张伟,+86 138 0013 8000,110101199003071234,北京", "张伟,+86 138 0013 8000,110101199003071234", "ADDRESS", "+86 138 0013 8000"),
+    ("北京市朝阳区建国路88号\\n王芳,+86 139", "北京市朝阳区建国路88号\\n王芳", "PERSON", "王芳"),
+    ("Ship to 10 Downing St, London SW1A 2AA", "10 Downing St, London SW1A 2AA", "ADDRESS", "10 Downing St, London SW1A 2AA"),
+    ("Customers: Beijing (3), Shanghai (2), Shenzhen (1)", "Beijing (3), Shanghai", "ADDRESS", None),
+])
+def test_personal_data_guesses_are_cut_or_dropped(rules, text, piece, kind, kept):
+    pf = _FakePF([Span(text.index(piece), text.index(piece) + len(piece), kind, 0.9, "pf-serve")])
+    got = values(text, Pipeline(rules, pf, pii=True).detect(text))
+    assert (kept in got and piece not in [g for g in got if g != kept]) if kept else not any(piece in g for g in got)
+
+
+def test_a_token_followed_by_an_at_sign_is_masked_alone(rules):
+    tok = "ghp_6TzJ7vdMTJmVIR0kiTOK1Fi6mP2TuhaaGwUc"
+    text = f"https://x-access-token:{tok}@github.com/acme/orders.git"
+    assert values(text, Pipeline(rules, _FakePF(_guess(text, f"{tok}@")), pii=False).detect(text)) == [tok]
+
+
 def _png_b64(lines: int, sep: str) -> str:
     import base64, random
     rnd = random.Random(7)
