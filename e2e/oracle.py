@@ -56,6 +56,23 @@ class Finding:
         return self.cls in FAILING
 
 
+def _encodes(value: str, declared) -> bool:
+    """value is a declared value written in base64 or hex, alone or in the text it was part of
+    (`DATABASE_URL` in a Kubernetes Secret, k8s-01): masking it is masking that value."""
+    import base64
+    import binascii
+
+    for decode in (lambda v: base64.b64decode(v + "=" * (-len(v) % 4)), lambda v: base64.urlsafe_b64decode(v + "=" * (-len(v) % 4)),
+                   binascii.unhexlify):
+        try:
+            text = decode(value).decode("utf-8")
+        except (ValueError, binascii.Error, UnicodeDecodeError):
+            continue
+        if any(d and d in text for d in declared):
+            return True
+    return False
+
+
 def snapshot(ws: Path) -> dict[str, bytes]:
     out = {}
     for p in sorted(ws.rglob("*")):
@@ -210,7 +227,9 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
     if case.expect.get("masked_none"):
         allowed = [re.compile(p) for p in case.expect.get("may_mask", [])]
         for ph, (kind, value) in sorted(masked.items(), key=lambda x: x[1]):
-            if value not in declared and not any(a.search(value) for a in allowed):
+            # A long piece of a declared value is that value: half a key printed (`head -c 20`, k8s-01 on pi).
+            piece = len(value) >= 12 and any(value in d for d in declared)
+            if value not in declared and not piece and not _encodes(value, declared) and not any(a.search(value) for a in allowed):
                 out.append(Finding("false-mask", f"{value[:80]!r} was masked as {kind}, in a case with nothing to mask", ph))
     vault = Vault(salt)
     sent_text = b"".join(ex.sent() for _, ex in sent).decode("utf-8", "replace")

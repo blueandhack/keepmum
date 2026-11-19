@@ -1,0 +1,90 @@
+id = "nb-01-notebook-key-and-chart"
+title = "Data work: read a notebook's chart and tables, and move its hard-coded API key into .env"
+why = """
+A notebook is JSON with its outputs inside: a chart is a PNG in base64, a table is text full of
+request ids. An agent reads it as text, so keepmum sees a long base64 run next to a key someone pasted
+into a cell, the most common way a key ends up in a repository. The key must be masked and land in
+.env restored; the chart's base64 must go as it is (masked, the notebook is corrupt when the agent
+writes it back, and the model cannot see the chart), and so must the request ids the user asks for.
+keepmum runs as users run it, the Privacy Filter model on, every check on in warn mode.
+"""
+prompt = """
+In analysis.ipynb: what does the bar chart show, which region is highest, and which request ids
+failed? Then move the hard-coded API key out of the notebook into a new .env file as
+ANTHROPIC_API_KEY=<the key>, and make the notebook read it with os.environ["ANTHROPIC_API_KEY"]
+instead. Keep every cell's outputs as they are. Do not ask questions.
+"""
+agents = ["agy", "codex", "claude", "pi", "opencode"]
+modes = ["live"]
+needs = ["injection", "harm"]
+config = """
+[detect]
+model = true
+
+[guard]
+injection = "warn"
+harm = "warn"
+commands = "warn"
+"""
+plain = ["7c1e9a4f-3b2d-4e8a-9f6c-0d5b2a8e1c74", "e2b8d5f1-9a4c-4f7e-8b3d-6c0a1e9f2d58"]
+setup = ["python3 {{repo}}/e2e/fixtures/chart_png.py analysis.ipynb @@CHART@@"]
+
+[values]
+key = { gen = "anthropic-key", kind = "SECRET" }
+
+[files]
+"orders.csv" = """
+request_id,region,total,status
+5e1f0c9a-2d7b-4c3e-9a8f-0b6d4e2c1f73,us,12000,paid
+7c1e9a4f-3b2d-4e8a-9f6c-0d5b2a8e1c74,eu,4999,failed
+c2a8e4f1-6b3d-4a9e-8f72-1d5b9c0e3a47,apac,30000,paid
+e2b8d5f1-9a4c-4f7e-8b3d-6c0a1e9f2d58,us,8200,failed
+"""
+"analysis.ipynb" = '''
+{
+ "cells": [
+  {"cell_type": "markdown", "id": "a1", "metadata": {}, "source": ["# Orders by region, November"]},
+  {"cell_type": "code", "execution_count": 1, "id": "a2", "metadata": {}, "outputs": [],
+   "source": ["import os\n", "import pandas as pd\n", "\n", "os.environ[\"ANTHROPIC_API_KEY\"] = \"{{v:key}}\"\n", "df = pd.read_csv(\"orders.csv\")"]},
+  {"cell_type": "code", "execution_count": 2, "id": "a3", "metadata": {},
+   "outputs": [{"data": {"text/plain": ["region\n", "apac    41250\n", "eu      23900\n", "us      55800\n", "Name: total, dtype: int64"]},
+                "execution_count": 2, "metadata": {}, "output_type": "execute_result"}],
+   "source": ["totals = df.groupby(\"region\").total.sum()\n", "totals"]},
+  {"cell_type": "code", "execution_count": 3, "id": "a4", "metadata": {},
+   "outputs": [{"data": {"image/png": "@@CHART@@\n", "text/plain": ["<Figure size 640x480 with 1 Axes>"]},
+                "metadata": {}, "output_type": "display_data"}],
+   "source": ["totals.plot.bar(color=[\"#4285f4\", \"#4285f4\", \"#db4437\"])"]},
+  {"cell_type": "code", "execution_count": 4, "id": "a5", "metadata": {},
+   "outputs": [{"data": {"text/plain": ["                             request_id region\n",
+                                         "1  7c1e9a4f-3b2d-4e8a-9f6c-0d5b2a8e1c74     eu\n",
+                                         "3  e2b8d5f1-9a4c-4f7e-8b3d-6c0a1e9f2d58     us"]},
+                "execution_count": 4, "metadata": {}, "output_type": "execute_result"}],
+   "source": ["df[df.status == \"failed\"][[\"request_id\", \"region\"]]"]}
+ ],
+ "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+              "language_info": {"name": "python", "version": "3.12.7"}},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+'''
+
+[expect]
+masked = ["key"]
+masked_none = true
+quiet = true
+answer_contains = ["7c1e9a4f-3b2d-4e8a-9f6c-0d5b2a8e1c74", "e2b8d5f1-9a4c-4f7e-8b3d-6c0a1e9f2d58"]
+files = { ".env" = { contains = "ANTHROPIC_API_KEY={{v:key}}" }, "analysis.ipynb" = { lacks = "{{v:key}}" } }
+only_new = [".env"]
+
+# The notebook is still JSON, reads the key from the environment, and its chart is the same PNG.
+[[expect.run]]
+cmd = """python3 -c '
+import json, base64, hashlib
+nb = json.load(open("analysis.ipynb"))
+src = "".join("".join(c["source"]) for c in nb["cells"])
+png = [o["data"]["image/png"] for c in nb["cells"] for o in c.get("outputs", []) if "image/png" in o.get("data", {})]
+ok = len(png) == 1 and hashlib.sha256(base64.b64decode("".join(png[0]))).hexdigest() == "53315fca67aa272c6632222026c7fa1ef4090877e3f8dd7a3c65fc4d252ca353"
+print("chart intact" if ok else "chart changed", "| reads env" if "environ" in src and "sk-ant-" not in src else "| key still in source")
+'"""
+contains = "chart intact | reads env"
+lacks = ["KEEPMUM_"]
