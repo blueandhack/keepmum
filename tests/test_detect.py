@@ -550,6 +550,8 @@ def test_a_command_after_a_secret_word_is_not_its_value(rules, text, masked):
     # From the full live run of Nov 19.
     ('stripe.api_key = "[removed]"', None),                                     # rotate-01 on Codex
     ("secrets = [m.group() for text in texts.values() for m in pattern.finditer(text)]", None),  # rotate-01 on opencode
+    ("secret_lines = ['apiVersion: v1', 'kind: Secret']", None),                # k8s-01 on Codex
+    ("STRIPE_SECRET_KEY: chars=32", None),
     ('GITHUB_TOKEN="${GITHUB_TOKEN:-ghp_6TzJ7vdMTJmVIR0kiTOK1Fi6mP2TuhaaGwUc}"', "ghp_6TzJ7vdMTJmVIR0kiTOK1Fi6mP2TuhaaGwUc"),  # restart-01
     ('DB_PASSWORD="${DB_PASSWORD:-Kq7vX2mLp9RtW4zB8n}"', "Kq7vX2mLp9RtW4zB8n"),
 ])
