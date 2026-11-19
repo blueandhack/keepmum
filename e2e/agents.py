@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -336,6 +337,9 @@ class Antigravity(Agent):
 DUMMY_ANTHROPIC_KEY = "sk-ant-api03-e2e-dummy-not-a-key-" + "0" * 60 + "AA"
 
 
+_FETCH = re.compile(r"\b(?:curl|wget)\b[^|;&\n]*https?://")
+
+
 class Pi(Agent):
     """pi, pointed at keepmum as `keepmum protect` points it: a models.json giving its providers
     keepmum's base URLs (clients.pi_providers), in an agent folder of the run's own
@@ -398,6 +402,9 @@ class Pi(Agent):
                 args = ev.get("args") or {}
                 if ev.get("toolName") == "bash":
                     t.commands.append(str(args.get("command", "")))
+                    # pi has no web tool: it reads a page with curl, its output back through keepmum (wf-03).
+                    if _FETCH.search(t.commands[-1]):
+                        t.web_calls += 1
                 else:
                     t.tool_inputs.append(json.dumps({"tool": ev.get("toolName"), **args}, ensure_ascii=False))
             elif kind == "tool_execution_end":
