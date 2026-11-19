@@ -230,6 +230,17 @@ def is_package_ref(value: str) -> bool:
     return bool(_PACKAGE_REF.fullmatch(value))
 
 
+# A constant's or a variable's name: STRIPE_SECRET_KEY as a YAML key in a Kubernetes Secret, which the
+# model took for the secret (k8s-01, Nov 18); masked once, keepmum masked the name everywhere after.
+_CONSTANT_NAME = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
+
+
+def is_constant_name(value: str) -> bool:
+    """value is an UPPER_SNAKE name whose parts are words (_CONSTANT_NAME), not a key's characters."""
+    return bool(_CONSTANT_NAME.fullmatch(value)) and all(
+        part.isalpha() or part.isdigit() for part in value.split("_"))
+
+
 def is_bare_hash(text: str, start: int, end: int) -> bool:
     """text[start:end] is hex of a hash's length (a commit, a digest, a transaction or block hash
     written 0x…) with no secret word in the 40 characters before it: hex named a key is one (Nov 18)."""
@@ -248,12 +259,13 @@ def after_nonce(text: str, start: int, end: int) -> bool:
 def public_shape(text: str, start: int, end: int) -> bool:
     """A guess (entropy, the model) at text[start:end] is not a secret: it is a file name or path, a
     link a provider's search tool issued, a path on this Mac, a pin by hash, a commit or digest
-    not named a secret, a package or plugin id, a file in base64, or a
-    page's nonce. A token
+    not named a secret, a package or plugin id, a constant's name, a
+    file in base64, or a page's nonce. A token
     rule that knows a key's format still masks it wherever it is."""
     value = text[start:end]
     return (is_file_name(text, start, end) or is_path(value) or in_issued_link(text, start, end)
             or in_system_path(text, start, end) or in_encoded_file(text, start, end) or is_pin(value) or is_bare_hash(text, start, end) or is_package_ref(value)
+            or is_constant_name(value)
             or after_nonce(text, start, end))
 
 
@@ -312,7 +324,9 @@ def iban_valid(iban: str) -> bool:
 
 # '=' only as trailing base64 padding, so `NAME=value` never becomes one candidate.
 _PROSE_WORD = re.compile(r"[a-z]+")
-_PROSE_NEXT = re.compile(r" [a-z]")
+# A lowercase word that more words follow is prose; one an operator follows is a variable in code
+# (`secret = directory / 'secret.yaml'`, k8s-01 on Codex, Nov 18).
+_PROSE_NEXT = re.compile(r" (?:[a-z]|[-+*/%|&] )")
 _ENTROPY_CANDIDATE = re.compile(r"[A-Za-z0-9+/_-]{20,}={0,2}")
 _DIGEST_PREFIX = re.compile(r"(?i)(?:sha(?:1|224|256|384|512)|md5|nonce)[-:]")  # CSP: 'sha256-…', 'nonce-…'
 _HEX = re.compile(r"[0-9a-fA-F]+")

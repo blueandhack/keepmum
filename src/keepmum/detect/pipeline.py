@@ -17,7 +17,22 @@ from .merge import merge, narrow
 from .rules import RulesDetector, shannon_entropy
 
 _PIECE = re.compile(r"\S+")
-_EDGE = "/=:\"'`,;()[]{}<>"
+_EDGE = "/=:\"'`,;()[]{}<>\\"
+# A CSV row's fields: the model ran a span over `5e1f0c9a-…,us` (nb-01, Nov 18). A secret has no comma.
+_FIELD = re.compile(r"[^\s,]+")
+
+
+def _pieces(text: str, start: int, end: int) -> list[tuple[int, int]]:
+    """The pieces of a model span: split at whitespace, and at commas where the piece is a row of
+    fields (two or more commas, or a comma after an id)."""
+    out = []
+    for m in _PIECE.finditer(text, start, end):
+        piece = m.group()
+        if piece.count(",") >= 2 or ("," in piece and _IDENTIFIER.fullmatch(piece.split(",", 1)[0])):
+            out += [f.span() for f in _FIELD.finditer(text, m.start(), m.end())]
+        else:
+            out.append(m.span())
+    return out
 # Used with Pattern.match(text, pos), which anchors at pos (a leading ^ would not).
 _LABEL = re.compile(r"[A-Za-z_][\w.-]*=")
 _DIGEST = re.compile(r"(?i)(?:[\w.-]+@)?sha(?:1|256|384|512):")
@@ -245,12 +260,16 @@ class Pipeline:
         assignment (not as a URL path segment).
         """
         out = []
-        for m in _PIECE.finditer(text, span.start, span.end):
-            a, b = m.span()
+        for a, b in _pieces(text, span.start, span.end):
             while a < b and text[a] in _EDGE:
                 a += 1
-            while b > a and text[b - 1] in _EDGE:
-                b -= 1
+            while b > a:  # an edge, or an escape JSON text leaves after a value (`\"`, `\n`: nb-01, Nov 18)
+                if text[b - 1] in _EDGE:
+                    b -= 1
+                elif b - a > 2 and text[b - 2] == "\\" and text[b - 1] in "nrt":
+                    b -= 2
+                else:
+                    break
             label = _LABEL.match(text, a, b)
             if label:
                 a = label.end()

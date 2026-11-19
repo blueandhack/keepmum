@@ -360,6 +360,53 @@ def test_a_value_made_of_the_alphabet_in_order_is_a_placeholder(rules, text, mas
     assert bool(Pipeline(rules, None, pii=False).detect(text)) is masked
 
 
+def _guess(text: str, piece: str) -> list[Span]:
+    return [Span(text.index(piece), text.index(piece) + len(piece), "SECRET", 0.9, "pf-serve")]
+
+
+def test_a_guess_that_adds_the_host_to_a_password_gives_way_to_it(rules):
+    # The model ran a span from the password to the end of the URL (k8s-01, Nov 18).
+    pw = "h0pCNu6g3HluMilUuS"
+    text = f"DATABASE_URL=postgres://orders:{pw}@db.internal:5432/orders\n"
+    got = values(text, Pipeline(rules, _FakePF(_guess(text, f"{pw}@db.internal:5432/orders")), pii=False).detect(text))
+    assert got == [pw]
+    # From one character into the password (agy, k8s-01).
+    got = values(text, Pipeline(rules, _FakePF(_guess(text, f"{pw[1:]}@db.internal:5432/orders")), pii=False).detect(text))
+    assert got == [pw]
+
+
+def test_a_guess_with_more_than_the_host_around_a_rule_span_is_kept(rules):
+    pw = "h0pCNu6g3HluMilUuS"
+    text = f"postgres://orders:{pw}@db.internal:5432/orders?sslkey=Zq3bX8mL2vT9wR4kY7nP1sD6\n"
+    piece = f"{pw}@db.internal:5432/orders?sslkey=Zq3bX8mL2vT9wR4kY7nP1sD6"
+    got = values(text, Pipeline(rules, _FakePF(_guess(text, piece)), pii=False).detect(text))
+    assert any("Zq3bX8mL2vT9wR4kY7nP1sD6" in g for g in got)
+
+
+@pytest.mark.parametrize("text, piece, kept", [
+    # A constant's name the model took for a secret (k8s-01, Nov 18).
+    ("data:\n  STRIPE_SECRET_KEY: info\n", "STRIPE_SECRET_KEY", None),
+    # A CSV row: the id is not a secret, and no field is.
+    ("2: 5e1f0c9a-2d7b-4c3e-9a8f-0b6d4e2c1f73,us,12000,paid", "5e1f0c9a-2d7b-4c3e-9a8f-0b6d4e2c1f73,us", None),
+    # A key in JSON text keeps none of the escapes after it (nb-01, Nov 18).
+    ('os.environ[\\"KEY\\"] = \\"Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE\\"\\n", "df',
+     'Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE\\"\\n', "Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE"),
+    ('key = \\"Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE\\\\', 'Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE\\\\', "Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE"),
+])
+def test_model_spans_are_cut_to_the_value(rules, text, piece, kept):
+    got = values(text, Pipeline(rules, _FakePF(_guess(text, piece)), pii=False).detect(text))
+    assert got == ([kept] if kept else [])
+
+
+@pytest.mark.parametrize("text, masked", [
+    ("secret = directory / 'secret.yaml'", False),  # a variable in an expression (k8s-01 on Codex)
+    ("token = base + suffix", False),
+    ("password = sunshine", True),  # a lone word is still a password
+])
+def test_a_variable_in_an_expression_is_not_a_password(rules, text, masked):
+    assert bool(Pipeline(rules, None, pii=False).detect(text)) is masked
+
+
 def _png_b64(lines: int, sep: str) -> str:
     import base64, random
     rnd = random.Random(7)

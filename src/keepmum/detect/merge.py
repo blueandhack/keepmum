@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from . import PRIORITY, Span
 
 
@@ -27,7 +29,30 @@ def merge(spans: list[Span]) -> list[Span]:
 def narrow(spans: list[Span], text: str) -> list[Span]:
     """Before merging, the overlaps that should not merge into the widest span: a generic match that
     only adds a line's `$` to a token a format rule found, and a URL flagged for the value in it."""
-    return _narrow_urls(_trailing_dollar(spans, text))
+    return _narrow_urls(_guess_around_rule(_trailing_dollar(spans, text), text))
+
+
+# What a guess may add around a value a format rule found exactly, and still be about that value:
+# the user and colon before a password, the host, port and database after it.
+_BEFORE = re.compile(r"(?:[\w.+%-]*:)?")
+_AFTER = re.compile(r"(?:@[\w.-]+(?::\d+)?(?:/[\w./-]*)?)?")
+
+
+def _guess_around_rule(spans: list[Span], text: str) -> list[Span]:
+    """A guess (the model, entropy) over a value a format rule found exactly, or over part of it,
+    plus only the user and host around it, gives way to the rule's span. The model masked `<password>@db.internal:5432/orders`
+    from a connection string whose password the connection-string rule had found (k8s-01, Nov 18):
+    the placeholder stood for the host too, and the model could no longer say where the database is."""
+    from .rules import GUESSES
+
+    exact = [s for s in spans if s.source.startswith("rules:") and s.source not in GUESSES
+             and "secret-assignment" not in s.source]
+    if not exact:
+        return spans
+    return [s for s in spans if not (s.source in GUESSES and any(
+        s.start < e.end and e.start < s.end and (e.start, e.end) != (s.start, s.end)  # overlapping, not the same
+        and _BEFORE.fullmatch(text, min(s.start, e.start), e.start)
+        and _AFTER.fullmatch(text, e.end, max(s.end, e.end)) for e in exact))]
 
 
 def _trailing_dollar(spans: list[Span], text: str) -> list[Span]:
