@@ -328,6 +328,38 @@ def test_a_key_in_hex_is_masked_and_a_hash_is_not(rules, text, masked):
     assert any(_K64[:32] in g for g in got) is masked
 
 
+@pytest.mark.parametrize("text", [
+    # An f-string or format reference is not the value (self-01 live, Nov 18).
+    'self.assertEqual(scan(f"token = {GITHUB}"), [("github-token", GITHUB)])',
+    'url = f"https://api.example.com/?token={self.token}"',
+    'headers = {"Authorization": f"Bearer {token}"}; token = {cfg["token"]}',
+    # keepmum's own placeholder, cut short by the model.
+    "token = KEEPMUM_SECRET_a8",
+])
+def test_a_reference_or_a_cut_placeholder_is_not_a_secret(rules, text):
+    assert Pipeline(rules, None, pii=False).detect(text) == []
+
+
+@pytest.mark.parametrize("text, value", [
+    ('token = "{Zq3bX8mL2vT9wR4kY7nP1sD6}"', "Zq3bX8mL2vT9wR4kY7nP1sD6"),  # a value in braces is still one
+    ('payload = {"token": "ghp_8XVYhnYbsusja9YDeSu4dN3xO1tmeSYEyoVS"}', "ghp_8XVYhnYbsusja9YDeSu4dN3xO1tmeSYEyoVS"),
+])
+def test_a_secret_near_braces_is_still_masked(rules, text, value):
+    assert any(value in v for v in values(text, Pipeline(rules, None, pii=False).detect(text)))
+
+
+@pytest.mark.parametrize("text, masked", [
+    # A fake token made of the alphabet in order, as an agent writes for a test (self-01, Nov 18).
+    ('SLACK = "xoxb-' '123456789012-123456789012-AbCdEfGhIjKlMnOpQrStUvWx"', False),  # split: GitHub's push protection takes a whole fake key for a real one
+    ("api_key = abcdefghijklmnopqrstuvwxyz0123456789", False),
+    # One such run in a real password does not make it a fake.
+    ("password = Password0123456789!", True),
+    ("api_key = Zq3bX8mL2vT9wR4kY7nP1sD6abcdef", True),
+])
+def test_a_value_made_of_the_alphabet_in_order_is_a_placeholder(rules, text, masked):
+    assert bool(Pipeline(rules, None, pii=False).detect(text)) is masked
+
+
 def _png_b64(lines: int, sep: str) -> str:
     import base64, random
     rnd = random.Random(7)

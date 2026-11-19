@@ -183,5 +183,5 @@ def test_runs_mark_a_placeholder_from_a_third_of_the_value(rules):
 
     assert rules_mod.REPEATED_SHARE == pytest.approx(1 / 3)
     assert rules.looks_like_placeholder("xxxxxx") and rules.looks_like_placeholder("abcdefghijkl000000")  # 6 of 18
-    assert not rules.looks_like_placeholder("abcdefghijklmnopq000000")  # 6 of 23
-    assert not rules.looks_like_placeholder("abcdefghijklmnop00000")  # a run of 5 is no run
+    assert not rules.looks_like_placeholder("kqzmwbtrhvnxpdgls000000")  # 6 of 23
+    assert not rules.looks_like_placeholder("kqzmwbtrhvnxpdgl00000")  # a run of 5 is no run

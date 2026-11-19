@@ -351,6 +351,28 @@ _IBAN_COUNTRIES = frozenset(
 REPEATED_SHARE = 1 / 3
 
 
+SEQUENTIAL_SHARE = 2 / 3
+SEQUENTIAL_RUN = 6
+
+
+class _Sequential:
+    """Matches (search) a value made up of the alphabet or the digits in order, runs of
+    SEQUENTIAL_RUN or more covering SEQUENTIAL_SHARE of it: AbCdEfGhIjKl…, abcdef123456,
+    1234567890. A fake token an agent writes for a test (self-01, Nov 18); a real key has no such run.
+    A real password that only holds one (Password0123456789!) is still a secret."""
+
+    def search(self, value: str):
+        low, total, run = value.lower(), 0, 1
+        for i in range(1, len(low) + 1):
+            if i < len(low) and low[i].isalnum() and low[i - 1].isalnum() and ord(low[i]) == ord(low[i - 1]) + 1:
+                run += 1
+                continue
+            if run >= SEQUENTIAL_RUN:
+                total += run
+            run = 1
+        return total > 0 and total >= SEQUENTIAL_SHARE * len(value)
+
+
 class _Repeated:
     """The `repeated` filter: matches (search) when runs of one character, six or more, are at least
     REPEATED_SHARE of the value. A placeholder is mostly such runs; a real token has one by chance."""
@@ -393,6 +415,7 @@ class RulesDetector:
         self._placeholder_filters = [re.compile(f[k]) for k in ("stopwords", "placeholder", "public") if k in f]
         if "repeated" in f:  # not a plain search: how much of the value its runs are (_Repeated)
             self._placeholder_filters.append(_Repeated(re.compile(f["repeated"])))
+        self._placeholder_filters.append(_Sequential())
         self._all_filters = self._placeholder_filters + [re.compile(f[k]) for k in ("reference", "numeric") if k in f]
         self._prose_filters = self._all_filters + [re.compile(f[k]) for k in ("identifier",) if k in f]
         self.entropy = cfg.get("entropy", {"enabled": False})
