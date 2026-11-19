@@ -7,6 +7,62 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a13</title>
+      <pubDate>Thu, 19 Nov 2026 16:22:14 GMT</pubDate>
+      <sparkle:version>10013</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a13</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a13</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The thirteenth alpha of keepmum closes five ways a secret could still reach the model provider, stops masking a long list of things that were never secret, and makes the injection check much quieter on ordinary tool output. Keepmum can now also open at login.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a13.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Settings › Setup**.
+
+**From 0.1.0a2 through 0.1.0a12:** Keepmum updates itself if you allowed update checks (Settings › General › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a13.dmg.sha256`
+
+## Secrets that could still reach the provider
+
+- **A PDF the agent reads.** Claude Code and opencode send a PDF they read as the file itself, and keepmum passed files through unread, so a key printed in a vendor's onboarding PDF went out. keepmum now reads a PDF's text on your Mac. When it holds something keepmum masks, the model gets that text with the value masked, under a one-line note, in place of the file; a PDF with nothing to mask goes as it is. Codex's and the Antigravity CLI's attached PDFs are handled the same way.
+- **A secret that starts with `/`.** keepmum took any value after a secret's name that starts like a path for a path. About 1 in 75 keys in base64 starts with `/`, AWS secret access keys among them, and each of those was let through. A value is a path now only when it is made of named pieces, like `/run/secrets/db` or `~/.ssh/id_ed25519`.
+- **Part of a secret.** After keepmum had masked a key, a command that printed only part of it (`tail -c 200 .env`, or the same through `od -c`) sent that part out. A piece of 12 or more characters of a secret keepmum already masked is now masked too.
+- **Session cookies.** `Cookie: session=…`, `Set-Cookie`, curl's `-b`, as `curl -v` and request logs print them, had no rule. They are masked now.
+- **Keys written in hex**, such as a wallet's private key or an AES or HMAC key, are masked when their name says what they are, or when code turns them into bytes (`bytes.fromhex`, `Buffer.from(…, "hex")`). A transaction hash, a commit or a checksum is still left as it is.
+
+## Fewer things masked that were never secret
+
+Each of these went out as a placeholder, so the agent could not use it, and often stumbled over it:
+
+- paths on your Mac, a database's host next to its password, a variable's name (`STRIPE_SECRET_KEY`), a command after the word "secret", a shell default (`${TOKEN:-…}`), a URL's host next to a token in it
+- hashes and checksums: Docker digests, Actions pinned by commit, lockfile checksums (`h1:`, `sha512-`), transaction and block hashes, SSH key fingerprints
+- web search links, CSP nonces, plugin and package names, invoice and ticket numbers, request ids, regexes an agent searches with, and the agents' own tool descriptions
+- pictures and certificates in base64, and keepmum's own placeholders written back by the model
+- with personal data on: a CSV row as one value, city names, file listings and dot-files taken for names, addresses or emails
+
+A token is now kept as a placeholder in a command only when the step that carries it goes to a host its issuer does not use. A command that also mentions another host no longer leaves a placeholder in `.env`.
+
+## A quieter injection check
+
+The check warned on ordinary tool output: a kubeconfig's certificate, a script's own message, a single word inside Codex's output wrapper. It now reads a tool result as the agent would: the output inside Codex's wrapper, and a long run of base64 as the text it encodes, or as a mark when it encodes none. Text the model itself wrote, read back, is not checked. A result under 200 characters needs a score of 0.40 at Medium, Low and Lowest; High keeps 0.185. On keepmum's benchmarks, every attack hidden among base64 is still caught, and AgentDojo's and LLMail's short attacks all are; about 4 in 100 of prodnull's one-line attacks now pass at Medium. The README has the numbers.
+
+The commands check no longer reads a Python script run from a heredoc as shell, and Claude Code's own notice that it refused a write is no longer flagged. What the checks flagged is kept across restarts, so a conversation resent after a restart is not warned about again.
+
+## The app
+
+- **Open at login:** Settings › General › Startup. The menu bar opens when you log in; protection started at login already.
+- A picture the Antigravity CLI read no longer makes Google refuse the request.
+
+This release was checked with the unit tests, the scripted suite on all five agents, and the live suite on real models. 29 real-world tasks ran on Claude Code, Codex, the Antigravity CLI, pi and opencode, several times over, and every bug above came from those runs.</description>
+      <enclosure url="https://keepmum.app/update/v0.1.0a13/Keepmum-0.1.0a13.dmg" length="39757530" type="application/octet-stream" sparkle:edSignature="BuC80iw/GhYQuO/LllFswy4/eDaZNgtvGIqUUrKuVNLdJJaoVFxxtYi+3LSB+0xwLXnl0aSQ2VrfbscwjrG0CQ=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a12</title>
       <pubDate>Wed, 18 Nov 2026 09:39:49 GMT</pubDate>
       <sparkle:version>10012</sparkle:version>
@@ -464,6 +520,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: UGAFTmlr9ZtyBdLH8u3trUSCD5bgNxrA03lUiwOSnX9eXFZsJnQq8AwWnZ59t1arXGRnpnycmY1dgy+o+9lCAg==
-length: 48320
+edSignature: 1zNzLZIkODx9ITyKsteT+n+h6yvlvbUtM4i+JtKUJ2+T6c6h+ITN4Uv/VVTXIHFky1O0inJs9FOts6x+KjbCDw==
+length: 54219
 -->
