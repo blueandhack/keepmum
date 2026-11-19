@@ -154,7 +154,7 @@ def test_holdout_negatives_fixed(rules, text):
 
 def test_private_key_hex_still_caught(rules):
     key = "0x" + "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318"
-    assert values(f'private_key = "{key}"', rules.detect(f'private_key = "{key}"')) == [key]
+    assert set(values(f'private_key = "{key}"', rules.detect(f'private_key = "{key}"'))) == {key}
 
 
 def test_refine_drops_span_starting_inside_a_uuid(rules):
@@ -285,11 +285,75 @@ def test_a_csp_nonce_is_not_a_secret_but_an_assigned_key_is(rules):
     # Not a pin or a nonce: a token after an @, a value assigned to a key.
     ("ping me @Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE8gUi", "Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE8gUi", True),
     ("key='q7Xv2LmP9kR4tW8z'", "q7Xv2LmP9kR4tW8z", True),
+    # A commit on its own is a hash; the same hex named a token is not.
+    ("16d7db0cade58ea39e455f285a3fdc3d0b9bdb73 fix: handle an empty cart", "16d7db0cade58ea39e455f285a3fdc3d0b9bdb73", False),
+    # A transaction or block hash: the model flags every one (crypto-01 live, Nov 18).
+    ("| sepolia | 0x6a84a34c24c5132c69d6fae0b47916ba6486bc8427e304216412576744186407 | 9fd39b0 |",
+     "0x6a84a34c24c5132c69d6fae0b47916ba6486bc8427e304216412576744186407", False),
+    ("the wallet key: 0x6a84a34c24c5132c69d6fae0b47916ba6486bc8427e304216412576744186407",
+     "0x6a84a34c24c5132c69d6fae0b47916ba6486bc8427e304216412576744186407", True),
+    ("the deploy token is 16d7db0cade58ea39e455f285a3fdc3d0b9bdb73", "16d7db0cade58ea39e455f285a3fdc3d0b9bdb73", True),
+    # A plugin or package by name: Codex's plugin list (wf-01 on Codex, Nov 18), npm, Homebrew.
+    ("- Figma (figma@openai-curated-remote)\n", "figma@openai-curated-remote", False),
+    ("- Codex Security (codex-security@openai-curated-remote)\n", "codex-security@openai-curated-remote", False),
+    ("npm i react@18.3.1 @types/node@20.11.5", "react@18.3.1", False),
+    ("brew install node@20", "node@20", False),
+    # Not one: a token after a name.
+    ("deploy with ci@Zq3bX8mL2vT9wR4kY7nP1sD6", "ci@Zq3bX8mL2vT9wR4kY7nP1sD6", True),
 ])
 def test_a_pin_by_hash_or_a_nonce_is_not_a_secret(rules, text, piece, kept):
     pf = _FakePF([Span(text.index(piece), text.index(piece) + len(piece), "SECRET", 0.9, "pf-serve")])
     got = values(text, Pipeline(rules, pf, pii=False).detect(text))
     assert any(piece in g or g in piece for g in got) is kept
+
+
+_K64 = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318"
+
+
+@pytest.mark.parametrize("text, masked", [
+    # A key in hex, named or decoded as one: too few symbols for the entropy check (Nov 18).
+    (f"Use the wallet's private key 0x{_K64} to sign it", True),
+    (f'{{"signing_key": "{_K64}"}}', True),
+    (f'KEY = bytes.fromhex("{_K64}")', True),
+    (f'const key = Buffer.from("{_K64}", "hex");', True),
+    (f"AES key: {_K64[:32]}", True),
+    # The same digits as a hash: a transaction, a file's digest, a cache key, a public key.
+    (f"Sent. Transaction hash: 0x{_K64}", False),
+    (f"{_K64}  dist/app.tar.gz", False),
+    (f"Cache restored from key: node-cache-Linux-{_K64}", False),
+    (f"compressed public key 02{_K64}", False),
+])
+def test_a_key_in_hex_is_masked_and_a_hash_is_not(rules, text, masked):
+    got = values(text, Pipeline(rules, None, pii=False).detect(text))
+    assert any(_K64[:32] in g for g in got) is masked
+
+
+def _png_b64(lines: int, sep: str) -> str:
+    import base64, random
+    rnd = random.Random(7)
+    data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + bytes(rnd.randrange(256) for _ in range(45 * lines))
+    b = base64.b64encode(data).decode()
+    return sep.join(b[i:i + 60] for i in range(0, len(b), 60))
+
+
+@pytest.mark.parametrize("sep", ["\n", "\\n"])
+def test_a_picture_in_base64_is_not_a_secret(rules, sep):
+    # GitHub's contents API wraps base64 at 60; in JSON text the wraps are escaped. The model flagged
+    # the last line of a PNG Codex fetched (wf-02 on Codex, Nov 18).
+    blob = _png_b64(6, sep)
+    text = '{"structuredContent":{"content":"' + blob + '"}}'
+    last = blob.rsplit(sep, 1)[1].rstrip("=")
+    pf = _FakePF([Span(text.index(last), text.index(last) + len(last), "SECRET", 0.9, "pf-serve")])
+    assert Pipeline(rules, pf, pii=False).detect(text) == []
+
+
+def test_a_key_on_the_line_after_a_picture_is_still_masked(rules):
+    blob = _png_b64(3, "\n")
+    blob = blob.rstrip("=") + "=="  # padding ends the file
+    key = "Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE8gUiW2"
+    text = blob + "\n" + key + "\n"
+    pf = _FakePF([Span(text.index(key), text.index(key) + len(key), "SECRET", 0.9, "pf-serve")])
+    assert key in values(text, Pipeline(rules, pf, pii=False).detect(text))
 
 
 def test_file_names_the_entropy_check_or_the_model_took_for_secrets_are_not_masked(rules):

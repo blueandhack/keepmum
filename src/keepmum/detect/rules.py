@@ -198,8 +198,9 @@ def in_system_path(text: str, start: int, end: int) -> bool:
 
 # A pin: something fixed to a hash so it can be checked, made to be copied. A Docker image by digest
 # (python:3.12-slim@sha256:<64 hex>), an Action or a module pinned to a commit (actions/setup-node@<40
-# hex>), a bare digest. The model takes them for secrets (deploy-01, code-02 live, Nov 18). Hex of a
-# hash's length only: a key in hex is caught by its own rule, never by its look alone.
+# hex>), a commit or digest on its own. The model takes them for secrets (deploy-01, code-02 live, Nov 18).
+# Bare hex is a key as often as a hash (a wallet's private key, an AES key): it counts as a hash only
+# with no secret word right before it, and the hex-key rules catch a key named as one.
 _PIN = re.compile(r"(?:[\w./-]*(?::[\w.-]+)?@)?(?:sha(?:1|224|256|384|512):)?[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24}|[0-9a-fA-F]{56}"
                   r"|[0-9a-fA-F]{88})?")
 _HASH_MARK = re.compile(r"@|sha(?:1|224|256|384|512):")
@@ -207,9 +208,36 @@ _HASH_MARK = re.compile(r"@|sha(?:1|224|256|384|512):")
 _NONCE_BEFORE = re.compile(r"(?i)nonce(?:-|\s*=\s*\\*[\"']?)$")  # a quote escaped too: JSON text in a string
 
 
+# A word that names what follows as a secret ("the wallet's private key is 4c0883…", "token: 9f…").
+_SECRET_WORD_BEFORE = re.compile(r"(?i)\b(?:api[ _-]?key|key|token|secret|passw(?:or)?d|pwd|passphrase|auth|credentials?"
+                                 r"|bearer|seed)\b")
+
+
 def is_pin(value: str) -> bool:
-    """value is a pin by hash (_PIN): it says which hash it is (`@`, `sha256:`), or is one alone."""
-    return bool(_PIN.fullmatch(value)) and (bool(_HASH_MARK.search(value)) or bool(_HEX_ONLY.fullmatch(value)))
+    """value is a pin by hash (_PIN) that says which hash it is (`@`, `sha256:`)."""
+    return bool(_PIN.fullmatch(value)) and bool(_HASH_MARK.search(value))
+
+
+# A package, plugin or tool by name and where it comes from or which version: Codex lists its plugins as
+# `figma@openai-curated-remote`, and the model took them for secrets (wf-01 on Codex, Nov 18); npm's
+# `react@18.3.1`, Homebrew's `node@20`. Words and numbers only, the registry without a dot (so not an
+# email): a token after an @ mixes letters and digits in one piece and is still masked.
+_PACKAGE_REF = re.compile(r"@?[a-z][a-z-]*(?:/[a-z][a-z-]*)?@(?:[a-z]+(?:-[a-z]+)*|v?\d+(?:\.\d+)*(?:-[a-z]+(?:\.\d+)?)?)")
+
+
+def is_package_ref(value: str) -> bool:
+    """value names a package, plugin or tool and its registry or version (_PACKAGE_REF)."""
+    return bool(_PACKAGE_REF.fullmatch(value))
+
+
+def is_bare_hash(text: str, start: int, end: int) -> bool:
+    """text[start:end] is hex of a hash's length (a commit, a digest, a transaction or block hash
+    written 0x…) with no secret word in the 40 characters before it: hex named a key is one (Nov 18)."""
+    value = text[start:end]
+    if value[:2] in ("0x", "0X"):
+        value = value[2:]
+    return (bool(_PIN.fullmatch(value)) and bool(_HEX_ONLY.fullmatch(value))
+            and not _SECRET_WORD_BEFORE.search(text, max(0, start - 40), start))
 
 
 def after_nonce(text: str, start: int, end: int) -> bool:
@@ -219,11 +247,14 @@ def after_nonce(text: str, start: int, end: int) -> bool:
 
 def public_shape(text: str, start: int, end: int) -> bool:
     """A guess (entropy, the model) at text[start:end] is not a secret: it is a file name or path, a
-    link a provider's search tool issued, a path on this Mac, a pin by hash, or a page's nonce. A token
+    link a provider's search tool issued, a path on this Mac, a pin by hash, a commit or digest
+    not named a secret, a package or plugin id, a file in base64, or a
+    page's nonce. A token
     rule that knows a key's format still masks it wherever it is."""
     value = text[start:end]
     return (is_file_name(text, start, end) or is_path(value) or in_issued_link(text, start, end)
-            or in_system_path(text, start, end) or is_pin(value) or after_nonce(text, start, end))
+            or in_system_path(text, start, end) or in_encoded_file(text, start, end) or is_pin(value) or is_bare_hash(text, start, end) or is_package_ref(value)
+            or after_nonce(text, start, end))
 
 
 def in_issued_link(text: str, start: int, end: int) -> bool:
@@ -231,6 +262,13 @@ def in_issued_link(text: str, start: int, end: int) -> bool:
     if "grounding-api-redirect/" not in text:
         return False
     return any(m.start() <= start and end <= m.end() for m in _ISSUED_LINK.finditer(text))
+
+
+def in_encoded_file(text: str, start: int, end: int) -> bool:
+    """text[start:end] lies inside a file in base64 that starts with the file's own signature (_ENCODED_FILE)."""
+    if not _FILE_MAGIC_HINT.search(text):
+        return False
+    return any(m.start() <= start and end <= m.end() for m in _ENCODED_FILE.finditer(text))
 
 
 def is_file_name(text: str, start: int, end: int) -> bool:
@@ -287,6 +325,13 @@ _PUBLIC_PEM = re.compile(r"-----BEGIN (?:PUBLIC KEY|RSA PUBLIC KEY|CERTIFICATE|X
 # CLI's search_web, Gemini CLI's google_web_search). Their opaque handle is Google's own, made for the
 # model; masked, the model loses its sources and Google learns nothing (wf-03, Nov 18). Only these
 # hosts: a token in another URL (a Slack webhook, a presigned link) is still a guess worth masking.
+# A file in base64, from its signature: PNG, JPEG, GIF, WebP or WAV (RIFF), PDF, zip (and docx, xlsx).
+# Its lines may be wrapped, by new lines or, in JSON text, by escaped ones (GitHub's contents API wraps
+# at 60). A secret never starts with a file's magic bytes; the model flagged the last line of a PNG
+# Codex fetched (wf-02 on Codex, Nov 18).
+_FILE_MAGIC = r"(?:iVBORw0KGgo|/9j/|R0lGOD[lh]h|UklGR|JVBERi0|UEsDB)"
+_FILE_MAGIC_HINT = re.compile(_FILE_MAGIC)
+_ENCODED_FILE = re.compile(r"(?<![A-Za-z0-9+/])" + _FILE_MAGIC + r"(?:[A-Za-z0-9+/]|\\{1,3}[nr]|\r?\n)*={0,2}")  # padding ends it
 _ISSUED_LINK = re.compile(r"https?://vertexaisearch\.cloud\.google\.com/grounding-api-redirect/[A-Za-z0-9_=-]+")
 _CARD = re.compile(r"(?<![\d-])\d(?:[ -]?\d){12,18}(?![\d-])")
 # Issuer prefixes for Visa, Mastercard, Amex, Discover; cuts Luhn-valid noise like timestamps.
@@ -419,6 +464,8 @@ class RulesDetector:
         public = [m.span() for m in _PUBLIC_PEM.finditer(text)] if "-----BEGIN" in text else []
         if "grounding-api-redirect/" in text:
             public += [m.span() for m in _ISSUED_LINK.finditer(text)]
+        if _FILE_MAGIC_HINT.search(text):
+            public += [m.span() for m in _ENCODED_FILE.finditer(text)]
         for m in _ENTROPY_CANDIDATE.finditer(text):
             if any(a <= m.start() < b for a, b in public):
                 continue

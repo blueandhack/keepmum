@@ -79,6 +79,23 @@ keywords = ["private key"]
 filters = false
 
 [[rule]]
+id = "hex-key"
+# A key in hex named as one, in prose or code: "the wallet's private key is 0x4c0883…", "AES key
+# 9f86d0…", "signing_key: …". Hex has too few symbols for the entropy check, and the same 64 hex
+# digits are a transaction hash or a digest elsewhere, so the name decides (Nov 18).
+regex = '''(?i)(?:private|secret|signing|encryption|decryption|aes|hmac|wallet|master|session)[ _.-]?keys?\b[^\n]{0,40}?(?<![0-9a-fA-F])((?:0x)?[0-9a-fA-F]{32}(?:[0-9a-fA-F]{32}){0,3})(?![\w])'''
+group = 1
+keywords = ["key"]
+
+[[rule]]
+id = "hex-decoded-key"
+# Hex turned into bytes in code is a key or a seed: bytes.fromhex("…"), unhexlify, hex::decode,
+# Buffer.from("…", "hex"). 32 hex digits or more.
+regex = '''(?i)(?:fromhex|unhexlify|hex2bin|hex::decode|decode_hex|hexToBytes|Buffer\.from)\s*\(\s*b?\\{0,3}["']((?:0x)?[0-9a-fA-F]{32,})\\{0,3}["']'''
+group = 1
+keywords = ["hex"]
+
+[[rule]]
 id = "jwt"
 regex = '''\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}'''
 keywords = ["eyj"]
