@@ -181,7 +181,8 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
             mcp = {"name": "notes", "command": sys.executable, "args": [str(Path(__file__).parent / "mcp_notes.py")],
                    "env": {"KEEPMUM_E2E_MCP_LOG": str(out / "mcp.jsonl"),
                            "KEEPMUM_E2E_MCP_REPLY": case.resolve(case.raw.get("mcp_reply", "no record"), salt)}}
-        argv, env = agent.command(ws, server.port, case.resolve(case.prompt, salt), REAL_HOME, out, model, extra, mcp, mode)
+        argv, env = agent.command(ws, server.port, case.resolve(case.prompt, salt), REAL_HOME, out, model,
+                                     [*extra, *case.agent_args.get(agent.name, [])], mcp, mode)
         # Where the agent works: some take it from PWD, which is the harness's own folder otherwise
         # (opencode read this repository as its project before this was set).
         env["PWD"] = str(ws)

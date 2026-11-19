@@ -162,8 +162,9 @@ class Codex(Agent):
                     t.tool_inputs.append(json.dumps(item.get("changes", []), ensure_ascii=False))
                 elif kind == "mcp_tool_call":
                     t.mcp_inputs.append(json.dumps(item, ensure_ascii=False))
-                    # With a ChatGPT login Codex searches the web through its own connector.
-                    if item.get("server") == "codex_apps" and "search" in str(item.get("tool", "")):
+                    # With a ChatGPT login Codex searches the web, or reads a page or a public
+                    # repository's file (github.fetch_file, wf-03 on Nov 18), through its own connector.
+                    if item.get("server") == "codex_apps" and any(w in str(item.get("tool", "")) for w in ("search", "fetch")):
                         t.web_calls += 1
                 elif kind == "web_search":
                     t.network_inputs.append(json.dumps(item, ensure_ascii=False))

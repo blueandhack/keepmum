@@ -47,6 +47,10 @@ def _gen(kind: str) -> str:
         return "sk_live_" + "".join(secrets.choice(_ALNUM) for _ in range(24))
     if kind == "password":  # no telling shape: found by where it is (a connection string, PASSWORD=)
         return "".join(secrets.choice(_ALNUM) for _ in range(18))
+    if kind == "hex-key":  # a wallet's private key, or any key written in hex: nothing in its look says so
+        return "0x" + secrets.token_hex(32)
+    if kind == "hex":
+        return secrets.token_hex(32)
     if kind == "fly-token":
         return "fo1_" + "".join(secrets.choice(_ALNUM + "_-") for _ in range(43))
     if kind == "ssh-ed25519":  # a real OpenSSH private key, new each run, so ssh-keygen can read it
@@ -108,6 +112,7 @@ class Case:
     # Commands run in the workspace before the agent starts, after its files are written (templates
     # allowed): `git init` and a first commit, for a case about a repository.
     setup: list[str] = field(default_factory=list)
+    agent_args: dict[str, list[str]] = field(default_factory=dict)  # per agent, after the run's own
     timeout: int = 300
     raw: dict = field(default_factory=dict)
 
@@ -172,7 +177,7 @@ def load_case(path: Path) -> Case:
         files=raw.get("files", {}), workspace_dir=raw.get("workspace_dir", "ws"), script=raw.get("script", []),
         expect=raw.get("expect", {}), known_gap=raw.get("known_gap"),
         mcp=bool(raw.get("mcp", False)), needs=list(raw.get("needs", [])),
-        setup=list(raw.get("setup", [])), timeout=raw.get("timeout", 300), raw=raw,
+        setup=list(raw.get("setup", [])), agent_args={k: list(v) for k, v in raw.get("agent_args", {}).items()}, timeout=raw.get("timeout", 300), raw=raw,
     )
 
 

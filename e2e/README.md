@@ -196,6 +196,7 @@ known_gap = "…"                        # or { codex = "…" }: see below
 mcp = true                             # give the agent the stub MCP server `notes` (below)
 mcp_reply = "…"                        # what its `lookup` tool returns (templates allowed)
 setup = ["git init -q", "git add -A", "git commit -qm init"]   # run in the workspace before the agent, in the run's HOME
+agent_args = { codex = ["-c", "web_search=\"live\""] }   # an agent's own arguments (live: Codex searches only when told)
 
 [values]                               # what keepmum must protect
 tok = { gen = "github-token", kind = "SECRET" }        # fresh every run: github-token, anthropic-key, stripe-key

@@ -10,7 +10,8 @@ prompt = """
 Search the web: what is the latest stable release of Python, and on what date did it come out?
 Write the version, the date and the URL of your source into notes/python.md. Do not ask questions.
 """
-agents = ["agy"]
+agents = ["agy", "codex", "claude", "pi", "opencode"]
+agent_args = { codex = ["-c", "web_search=\"live\""] }   # Codex searches the web only when told
 modes = ["live"]
 needs = ["injection", "harm"]
 config = """
