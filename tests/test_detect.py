@@ -483,6 +483,12 @@ def test_a_model_span_is_cut_at_a_name_and_at_escaped_breaks(rules, text, piece,
     ("rg -n 'STRIPE_KEY|STRIPE_SECRET_KEY|sk_(live|test)_' .", "STRIPE_KEY|STRIPE_SECRET_KEY|sk_(live|test)_", "SECRET"),
     ("grep -oE 'sha512?-?[A-Za-z0-9+/=]+' web/yarn.lock", "?-?[A-Za-z0-9+/=]+", "SECRET"),
     ("< set-cookie: session=x; Path=/; HttpOnly; Secure", "HttpOnly", "SECRET"),
+    # Claude Code's own instructions, a nonce begun at its hyphen, a key file's path begun mid-word (Nov 18).
+    ("OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project",
+     "openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama", "SECRET"),
+    ("script-src 'self' 'nonce-q7Xv2LmP9kR4tW8z'", "-q7Xv2LmP9kR4tW8z", "SECRET"),
+    ("- Key: keys/deploy_ed25519", "ploy_ed25519", "SECRET"),
+    ("256 SHA256:tsr02mISijUYvTRENTacI6TVaZdJLqUJp02U0osx4Xs deploy@ci (ED25519)", "tsr02mISijUYvTRENTacI6TVaZdJLqUJp02U0osx4Xs", "SECRET"),
     ("13:> Authorization: Bearer [omitted]\\n18:< x-request-id: 4e8a1c2f-7b3d-4a6e-9f05-c1d2b3a4e5f6\\n",
      "4e8a1c2f-7b3d-4a6e-9f05-c1d2b3a4e5f6", "SECRET"),
 ])
@@ -510,6 +516,18 @@ def test_a_password_in_word_xml_ends_at_its_tag(rules):
 
 def test_a_stand_in_password_is_no_password(rules):
     assert Pipeline(rules, None, pii=False).detect("PASSWORD=mypassword") == []
+
+
+def test_a_known_value_at_a_line_end_drops_the_dollar(rules):
+    # `cat -A .env`: a key pasted in the prompt, masked before, then printed with the line's `$` (crypto-01).
+    from keepmum.redact import Redactor
+    from keepmum.vault import Vault
+
+    key = "0x6f5a82662d9f886a8a081921597c2886db57f9ffa02253037040ddb171698574"
+    r = Redactor(Pipeline(rules, None, pii=False), Vault(b"k" * 32))
+    r.redact_text(f"The staging signing key is {key} - add it to .env")
+    out = r.redact_text(f"STAGING_SIGNING_KEY={key}$\nAPP_ENV=dev$")
+    assert out.endswith("$\nAPP_ENV=dev$") and key not in out
 
 
 def test_a_token_made_of_letters_is_still_a_secret(rules):

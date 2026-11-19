@@ -60,7 +60,8 @@ def _trailing_dollar(spans: list[Span], text: str) -> list[Span]:
     way to that token. `sed -n l` and `cat -A` end each line with `$`, and so does a grep anchor
     (`^GITHUB_TOKEN=ghp_…$`): masked with it, the model got one placeholder for the token and the
     `$`, and a copy of it restored both (a live pi run on DeepSeek, base-01)."""
-    exact = [s for s in spans if s.source.startswith("rules:") and "secret-assignment" not in s.source]
+    # A format rule's, or a value keepmum masked before (a key pasted in the prompt: crypto-01, Nov 18).
+    exact = [s for s in spans if (s.source.startswith("rules:") or s.source == "known") and "secret-assignment" not in s.source]
     if not exact:
         return spans
     return [s for s in spans if not ("secret-assignment" in s.source and text[s.end - 1:s.end] == "$" and any(

@@ -273,6 +273,21 @@ def is_reference(value: str) -> bool:
     return bool(_REFERENCE.fullmatch(value) or _PREFIX_ONLY.fullmatch(value))
 
 
+_PATH_TOKEN_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/~@+-")
+
+
+def in_path_token(text: str, start: int, end: int) -> bool:
+    """text[start:end] is part of a path of named pieces: the model began `ploy_ed25519` inside
+    `keys/deploy_ed25519` (srv-01 on opencode, Nov 18). The whole token decides (is_path)."""
+    a, b = start, end
+    while a > 0 and text[a - 1] in _PATH_TOKEN_CHARS:
+        a -= 1
+    while b < len(text) and text[b] in _PATH_TOKEN_CHARS:
+        b += 1
+    token = text[a:b].strip("./-")
+    return (a, b) != (start, end) and is_path(token)
+
+
 def is_markup(value: str) -> bool:
     """A tag's text: `</STEP_9>`, an agent's own `<…_OUTPUT>` (agy, doc-03)."""
     return "</" in value or "><" in value
@@ -283,7 +298,7 @@ def is_labeled_digest(value: str) -> bool:
 
 
 _B64_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
-_DIGEST_LABEL_BEFORE = re.compile(r"(?:sha(?:1|256|384|512)-|h1:)$")
+_DIGEST_LABEL_BEFORE = re.compile(r"(?i)(?:sha(?:1|256|384|512)[-:]|h1:|md5:)$")  # SHA256:… an SSH key's fingerprint (srv-01)
 
 
 def in_labeled_digest(text: str, start: int, end: int) -> bool:
@@ -309,8 +324,9 @@ def in_hostname(text: str, start: int, end: int) -> bool:
 
 
 # A pattern, not a value: a character class with a range, an alternation, an escape class
-# (`STRIPE_KEY|STRIPE_SECRET_KEY|sk_(live|test)_`, `?-?[A-Za-z0-9+/=]+`: an agent's grep, Nov 18).
-_REGEX_SHAPE = re.compile(r"\[[^\]]*\w-\w[^\]]*\]|\([^()]*\|[^()]*\)|\\[dwsbS]|^[\w()|]+\|[\w()|]+$")
+# (`STRIPE_KEY|STRIPE_SECRET_KEY|sk_(live|test)_`, `?-?[A-Za-z0-9+/=]+`: an agent's grep, Nov 18;
+# `openai|langchain_openai|google.generativeai|…`, in Claude Code's own instructions).
+_REGEX_SHAPE = re.compile(r"\[[^\]]*\w-\w[^\]]*\]|\([^()]*\|[^()]*\)|\\[dwsbS]|^[\w.()|-]+\|[\w.()|-]+$")
 
 
 def is_regex(value: str) -> bool:
@@ -333,7 +349,9 @@ def is_bare_hash(text: str, start: int, end: int) -> bool:
 
 def after_nonce(text: str, start: int, end: int) -> bool:
     """text[start:end] is a nonce: it starts with `nonce-`, or a nonce marker comes right before it."""
-    return text[start:end].lower().startswith("nonce-") or bool(_NONCE_BEFORE.search(text, max(0, start - 12), start))
+    value = text[start:end].lower()
+    return (value.startswith("nonce-") or bool(_NONCE_BEFORE.search(text, max(0, start - 12), start))
+            or value.startswith("-") and text[max(0, start - 5):start].lower() == "nonce")  # `nonce` | `-q7Xv…` (fe-01)
 
 
 def public_shape(text: str, start: int, end: int) -> bool:
@@ -347,7 +365,7 @@ def public_shape(text: str, start: int, end: int) -> bool:
             or in_system_path(text, start, end) or in_encoded_file(text, start, end) or is_pin(value) or is_bare_hash(text, start, end) or is_package_ref(value)
             or is_constant_name(value) or is_labeled_digest(value) or is_object_id(value) or is_hostname(value)
             or in_labeled_digest(text, start, end) or in_hostname(text, start, end) or is_regex(value)
-            or is_reference(value) or is_markup(value)
+            or is_reference(value) or is_markup(value) or in_path_token(text, start, end)
             # A word: `contexts`, a YAML key; `HttpOnly` (cloud-01, debug-01). Not a token made of letters,
             # which has capitals all through it.
             or value.isalpha() and len(value) <= 16 and sum(c.isupper() for c in value) <= 2

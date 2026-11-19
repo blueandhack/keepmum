@@ -108,3 +108,30 @@ def test_a_pdf_in_a_gemini_function_result_goes_as_text_in_its_response():
 
 def test_keepmums_own_prefix_alone_is_no_secret():
     assert Pipeline(RulesDetector(), None).detect("api_key = KEEPMUM_") == []
+
+
+def test_a_dump_of_a_secrets_cut_off_tail_is_masked():
+    # `tail -c 200 .env | od -c | tail -3` printed the last 23 characters of a key keepmum had masked
+    # (crypto-01 on Claude Code, Nov 18).
+    import subprocess
+
+    r = redactor()
+    key = "0x" + secrets.token_hex(32)
+    assert "KEEPMUM_SECRET_" in r.redact_text(f"STAGING_SIGNING_KEY={key}")
+    dump = subprocess.run(["od", "-c"], input=(key[-23:] + "\n").encode(), capture_output=True).stdout.decode()
+    out = r.redact_text(dump)
+    assert "KEEPMUM_SECRET_" in out and " ".join(key[-10:-4]) not in out
+    # A dump of anything else is left alone.
+    other = subprocess.run(["od", "-c"], input=b"LOG_LEVEL=info\nAPP_ENV=dev\n", capture_output=True).stdout.decode()
+    assert r.redact_text(other) == other
+
+
+def test_a_secrets_cut_off_tail_in_plain_text_is_masked():
+    # `tail -c 200 .env` began in the middle of a key keepmum had masked whole (crypto-01, Nov 18).
+    r = redactor()
+    key = "0x" + secrets.token_hex(32)
+    assert "KEEPMUM_SECRET_" in r.redact_text(f"DEPLOYER_PRIVATE_KEY={key}\nRPC_URL=https://rpc.example.org")
+    out = r.redact_text(key[-54:] + "\nRPC_URL=https://rpc.example.org\nCHAIN_ID=11155111")
+    assert key[-54:-30] not in out and out.startswith("KEEPMUM_SECRET_") and "CHAIN_ID=11155111" in out
+    # Text that only shares a few characters with it is left alone.
+    assert r.redact_text(f"commit {key[2:10]}abcdef0123 done") == f"commit {key[2:10]}abcdef0123 done"

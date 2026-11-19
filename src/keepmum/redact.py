@@ -60,6 +60,11 @@ AGENT_NOTICE = re.compile(r"Claude requested permissions to (?:edit|write to|wri
                           r"(?: which is a sensitive file\.|, but you haven't granted it yet\.)")
 
 
+# Characters of a secret in a row that make a decoded dump, or a cut-off run, hold it (Redactor._holds_a_piece,
+# Redactor._known_pieces).
+SECRET_PIECE = 12
+_KEYLIKE_TOKEN = re.compile(r"(?<![A-Za-z0-9+/_.-])[A-Za-z0-9+/_.-]{12,}(?![A-Za-z0-9+/_.-])")
+
 # Characters of text kept on each side of a masked value for the Logs page's context.
 CONTEXT = 80
 
@@ -287,6 +292,7 @@ class Redactor:
                       if (kind := self.vault.kind_of(value)) not in passed
                       and not (released and released(value, self.vault.sources_of(value), kind))]
         spans += self._encoded(text, spans, known, blocks)
+        spans += self._known_pieces(text, spans)
         return merge(narrow(spans, text)), seen
 
     def _known_in(self, text: str, derived: list, known) -> list[tuple[int, int, str]]:
@@ -324,8 +330,62 @@ class Redactor:
             kinds = [s.type for s in rules.detect(decoded) if s.source not in GUESSES]
             if known is not None:
                 kinds += [self.vault.kind_of(m.group()) for m in known.finditer(decoded)]
+            if not kinds and self._holds_a_piece(decoded):
+                kinds = ["SECRET"]
             if kinds:
                 out.append(Span(start, end, min(kinds, key=PRIORITY.__getitem__), 0.9, "decoded"))
+        return out
+
+    def _holds_a_piece(self, decoded: str) -> bool:
+        """decoded holds SECRET_PIECE characters in a row of a secret keepmum masked before: a dump of
+        a file cut short (`tail -c 200 .env | od -c | tail -3` printed a key's last 23 characters,
+        crypto-01 on Claude Code, Nov 18). Indexed once per change of the vault."""
+        pieces = self._secret_pieces()
+        if not pieces:
+            return False
+        flat = "".join(decoded.split())
+        return any(flat[i:i + SECRET_PIECE] in pieces for i in range(len(flat) - SECRET_PIECE + 1))
+
+    def _secret_pieces(self) -> dict[str, str]:
+        """Every SECRET_PIECE characters in a row of each secret the vault holds: piece -> the secret.
+        Built again only when the vault changes."""
+        version = (len(self.vault), self.vault.mark(), getattr(self.detector, "generation", None))
+        if getattr(self, "_pieces_version", None) != version:
+            pieces: dict[str, str] = {}
+            passed = getattr(self.detector, "pass_types", frozenset())
+            released = getattr(self.detector, "lets_through", None)
+            for value in list(self.vault._values.values()):
+                if not isinstance(value, str) or len(value) < SECRET_PIECE + 4 or self.vault.kind_of(value) != "SECRET":
+                    continue
+                # What the settings let through now is no piece to mask either (the known pass's rule).
+                if "SECRET" in passed or released and released(value, self.vault.sources_of(value), "SECRET"):
+                    continue
+                if True:
+                    flat = "".join(value.split())
+                    for i in range(len(flat) - SECRET_PIECE + 1):
+                        pieces.setdefault(flat[i:i + SECRET_PIECE], flat)
+            self._pieces, self._pieces_version = pieces, version
+        return self._pieces
+
+    def _known_pieces(self, text: str, spans: list[Span]) -> list[Span]:
+        """Pieces of a secret masked before, cut off by a command: `tail -c 200 .env` began in the
+        middle of a key keepmum had masked whole a request earlier, and the rest of it went out (crypto-01
+        on Claude Code, Nov 18). Each run of key-like characters that holds SECRET_PIECE of a secret's
+        characters in a row is masked as far as it matches that secret."""
+        pieces = self._secret_pieces()
+        if not pieces:
+            return []
+        out = []
+        # A piece counts only as a whole token (`=` and `:` end one): masked inside a longer one, its
+        # placeholder would run into the characters after it (`…e6ab` + `fa64` reads as another id).
+        for m in _KEYLIKE_TOKEN.finditer(text):
+            a, b = m.span()
+            run = m.group()
+            if len(run) < SECRET_PIECE or "KEEPMUM_" in run or any(s.start < b and a < s.end for s in spans):
+                continue
+            value = pieces.get(run[:SECRET_PIECE])
+            if value is not None and run in value:
+                out.append(Span(a, b, "SECRET", 1.0, "known"))
         return out
 
     def redact_text(self, text: str) -> str:
