@@ -106,6 +106,7 @@ class Tap:
         ex = Exchange(name, request.method, path, request.url.query,
                       {k: ("…" if k in SECRET_HEADERS else v) for k, v in request.headers.items()},
                       decode_body(raw, request.headers.get("content-encoding")))
+        ex.meta["t0"] = time.monotonic()  # timing: the provider's share of a run (run.py "timing")
         with self._lock:
             self.exchanges.append(ex)
         target = self.targets.get(name)
@@ -133,6 +134,7 @@ class Tap:
             finally:
                 ex.reply = b"".join(chunks)
                 ex.meta["done"] = True  # the whole reply has gone back (restart_after waits for it)
+                ex.meta["t1"] = time.monotonic()
                 await upstream.aclose()
                 if client is not self.client:
                     await client.aclose()

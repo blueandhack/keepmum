@@ -184,7 +184,9 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         return p
 
     try:
+        built = time.monotonic()
         proxy = make_proxy()
+        built = time.monotonic() - built
         live_vault["vault"] = proxy.redactor.vault
         restarted = threading.Event()
 
@@ -246,6 +248,7 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
             env2["PWD"] = str(ws2)
             companion = subprocess.Popen(argv2, env=env2, cwd=ws2, stdin=subprocess.DEVNULL,
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        session = time.monotonic()
         try:
             done = subprocess.run(argv, env=env, cwd=ws, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                   timeout=case.timeout)
@@ -262,14 +265,22 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
                 companion.kill()
                 companion.communicate()
             companion_code = companion.returncode
+        session = time.monotonic() - session
         # Warn mode checks after the request was sent: let those finish before reading what was found.
+        drained = time.monotonic()
         deadline = time.monotonic() + 60
         while any(p._background for p in proxies) and time.monotonic() < deadline:
             time.sleep(0.1)
+        drained = time.monotonic() - drained
         masked = {ph: (ph.split("_")[1], value) for p in proxies for ph, value in p.redactor.vault._values.items()}
         events = [e for p in proxies for e in p.stats.events]
         hits = [h for p in proxies for h in p.stats.snapshot()["guard"]["hits"]]
-        keepmum = {"unresolved": sum(p.stats.unresolved for p in proxies),
+        posts = [ex for ex in tap.exchanges if ex.method == "POST" and "t1" in ex.meta and "t0" in ex.meta]
+        scans = [e.get("scan_ms") for e in events if e.get("scan_ms") is not None]
+        timing = {"build_s": round(built, 2), "session_s": round(session, 2), "drain_s": round(drained, 2),
+                  "requests": len(posts), "provider_s": round(sum(ex.meta["t1"] - ex.meta["t0"] for ex in posts), 2),
+                  "scan_s": round(sum(scans) / 1000, 2), "scan_max_ms": round(max(scans), 1) if scans else 0}
+        keepmum = {"unresolved": sum(p.stats.unresolved for p in proxies), "timing": timing,
                    "restarted": restarted.is_set(),
                    "hits": [{k: h.get(k) for k in ("check", "action", "source", "score", "chars")} for h in hits],
                    "warned": sorted({h.get("check") for h in hits if h.get("action") == "warned"}),
@@ -337,6 +348,7 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         "tools": sorted(scripted.tools) if scripted else None,
         "code_mode": next((s.get("code_mode") for s in (scripted.served if scripted else []) if "code_mode" in s), None),
         "usage": cost.of(provider).as_dict() if mode == "live" else None,
+        "timing": keepmum.get("timing"),
     }
     if keep is not None and (keep_all or result["status"] in ("fail", "gap-passed")):
         d = keep / f"{case.id}.{agent.name}.{mode}.{rep}"
