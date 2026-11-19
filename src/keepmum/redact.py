@@ -489,7 +489,15 @@ class Redactor:
                 tool = getattr(self, "_gemini_results", {}).get(id(part)) \
                     or (resp.get("name") if isinstance(resp.get("name"), str) else None)
                 with self._result_of(tool):
-                    out[key] = {**resp, **{k: self._values(resp[k]) for k in ("response", "parts") if k in resp}}
+                    new = {**resp, **({"response": self._values(resp["response"])} if "response" in resp else {})}
+                    # A result's own parts are parts: their text masked, an image (inline_data, the
+                    # Antigravity CLI's read_file of a picture) or a file as it is. A placeholder in
+                    # an image's base64 made Google refuse the request (wf-01, Nov 18).
+                    if isinstance(resp.get("parts"), list):
+                        new["parts"] = [self._gemini_part(p) for p in resp["parts"]]
+                    elif "parts" in resp:
+                        new["parts"] = self._values(resp["parts"])
+                    out[key] = new
         for key, field in (("executableCode", "code"), ("executable_code", "code"),
                            ("codeExecutionResult", "output"), ("code_execution_result", "output")):
             if isinstance(out.get(key), dict) and isinstance(out[key].get(field), str):

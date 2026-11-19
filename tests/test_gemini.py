@@ -49,6 +49,22 @@ def test_every_content_is_masked_and_protocol_fields_are_kept():
     assert out["tools"] == body["tools"]
 
 
+@pytest.mark.parametrize("inline", ["inline_data", "inlineData"])
+def test_an_image_in_a_tool_result_passes_through_and_its_text_is_masked(inline):
+    # The Antigravity CLI's read_file of a picture returns it in the result's own parts: masked in
+    # part, Google refused the request ("Base64 decoding failed", wf-01, Nov 18).
+    canary = selftest.make_canary()
+    r = redactor()
+    image = {inline: {"mime_type": "image/png", "data": f"iVBORw0KGgo/{canary}/AAAA"}}
+    body = {"contents": [{"role": "user", "parts": [{"function_response": {
+        "id": "c1", "name": "read_file", "response": {"output": f"read {canary}"},
+        "parts": [image, {"text": f"token {canary}"}]}}]}]}
+    resp = r.redact_gemini_request(body)["contents"][0]["parts"][0]["function_response"]
+    assert resp["parts"][0] == image
+    assert canary not in json.dumps(resp["response"]) and canary not in resp["parts"][1]["text"]
+    assert image[inline]["data"] not in [t for _, t, _ in r.tool_results]  # its bytes are not checked as text
+
+
 def test_the_hint_goes_only_where_a_system_instruction_is_accepted():
     r = redactor()
     contents = [{"role": "user", "parts": [{"text": "hi"}]}]
