@@ -40,8 +40,9 @@ stopwords = '''(?i)^(?:true|false|null|none|nil|undefined|required|optional|stri
 placeholder = '''(?i)^(?:my[_-]|(?:my|your)(?:pass(?:word)?|secret|token|api_?key)\d*$|insert[_-]|replace[_-]|enter[_-]|sample|dummy|fake|<|\{\{|\[\[|keepmum_|\[[a-z ]{3,24}\]?$)|(?:^|[_-])your[_-]|example|placeholder|redacted|(?:\.{3}|…)$'''
 # References to a value held elsewhere: env vars, template variables (f"token = {GITHUB}", self-01),
 # attribute access, calls, a list built from them (`[m.group() for …]`, rotate-01) or of strings
-# (`['apiVersion: v1', …]`), a label and a number (`chars=32`: k8s-01 on Codex, Nov 19).
-reference = '''^(?:\$|%\(|\{[A-Za-z_]|\[[A-Za-z_]\w*[.(]|\[['\"]|[a-z_]+=\d+$|%[A-Z_]+%|process\.env|os\.(?:environ|getenv)|getenv|ENV\[|env\(|secrets\.|vault:|ref\+|!Ref|!Sub|self\.|this\.|config\.|settings\.)|\$\{|^[\w.]+[(\[]|^[A-Za-z_]\w{0,30}(?:\.[A-Za-z_]\w{0,30})+$|^[A-Z][A-Z0-9]*_[A-Z0-9_]+$|^[a-z]+(?:[-_.][a-z]+)+$|^[a-z][a-z0-9+.-]*://'''
+# (`['apiVersion: v1', …]`), a label and a number (`chars=32`: k8s-01 on Codex, Nov 19), a regex's
+# wildcard (sed's `s|^stripe.api_key = .*|…|`: rotate-01 on pi, Nov 19).
+reference = '''^(?:\.[*+](?:$|[|)/\\$])|\$|%\(|\{[A-Za-z_]|\[[A-Za-z_]\w*[.(]|\[['\"]|[a-z_]+=\d+$|%[A-Z_]+%|process\.env|os\.(?:environ|getenv)|getenv|ENV\[|env\(|secrets\.|vault:|ref\+|!Ref|!Sub|self\.|this\.|config\.|settings\.)|\$\{|^[\w.]+[(\[]|^[A-Za-z_]\w{0,30}(?:\.[A-Za-z_]\w{0,30})+$|^[A-Z][A-Z0-9]*_[A-Z0-9_]+$|^[a-z]+(?:[-_.][a-z]+)+$|^[a-z][a-z0-9+.-]*://'''
 # A path (`/run/secrets/db`, `./config.yml`, `~/.ssh/id_ed25519`) is a reference too, but only one of
 # named pieces (rules._PathReference): a base64 key starting with `/` is none (1 in 75 AWS secret keys was let through, Nov 19).
 numeric = '''^[\d.:_-]+$'''

@@ -490,6 +490,8 @@ def test_a_model_span_is_cut_at_a_name_and_at_escaped_breaks(rules, text, piece,
     ("- Key: keys/deploy_ed25519", "ploy_ed25519", "SECRET"),
     ("256 SHA256:tsr02mISijUYvTRENTacI6TVaZdJLqUJp02U0osx4Xs deploy@ci (ED25519)", "tsr02mISijUYvTRENTacI6TVaZdJLqUJp02U0osx4Xs", "SECRET"),
     ("Check doc for secret markers and show .gitignore", ".gitignore", "SECRET"),
+    ("| `lodash` | Integrity SHA-512: `Z4jtVdSClePIEelBxFvNUshyE0MlW0ctYN2sR+wZeJbR01ScVkrUAGoUh0TMvJJOGeIcUPajaB7Fq0mcoKtGhw==` |",
+     "Z4jtVdSClePIEelBxFvNUshyE0MlW0ctYN2sR+wZeJbR01ScVkrUAGoUh0TMvJJOGeIcUPajaB7Fq0mc", "SECRET"),
     ("grep -nE 'password\\|secret\\|KEEPMUM\\|AKIA\\|client-key' docs/infra.md", "KEEPMUM\\|AKIA", "SECRET"),
     ("grep -nE 'password\\|secret\\|KEEPMUM\\|AKIA\\|client-key' docs/infra.md", "\\|client-key", "SECRET"),
     ("cp .env.example .env && cat .npmrc", ".env.example", "SECRET"),
@@ -552,6 +554,8 @@ def test_a_command_after_a_secret_word_is_not_its_value(rules, text, masked):
     ("secrets = [m.group() for text in texts.values() for m in pattern.finditer(text)]", None),  # rotate-01 on opencode
     ("secret_lines = ['apiVersion: v1', 'kind: Secret']", None),                # k8s-01 on Codex
     ("STRIPE_SECRET_KEY: chars=32", None),
+    ("sed -i 's|^stripe.api_key = .*|stripe.api_key = os.environ[\"STRIPE_SECRET_KEY\"]|' app/billing/worker.py", None),  # rotate-01 on pi
+    ("password = .*Xq9vB2kLmR7tY4w", ".*Xq9vB2kLmR7tY4w"),
     ('GITHUB_TOKEN="${GITHUB_TOKEN:-ghp_6TzJ7vdMTJmVIR0kiTOK1Fi6mP2TuhaaGwUc}"', "ghp_6TzJ7vdMTJmVIR0kiTOK1Fi6mP2TuhaaGwUc"),  # restart-01
     ('DB_PASSWORD="${DB_PASSWORD:-Kq7vX2mLp9RtW4zB8n}"', "Kq7vX2mLp9RtW4zB8n"),
 ])
@@ -592,6 +596,17 @@ def test_a_guess_across_json_list_entries_is_cut_at_the_quotes(rules):
     # A key next to a quote is still masked.
     text = 'token = "Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE", next'
     assert values(text, Pipeline(rules, _FakePF(_guess(text, 'Zq3bX8mL2vT9wR4kY7nP1sD6fH0jC5aE", next')), pii=False).detect(text))
+
+
+@pytest.mark.parametrize("text, kept", [
+    # From the 0.1.0a13 release check on agy (Nov 19).
+    ('Modifying the `curl` command to use `-u \\"$STRIPE_SECRET_KEY\\":` will securely use the environment variable. The `:` is appended', None),
+    (r'"CommandLine": "cat << \'EOF\' >> .env\\nDB_PASSWORD=Kq7vX2mLp9RtW4zB8n\\nEOF"', "Kq7vX2mLp9RtW4zB8n"),
+    ('DB_PASSWORD=" Kq7vX2mLp9RtW4zB8n"', None),
+])
+def test_prose_in_quotes_and_a_heredocs_end(rules, text, kept):
+    got = values(text, Pipeline(rules, None, pii=False).detect(text))
+    assert got == ([kept] if kept else [])
 
 
 def test_a_token_made_of_letters_is_still_a_secret(rules):

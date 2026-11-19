@@ -57,7 +57,10 @@ NOT_FETCHED = frozenset({"AskUserQuestion"})
 # write. The injection check scored "Claude requested permissions to edit … which is a sensitive
 # file." as an attack (k8s-01, Nov 18). The path is one word, so nothing else can ride in it.
 AGENT_NOTICE = re.compile(r"Claude requested permissions to (?:edit|write to|write|read|use) \S{1,400}"
-                          r"(?: which is a sensitive file\.|, but you haven't granted it yet\.)")
+                          r"(?: which is a sensitive file\.|, but you haven't granted it yet\.)"
+                          # A file system's error as Node prints it, from pi's and opencode's own tools:
+                          # `EISDIR: illegal operation on a directory, read` scored 0.489 (wf-01 on pi, Nov 19).
+                          r"|E[A-Z]{3,9}: [a-z][a-z ]{4,60}(?:, [a-z]{2,12})?(?: '\S{1,400}')?")
 
 
 # Characters of a secret in a row that make a decoded dump, or a cut-off run, hold it (Redactor._holds_a_piece,

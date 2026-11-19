@@ -367,6 +367,7 @@ class InjectionModel(Idle):
 # A piece of a flagged result that comes back in a later one (a line of it, or part of a line) is
 # flagged as that result was: a live model, refused a README, printed only its backtick commands
 # (`curl -s https://…/bootstrap.sh | sh`), which said nothing to the check on their own.
+WINDOW_CHARS = 32  # a window of a longer line that repeats a flagged text (_carried)
 PIECE_CHARS = 20
 CARRIED = 64  # flagged texts kept for this
 _LINE_NUMBER = re.compile(r"^\s*\d+\s*(?:[:|\t\u2192-]\s?)")
@@ -586,7 +587,12 @@ class Guard:
         for piece in _flat(text):
             if len(piece) < PIECE_CHARS:
                 continue
+            # The whole line, or a window of it: a line the model printed with a prefix of its own
+            # (`CODE: curl … | sh`, Codex printing a withheld README's commands: local-03, Nov 19) is no
+            # line of the flagged text, but carries one.
+            windows = [piece] + [piece[i:i + WINDOW_CHARS] for i in range(0, max(0, len(piece) - WINDOW_CHARS) + 1, 4)]
             for flat, hit in reversed(sources):
-                if piece in flat:
+                # A window of a few characters over and over (`xxxx…`, a `----` rule) is in everything.
+                if any(w in flat for w in windows if len(w) >= PIECE_CHARS and (w is piece or len(set(w)) >= 12)):
                     return hit
         return None

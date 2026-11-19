@@ -44,7 +44,9 @@ class Rule:
 
 # What may follow the end of an unquoted value: the end, a space, punctuation, another escape, or
 # the next KEY= (in text that is itself a JSON or JavaScript string, after an escaped new line).
-_AFTER_VALUE = re.compile(r"""$|[\s,;)\]}>"'`\\+#*\[{<-]|[A-Za-z_][\w.-]*[ \t]*[=:]""")
+# What may follow an escaped line break for the value to end there: the end, punctuation, the next name, or
+# a heredoc's last line (`DB_PASSWORD=…\nEOF`: val-02 on agy, Nov 19).
+_AFTER_VALUE = re.compile(r"""$|[\s,;)\]}>"'`\\+#*\[{<-]|[A-Za-z_][\w.-]*[ \t]*[=:]|[A-Z][A-Z0-9_]+(?:$|[\s\\"'`])""")
 _AFTER_QUOTE = re.compile(r"""$|[\s,;)\]}>"'`\\+]""")
 _UPPER_KEY = re.compile(r"[A-Z0-9_.-]*[A-Z][A-Z0-9_.-]*")
 
@@ -70,6 +72,8 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
         if close < 0 or "\n" in text[start:close]:
             return None
         value = text[start:close]
+        if value != value.strip():
+            return None  # a secret has no space at its edge: "…`:` will securely use the variable. The `" (rotate-01 on agy)
         if any(c.isspace() for c in value):
             words = value.split()
             if not (_UPPER_KEY.fullmatch(key) or (len(words) <= 4 and char_classes("".join(words)) >= 3)):
@@ -310,7 +314,8 @@ def is_labeled_digest(value: str) -> bool:
 
 
 _B64_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
-_DIGEST_LABEL_BEFORE = re.compile(r"(?i)(?:sha(?:1|256|384|512)[-:]|h1:|md5:)$")  # SHA256:… an SSH key's fingerprint (srv-01)
+# SHA256:… an SSH key's fingerprint (srv-01); "Integrity SHA-512: `…`" in a model's own table (lock-01, Nov 19).
+_DIGEST_LABEL_BEFORE = re.compile(r"(?i)(?:sha-?(?:1|224|256|384|512)|h1|md5|integrity|checksum|digest)[\s:=`'\"-]{0,4}$")
 
 
 def in_labeled_digest(text: str, start: int, end: int) -> bool:
@@ -319,7 +324,7 @@ def in_labeled_digest(text: str, start: int, end: int) -> bool:
     a = start
     while a > 0 and text[a - 1] in _B64_CHARS:
         a -= 1
-    return bool(_DIGEST_LABEL_BEFORE.search(text, max(0, a - 7), a))
+    return bool(_DIGEST_LABEL_BEFORE.search(text, max(0, a - 16), a))
 
 
 _HOST_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:")
