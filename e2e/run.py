@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -111,6 +112,11 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         p = ws / case.resolve(rel, salt)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(case.resolve(content, salt))
+    ws2 = scratch / "w2" / "ws"  # the companion's (case.companion): its own folder, the same keepmum
+    for rel, content in case.companion.get("files", {}).items():
+        p = ws2 / case.resolve(rel, salt)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(case.resolve(content, salt))
     # Commands of the case's own, before and after the agent: in the run's HOME, so the user's git
     # config (signing, hooks, their name) is not what a case's repository gets.
     shell_env = {**os.environ, "HOME": str(khome), "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
@@ -164,16 +170,55 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
     started = time.monotonic()
     os.environ["HOME"] = str(khome)  # keepmum's own: salt, config, audit log
     proxy = None
-    try:
-        proxy = launch.build_proxy(load(), rules_only=not case.model, upstream=f"{tap_server.url}/anthropic", mode="serve")
-        proxy.prefixed["/openai"] = f"{tap_server.url}/openai"
-        proxy.prefixed["/chatgpt"] = f"{tap_server.url}/chatgpt"
-        proxy.prefixed["/antigravity"] = f"{tap_server.url}/antigravity"
-        proxy.prefixed["/gemini"] = f"{tap_server.url}/gemini"
+    proxies = []  # every keepmum the run had: more than one after a restart (restart_after)
+
+    def make_proxy():
+        p = launch.build_proxy(load(), rules_only=not case.model, upstream=f"{tap_server.url}/anthropic", mode="serve")
+        p.prefixed["/openai"] = f"{tap_server.url}/openai"
+        p.prefixed["/chatgpt"] = f"{tap_server.url}/chatgpt"
+        p.prefixed["/antigravity"] = f"{tap_server.url}/antigravity"
+        p.prefixed["/gemini"] = f"{tap_server.url}/gemini"
         # DeepSeek is another gateway keepmum sits in front of (--provider deepseek; gateway.py).
-        proxy.gateways["deepseek"] = f"{tap_server.url}/deepseek"
+        p.gateways["deepseek"] = f"{tap_server.url}/deepseek"
+        proxies.append(p)
+        return p
+
+    try:
+        proxy = make_proxy()
         live_vault["vault"] = proxy.redactor.vault
-        server = launch.BackgroundServer(proxy)
+        restarted = threading.Event()
+
+        class Switch:
+            """keepmum as the agent reaches it. With restart_after, the first request after the Nth
+            model reply finds a new keepmum, built then: its vault, caches and stats new, as after
+            an update or a crash (what is on disk, the salt and the flagged list, carries over).
+            A request already in flight finishes on the old one."""
+
+            def __init__(self, first):
+                self.current, self.info = first, getattr(first, "info", {})
+
+                async def app(scope, receive, send):  # a function: uvicorn takes a bound method for ASGI 2
+                    await self.dispatch(scope, receive, send)
+
+                self.app = app
+
+            def __getattr__(self, name):  # the rest is the current keepmum's
+                if name == "current":
+                    raise AttributeError(name)
+                return getattr(self.current, name)
+
+            async def dispatch(self, scope, receive, send):
+                if (case.restart_after and not restarted.is_set() and scope["type"] == "http"
+                        and sum(ex.method == "POST" and ex.meta.get("done", False) for ex in tap.exchanges)
+                        >= case.restart_after):
+                    restarted.set()
+                    import asyncio
+
+                    self.current = await asyncio.to_thread(make_proxy)
+                    live_vault["vault"] = self.current.redactor.vault
+                await self.current.app(scope, receive, send)
+
+        server = launch.BackgroundServer(Switch(proxy))
         server.start()
         servers.append(server)
         mcp = None
@@ -186,6 +231,21 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
         # Where the agent works: some take it from PWD, which is the harness's own folder otherwise
         # (opencode read this repository as its project before this was set).
         env["PWD"] = str(ws)
+        companion = None
+        if case.companion:
+            # A second agent at the same time, in its own folder, through the same keepmum: the user
+            # with Claude Code in one window and Codex in another. "same": another session of this one.
+            from .agents import AGENTS
+
+            name = case.companion.get("agent", "same")
+            other = agent if name == "same" else AGENTS[name]
+            out2 = scratch / "out2"
+            out2.mkdir()
+            argv2, env2 = other.command(ws2, server.port, case.resolve(case.companion["prompt"], salt), REAL_HOME, out2,
+                                        None, list(case.agent_args.get(other.name, [])), None, mode)
+            env2["PWD"] = str(ws2)
+            companion = subprocess.Popen(argv2, env=env2, cwd=ws2, stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             done = subprocess.run(argv, env=env, cwd=ws, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                   timeout=case.timeout)
@@ -194,21 +254,27 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
             code = None
             stdout = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
             stderr = (e.stderr or b"").decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+        companion_code = None
+        if companion is not None:
+            try:
+                companion.communicate(timeout=case.timeout)
+            except subprocess.TimeoutExpired:
+                companion.kill()
+                companion.communicate()
+            companion_code = companion.returncode
         # Warn mode checks after the request was sent: let those finish before reading what was found.
         deadline = time.monotonic() + 60
-        while proxy._background and time.monotonic() < deadline:
+        while any(p._background for p in proxies) and time.monotonic() < deadline:
             time.sleep(0.1)
-        vault = proxy.redactor.vault
-        masked = {ph: (ph.split("_")[1], value) for ph, value in vault._values.items()}
-        events = list(proxy.stats.events)
-        keepmum = {"unresolved": proxy.stats.unresolved,
-                   "hits": [{k: h.get(k) for k in ("check", "action", "source", "score", "chars")}
-                            for h in proxy.stats.snapshot()["guard"]["hits"]],
-                   "warned": sorted({h.get("check") for h in proxy.stats.snapshot()["guard"]["hits"]
-                                     if h.get("action") == "warned"}),
+        masked = {ph: (ph.split("_")[1], value) for p in proxies for ph, value in p.redactor.vault._values.items()}
+        events = [e for p in proxies for e in p.stats.events]
+        hits = [h for p in proxies for h in p.stats.snapshot()["guard"]["hits"]]
+        keepmum = {"unresolved": sum(p.stats.unresolved for p in proxies),
+                   "restarted": restarted.is_set(),
+                   "hits": [{k: h.get(k) for k in ("check", "action", "source", "score", "chars")} for h in hits],
+                   "warned": sorted({h.get("check") for h in hits if h.get("action") == "warned"}),
                    # Refused: blocked, or meant for a local model that did not answer (sent nowhere).
-                   "blocked": sorted({h.get("check") for h in proxy.stats.snapshot()["guard"]["hits"]
-                                      if h.get("action") == "blocked"
+                   "blocked": sorted({h.get("check") for h in hits if h.get("action") == "blocked"
                                       or (h.get("action") == "local" and h.get("local_error"))}),
                    "errors": [{"path": e.get("path"), "status": e.get("status"), "outcome": e.get("outcome")}
                               for e in events if (e.get("status") or 0) >= 400],
@@ -216,13 +282,15 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
                    "local": [{"check": h.get("check"), "answered": bool(h.get("answered_by")),
                               "handed_back": (h.get("handed_back") or {}).get("strategy"),
                               "kept": (h.get("handed_back") or {}).get("kept"), "error": h.get("local_error")}
-                             for h in proxy.stats.snapshot()["guard"]["hits"] if h.get("action") == "local"]}
+                             for h in hits if h.get("action") == "local"]}
     finally:
+        if (other := locals().get("companion")) is not None and other.poll() is None:
+            other.kill()
         for s in reversed(servers):
             s.stop()
         # The checks' models run in llama-server, started on their first check and otherwise
         # stopped only after a while unused: stop them with the run, or each run leaves one behind.
-        for g in (proxy.guards if proxy is not None else []):
+        for g in (g for p in proxies for g in p.guards):
             for model in (g.model, getattr(g.model, "_model", None)):  # the harm check wraps its model
                 with contextlib.suppress(Exception):
                     getattr(model, "unload", lambda: None)()
@@ -243,6 +311,18 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
     findings = oracle.judge(case, salt, provider, before, after, transcript, masked, keepmum, code,
                             scripted.served if scripted else None, mcp_log, local)
     findings += oracle.ran(case, salt, outputs)
+    for rel, want in case.companion.get("expect_files", {}).items():
+        path = ws2 / case.resolve(rel, salt)
+        text = path.read_text() if path.exists() else None
+        for how, wanted in (want.items() if isinstance(want, dict) else [("contains", want)]):
+            wanted = case.resolve(wanted, salt)
+            ok = text is not None and ((wanted in text) if how == "contains" else (wanted not in text))
+            if not ok:
+                findings.append(oracle.Finding("task", f"the companion's {rel} {'is missing' if text is None else how + ' failed'}: "
+                                                       f"{case.shown(wanted)[:80]!r} (companion exit {companion_code})", "companion"))
+    if case.restart_after and not keepmum.get("restarted"):
+        findings.append(oracle.Finding("task", f"keepmum was never restarted: the agent finished before "
+                                               f"{case.restart_after} model replies", "restart_after"))
     failed = [f for f in findings if f.failing()]
     # The provider refused to answer (a usage limit): the run says nothing about keepmum.
     limited = any(e["status"] == 429 for e in keepmum["errors"]) and not any(f.cls == "leak" for f in findings)

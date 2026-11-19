@@ -51,6 +51,24 @@ def _gen(kind: str) -> str:
         return "0x" + secrets.token_hex(32)
     if kind == "hex":
         return secrets.token_hex(32)
+    if kind == "aws-key-id":
+        return "AKIA" + "".join(secrets.choice(string.ascii_uppercase + "234567") for _ in range(16))
+    if kind == "aws-secret":
+        return "".join(secrets.choice(_ALNUM + "+/") for _ in range(40))
+    if kind == "npm-token":
+        return "npm_" + "".join(secrets.choice(_ALNUM) for _ in range(36))
+    if kind == "jwt":  # a signed session token: header, claims, signature, each base64url
+        import base64
+        import json
+        import time
+        b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+        claims = {"sub": "usr_" + secrets.token_hex(6), "scope": "orders:read orders:write", "exp": int(time.time()) - 600}
+        return ".".join([b64(b'{"alg":"HS256","typ":"JWT"}'), b64(json.dumps(claims).encode()), b64(secrets.token_bytes(32))])
+    if kind == "pem-key-b64":  # a kubeconfig's client-key-data: a real EC private key, PEM, in base64
+        import base64
+        pem = subprocess.run(["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256"],
+                             check=True, capture_output=True).stdout
+        return base64.b64encode(pem).decode()
     if kind == "fly-token":
         return "fo1_" + "".join(secrets.choice(_ALNUM + "_-") for _ in range(43))
     if kind == "ssh-ed25519":  # a real OpenSSH private key, new each run, so ssh-keygen can read it
@@ -113,6 +131,8 @@ class Case:
     # allowed): `git init` and a first commit, for a case about a repository.
     setup: list[str] = field(default_factory=list)
     agent_args: dict[str, list[str]] = field(default_factory=dict)  # per agent, after the run's own
+    restart_after: int = 0  # keepmum restarts (an empty vault) once this many model replies are done
+    companion: dict = field(default_factory=dict)  # a second agent at the same time, on the same keepmum
     timeout: int = 300
     raw: dict = field(default_factory=dict)
 
@@ -177,7 +197,7 @@ def load_case(path: Path) -> Case:
         files=raw.get("files", {}), workspace_dir=raw.get("workspace_dir", "ws"), script=raw.get("script", []),
         expect=raw.get("expect", {}), known_gap=raw.get("known_gap"),
         mcp=bool(raw.get("mcp", False)), needs=list(raw.get("needs", [])),
-        setup=list(raw.get("setup", [])), agent_args={k: list(v) for k, v in raw.get("agent_args", {}).items()}, timeout=raw.get("timeout", 300), raw=raw,
+        setup=list(raw.get("setup", [])), agent_args={k: list(v) for k, v in raw.get("agent_args", {}).items()}, restart_after=int(raw.get("restart_after", 0)), companion=dict(raw.get("companion", {})), timeout=raw.get("timeout", 300), raw=raw,
     )
 
 

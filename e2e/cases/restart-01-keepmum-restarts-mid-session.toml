@@ -1,0 +1,40 @@
+id = "restart-01-keepmum-restarts-mid-session"
+title = "keepmum restarts mid-session (an update): placeholders sent before it still come back real"
+why = """
+keepmum's vault lives in memory only, so an update or a crash empties it in the middle of a session.
+The model still holds placeholders from before, and writes them into files and commands after. They
+must come back real: the new keepmum learns the values again from the history the agent sends with
+every request. An agent that sends only the new part of a conversation would leave it nothing to
+learn from. Here keepmum restarts once two model replies are done, between the agent reading .env
+and writing the files that need the token.
+"""
+prompt = """
+Read .env. Then create config/ci.yml with the GitHub token from it under github.token, and
+scripts/check-token.sh that calls https://api.github.com/user with that token in an Authorization
+header (do not run it). Do not ask questions.
+"""
+restart_after = 2
+config = "[detect]\nmodel = false\n"
+
+[values]
+tok = { gen = "github-token", kind = "SECRET" }
+
+[files]
+".env" = "GITHUB_TOKEN={{v:tok}}\nLOG_LEVEL=info\n"
+
+[[script]]
+calls = [{ shell = "cat .env" }]
+[[script]]
+calls = [{ shell = "mkdir -p config scripts" }]
+[[script]]
+calls = [{ write = "config/ci.yml", content = "github:\n  token: {{ph:tok}}\n" }]
+[[script]]
+calls = [{ write = "scripts/check-token.sh", content = "#!/bin/sh\ncurl -s -H \"Authorization: Bearer {{ph:tok}}\" https://api.github.com/user\n" }]
+[[script]]
+say = "Created config/ci.yml and scripts/check-token.sh."
+
+[expect]
+masked = ["tok"]
+# The script may read the token from .env when it runs (Codex did, Nov 18): the YAML must hold it.
+files = { "config/ci.yml" = { contains = "{{v:tok}}" } }
+only_new = ["config/ci.yml", "scripts/check-token.sh"]

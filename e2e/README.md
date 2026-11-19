@@ -173,6 +173,7 @@ Whatever a case asks, `oracle.py` checks these, worst first:
 | `task` | the workspace is not what the case expects: a missing file, a wrong name, wrong content, an unexpected new file |
 | `health` | the agent failed or timed out, keepmum met a placeholder it could not restore, keepmum answered with an error, or the script stopped early |
 | `shown` | (reported, not failing) a placeholder in something the user sees but that changes nothing, such as a reasoning summary |
+| `history` | (reported, not failing) a message an earlier request sent went out differently in a later one: the provider's prompt cache misses from there on. `history_stable` makes it `history-changed`, failing |
 | `unexercised` | (reported, not failing; live only) a value the case says is masked never reached the model in any form: it copied the value with a command it did not read the output of, so the run tested less than the case means |
 | `kept` | (reported, not failing) local mode: the injection check flagged what the real local model wrote in a result's place (`handback_may_keep`), so the turn stayed local. The check held; the hand-back was not exercised that run |
 
@@ -197,6 +198,7 @@ mcp = true                             # give the agent the stub MCP server `not
 mcp_reply = "…"                        # what its `lookup` tool returns (templates allowed)
 setup = ["git init -q", "git add -A", "git commit -qm init"]   # run in the workspace before the agent, in the run's HOME
 agent_args = { codex = ["-c", "web_search=\"live\""] }   # an agent's own arguments (live: Codex searches only when told)
+restart_after = 2                      # keepmum restarts once 2 model replies are done: the next request finds a new one (vault empty)
 
 [values]                               # what keepmum must protect
 tok = { gen = "github-token", kind = "SECRET" }        # fresh every run: github-token, anthropic-key, stripe-key
@@ -237,6 +239,7 @@ warn_shown = true                                  # the agent must show the use
 masked_none = true                                 # only the case's own [values] may be masked: anything else is a false-mask
 may_mask = []                                      # regexes of values masked_none lets through
 quiet = true                                       # ordinary work: any check hit is a false-alarm
+history_stable = true                              # an earlier message sent differently later fails (history-changed)
 
 [[expect.run]]                                     # a command run in the workspace after the agent, in the run's HOME
 cmd = "python3 -m unittest -q"                     # exit 0 unless `exit` says otherwise ("any": not checked)
@@ -285,6 +288,32 @@ Four more go where keepmum is easiest to get wrong, on all five agents:
   so the base64 of a placeholder cannot pass.
 - `nb-01`: a notebook's hard-coded key moved into .env. Its chart is a PNG in base64, checked byte
   for byte (`fixtures/chart_png.py`).
+
+The rest of a working week, live on all five agents:
+- `db-01`: a migration written and run on SQLite, then the production host, port, database and user
+  read from config (an RDS host with a random-looking id) while its password stays masked.
+- `git-01`: a token in the git remote's URL and one in .npmrc moved out; the remote switched to SSH.
+  Codex is a known gap: its sandbox keeps `.git` read-only.
+- `debug-01`: a 401 traced through `curl -v` output and a crash log: the bearer token and the session
+  cookie are masked, request ids and status lines are not.
+- `cloud-01`: an onboarding doc from Terraform state and a kubeconfig: ARNs, account ids, an EKS
+  host and the CA certificate go as they are; a database password, an IAM key, a client key in
+  base64 and a token do not, and the doc must hold none of them.
+- `rotate-01`: a leaked key pasted into the prompt, found in code, a shell script and config, and
+  replaced by an environment variable, with no copy left anywhere.
+- `lock-01`: versions and checksums from go.sum, Cargo.lock, yarn, pnpm and poetry, copied exactly.
+- `data-01`: a support-ticket CSV summarized by email domain and top customer, personal data on.
+- `i18n-01`: a prompt in Chinese; missing UI strings translated into zh-CN.json and customers (姓名,
+  +86 numbers, ID numbers, addresses) counted by city, personal data on.
+- `mod-01`: a game villain's threats and a paediatric dosage fix: the harm check must stay quiet.
+- `restart-01`: keepmum restarts mid-session (`restart_after`); placeholders sent before still come
+  back real.
+- `multi-01`: two agents at once on one keepmum (`[companion]`: agy alongside, in its own folder
+  with its own secret); each project's secret lands only in its own files.
+- `long-01`: a long refactor over eight modules with a secret met midway; `history_stable`.
+
+`[companion]` takes `agent` ("same" for another session of the same agent), `prompt`, `files` and
+`expect_files` (`contains`/`lacks` per file); its secrets go in the case's own `[values]`.
 
 ### Local mode
 

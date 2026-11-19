@@ -132,6 +132,7 @@ class Tap:
                     yield chunk
             finally:
                 ex.reply = b"".join(chunks)
+                ex.meta["done"] = True  # the whole reply has gone back (restart_after waits for it)
                 await upstream.aclose()
                 if client is not self.client:
                     await client.aclose()

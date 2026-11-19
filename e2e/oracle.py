@@ -36,7 +36,9 @@ from .agents import Transcript
 from .case import Case
 from .servers import Exchange
 
-FAILING = ("leak", "residue", "false-mask", "false-alarm", "task", "health")
+FAILING = ("leak", "residue", "false-mask", "false-alarm", "task", "health", "history-changed")
+# Reported, not failing: what an earlier request sent, sent differently later (expect.history_stable fails it).
+REPORTED = ("history",)
 # A placeholder in any spelling a model might give it: lowered, slugged, shortened.
 RESIDUE = re.compile(r"(?i)keepmum[_-](?:" + "|".join(TYPES) + r")[_-]?[0-9a-f]{4,12}")
 # Shell syntax no secret holds: masked, the model can no longer read its own command.
@@ -54,6 +56,19 @@ class Finding:
 
     def failing(self) -> bool:
         return self.cls in FAILING
+
+
+_WEB_RUN = re.compile(r"(?i)https?://\S*$")
+
+
+def _shown_residue(text: str):
+    """A placeholder in text the user reads, but none inside an http(s) address: keepmum keeps those
+    on purpose (restore.restore_reply), or a client that renders a link or an image would send the
+    real value there. git-01 quoted `https://x-access-token:KEEPMUM_…@github.com/…`."""
+    for m in RESIDUE.finditer(text):
+        if not _WEB_RUN.search(text, max(0, m.start() - 4096), m.start()):
+            return m
+    return None
 
 
 def _encodes(value: str, declared) -> bool:
@@ -126,11 +141,17 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
     # leak, in pieces: a secret cut up and spread out (a dump's text column, spaced characters, hex
     # bytes with spaces between them), found without decoding anything: every whitespace removed
     # from what was sent, then any 12 characters of the secret, or 24 digits of its hex.
+    # A piece the workspace also holds in public text is no piece of the secret: a key and a
+    # certificate in base64 both start with the encoded `-----BEGIN ` (cloud-01, a kubeconfig).
+    public = "".join(_SPACE.split(" ".join(b.decode("utf-8", "replace") for b in before.values())))
+    for v in case.values.values():
+        public = public.replace("".join(_SPACE.split(v.text)), " ")
     for v in case.values.values():
         if not v.must_mask or v.kind != "SECRET" or len(v.text) < 24:
             continue
         hexed = v.text.encode().hex()
         pieces = {v.text[i:i + 12] for i in range(len(v.text) - 11)} | {hexed[i:i + 24] for i in range(0, len(hexed) - 23, 2)}
+        pieces = {p for p in pieces if p not in public}
         for i, ex in sent:
             squeezed = "".join(_SPACE.split("".join(_strings(ex.body))))
             if any(p in squeezed for p in pieces):
@@ -204,10 +225,10 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
             break
         if m := RESIDUE.search(inp):
             out.append(Finding("residue", f"a tool ran with a placeholder in its input: …{case.shown(_around(inp, m))}…", "tool"))
-    if m := RESIDUE.search(transcript.final):
+    if m := _shown_residue(transcript.final):
         out.append(Finding("residue", f"the answer shows a placeholder: …{case.shown(_around(transcript.final, m))}…", "answer"))
     for text in transcript.shown:
-        if text is not transcript.final and (m := RESIDUE.search(text)):
+        if text is not transcript.final and (m := _shown_residue(text)):
             out.append(Finding("shown", f"the user sees a placeholder: …{case.shown(_around(text, m))}…", "transcript"))
             break
 
@@ -317,6 +338,66 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
         errors = [e for e in errors if e not in refusals]
     for err in errors[:3]:
         out.append(Finding("health", f"agent error: {case.shown(err)[:300]}", "agent"))
+    out += history(case, exchanges)
+    return out
+
+
+_VOLATILE = frozenset({"cache_control", "signature", "thoughtSignature", "thought_signature", "encrypted_content"})
+
+
+def _normal(x):
+    """A message as keepmum is responsible for it: without what agents move or re-sign every turn
+    (cache markers, signatures), and with text content in one shape (a string, or a text block)."""
+    if isinstance(x, dict):
+        out = {k: _normal(v) for k, v in x.items() if k not in _VOLATILE}
+        if isinstance(out.get("content"), str):
+            out["content"] = [{"type": "text", "text": out["content"]}]
+        return out
+    if isinstance(x, list):
+        return [_normal(v) for v in x]
+    return x
+
+
+def _conversation(ex: Exchange):
+    """(model, messages) of a model request, in any of the formats agents use."""
+    try:
+        body = json.loads(ex.body or b"{}")
+    except ValueError:
+        return None, None
+    if not isinstance(body, dict):
+        return None, None
+    model = body.get("model")
+    if isinstance(body.get("request"), dict):  # Code Assist wraps the Gemini request
+        body = body["request"]
+    for key in ("messages", "input", "contents"):
+        if isinstance(body.get(key), list):
+            return model, [json.dumps(_normal(m), sort_keys=True, ensure_ascii=False) for m in body[key]]
+    return model, None
+
+
+def history(case: Case, exchanges: list[Exchange]) -> list[Finding]:
+    """Each request's earlier messages, against what the previous request of the same conversation
+    sent for them (same model, same first message, fewer messages). An agent resends its whole
+    conversation every turn; one sent differently, a value masked later that went out in clear before,
+    misses the provider's prompt cache from there on: the rest of the session costs more, and nothing
+    says why (Nov 18)."""
+    convs = [c for c in (_conversation(ex) for ex in exchanges) if c[1] and len(c[1]) >= 2]
+    out = []
+    for i, (model, msgs) in enumerate(convs):
+        prev = next((p for m, p in reversed(convs[:i]) if m == model and p[0] == msgs[0] and len(p) < len(msgs)), None)
+        if prev is None:
+            continue
+        j = next((k for k in range(len(prev)) if prev[k] != msgs[k]), None)
+        if j is None:
+            continue
+        a, b = prev[j], msgs[j]
+        at = next((k for k in range(min(len(a), len(b))) if a[k] != b[k]), min(len(a), len(b)))
+        cls = "history-changed" if case.expect.get("history_stable") else "history"
+        out.append(Finding(cls, f"message {j} of {len(prev)} was sent differently later: "
+                                f"{case.shown(a[max(0, at - 60):at + 60])!r} became {case.shown(b[max(0, at - 60):at + 60])!r}",
+                           f"request {i}"))
+        if len(out) >= 3:
+            break
     return out
 
 

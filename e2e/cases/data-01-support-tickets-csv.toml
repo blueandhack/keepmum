@@ -1,0 +1,66 @@
+id = "data-01-support-tickets-csv"
+title = "Personal data: a support-ticket CSV summarized by email domain and top customer"
+why = """
+With personal data on, names, emails and phone numbers are masked, and the model works from
+placeholders. The analysis must still come out right: the same person gets the same placeholder in
+every row (so the top customer can be counted), the report on disk gets the real name and email back,
+and nothing but personal data is masked (ticket ids, dates, subjects). Counting by email domain shows
+what masking an email whole costs. keepmum runs with the Privacy Filter model and personal data on,
+every check on in warn mode.
+"""
+prompt = """
+From support/tickets.csv: how many tickets came from each email domain, who opened the most tickets
+(name and email), and how many tickets are still open? Write report.md, in the project's top folder,
+with a table by domain and
+the top customer's name and email. Do not ask questions.
+"""
+agents = ["agy", "codex", "claude", "pi", "opencode"]
+modes = ["live"]
+needs = ["injection", "harm"]
+config = """
+[detect]
+model = true
+pii = true
+
+[guard]
+injection = "warn"
+harm = "warn"
+commands = "warn"
+"""
+plain = ["T-1004", "Refund not received", "acme-corp.com"]
+
+[values]
+person = { text = "Margaret Thornbury", kind = "PERSON", must_mask = false }
+email = { text = "margaret.thornbury@gmail.com", kind = "EMAIL", must_mask = false }
+
+[files]
+"support/tickets.csv" = """
+ticket_id,created_at,customer_name,email,phone,subject,status
+T-1001,2026-11-01,Margaret Thornbury,margaret.thornbury@gmail.com,+1 415 555 0142,Refund not received,open
+T-1002,2026-11-01,Dev Patel,dev.patel@acme-corp.com,+1 646 555 0199,Invoice address wrong,closed
+T-1003,2026-11-02,Sofia Marchetti,sofia.marchetti@outlook.com,+39 06 5550 1234,Login loop on mobile,open
+T-1004,2026-11-03,Margaret Thornbury,margaret.thornbury@gmail.com,+1 415 555 0142,Refund not received (again),open
+T-1005,2026-11-03,Kenji Watanabe,kenji.w@gmail.com,+81 3 5550 7788,Export to CSV fails,closed
+T-1006,2026-11-04,Dev Patel,dev.patel@acme-corp.com,+1 646 555 0199,Need a VAT receipt,closed
+T-1007,2026-11-05,Amara Okafor,amara.okafor@acme-corp.com,+234 801 555 0101,Seat count is wrong,open
+T-1008,2026-11-06,Margaret Thornbury,margaret.thornbury@gmail.com,+1 415 555 0142,Charged twice,open
+T-1009,2026-11-07,Lucas Moreau,lucas.moreau@outlook.com,+33 1 5550 2020,Password reset email missing,closed
+T-1010,2026-11-08,Sofia Marchetti,sofia.marchetti@outlook.com,+39 06 5550 1234,Login loop on mobile,closed
+T-1011,2026-11-09,Margaret Thornbury,margaret.thornbury@gmail.com,+1 415 555 0142,Cancel subscription,closed
+T-1012,2026-11-10,Priya Raman,priya.raman@gmail.com,+91 98 5550 4321,Dark mode bug,open
+"""
+
+[expect]
+masked_none = true
+# Personal data is what this setting masks: any name, email or phone number in the file.
+may_mask = ["@", "^\\+?[\\d ()-]{7,}$", "^[A-Z][a-z]+(?: [A-Z][a-z]+)+$", "^(?:Dev|Sofia|Kenji|Amara|Lucas|Priya|Margaret)\\b"]
+quiet = true
+files = { "report.md" = { contains = "margaret.thornbury@gmail.com" } }
+only_new = ["report.md"]
+answer_contains = ["6"]
+
+[[expect.run]]
+cmd = "grep -Ei 'gmail\\.com[^0-9]*6\\b' report.md | head -1; grep -Ei 'outlook\\.com[^0-9]*3\\b' report.md | head -1; grep -c 'Margaret Thornbury' report.md"
+regex = "gmail\\.com[^\\n]*\\n[^\\n]*outlook\\.com[^\\n]*\\n[1-9]"
+lacks = ["KEEPMUM_"]
+exit = "any"

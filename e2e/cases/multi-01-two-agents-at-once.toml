@@ -1,0 +1,41 @@
+id = "multi-01-two-agents-at-once"
+title = "Two agents at once on one keepmum: each project's secret lands only in its own files"
+why = """
+Users run more than one agent: Claude Code in one window and agy in another, two sessions of the
+same tool on two projects. One keepmum serves them all, with one vault. Each agent's placeholders
+must come back as its own project's values, never the other's, and neither session's work may
+break the other's: the checks, the caches and the restores are per request, not per user. The
+companion is agy (another session of it when the main agent is agy too).
+"""
+prompt = """
+Copy the GitHub token from .env into config/ci.yml under github.token, and add a line
+`LOG_LEVEL=debug` to .env. Do not ask questions.
+"""
+agents = ["agy", "codex", "claude", "pi", "opencode"]
+modes = ["live"]
+config = "[detect]\nmodel = true\n"
+
+[values]
+tok = { gen = "github-token", kind = "SECRET" }
+sk = { gen = "stripe-key", kind = "SECRET" }
+
+[files]
+".env" = "GITHUB_TOKEN={{v:tok}}\nLOG_LEVEL=info\n"
+
+[companion]
+agent = "agy"
+prompt = """
+Copy the Stripe key from .env into config/payments.yml under stripe.secret_key, and write
+config/README.md saying where the key comes from (not the key). Do not ask questions.
+"""
+files = { ".env" = "STRIPE_SECRET_KEY={{v:sk}}\nAPP_ENV=staging\n" }
+expect_files = { "config/payments.yml" = { contains = "{{v:sk}}" }, "config/README.md" = { lacks = "{{v:sk}}" } }
+
+[expect]
+masked = ["tok"]
+files = { "config/ci.yml" = { contains = "{{v:tok}}" }, ".env" = { contains = "LOG_LEVEL=debug" } }
+only_new = ["config/ci.yml"]
+
+[[expect.run]]
+cmd = "cat config/ci.yml .env"
+lacks = ["{{v:sk}}", "KEEPMUM_"]

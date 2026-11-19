@@ -1,0 +1,146 @@
+id = "long-01-long-refactor-session"
+title = "A long session: eight modules typed and documented one by one, a secret read early and one found midway"
+why = """
+A real session is long: dozens of requests, each resending everything before it. The same value
+must get the same placeholder in every one, and what keepmum sent for an earlier message must be
+sent the same way every time after, or the provider's prompt cache misses for the rest of the session
+(expect.history_stable). A secret read at the start (.env) and one the agent only meets midway (a
+webhook secret hard-coded in pkg/m06_webhooks.py) must both stay masked and come back exactly where
+the agent writes them. keepmum runs as users run it, the Privacy Filter model on.
+"""
+prompt = """
+Go through pkg/ one module at a time, in order: read it, add type hints and a one-line docstring to
+every function, and save it. Run `python3 -m unittest -q` after every two modules. In
+pkg/m06_webhooks.py, also move WEBHOOK_SECRET out of the code: read it with
+os.environ["WEBHOOK_SECRET"], and append WEBHOOK_SECRET=<its value> to .env. At the end write
+CHANGES.md with one line per module. Do not ask questions.
+"""
+agents = ["agy", "codex", "claude", "pi", "opencode"]
+modes = ["live"]
+timeout = 600
+config = "[detect]\nmodel = true\n"
+
+[values]
+dbpass = { gen = "password", kind = "SECRET" }
+whsec = { text = "whsec_mIm5wSAOsYckWn8MsyATJx0VLHtgL2CD", kind = "SECRET" }
+
+[files]
+".env" = "DATABASE_URL=postgres://shop:{{v:dbpass}}@db.internal:5432/shop\nAPP_ENV=dev\n"
+"pkg/__init__.py" = ""
+"tests/__init__.py" = ""
+"pkg/m01_cart.py" = '''
+def add(cart, sku, qty):
+    cart[sku] = cart.get(sku, 0) + qty
+    return cart
+
+
+def total_items(cart):
+    return sum(cart.values())
+'''
+"pkg/m02_prices.py" = '''
+def price(cents, qty):
+    return cents * qty
+
+
+def with_tax(cents, rate):
+    return round(cents * (1 + rate))
+'''
+"pkg/m03_discounts.py" = '''
+def percent_off(cents, pct):
+    return cents - cents * pct // 100
+
+
+def best(cents, codes):
+    return min((percent_off(cents, c) for c in codes), default=cents)
+'''
+"pkg/m04_shipping.py" = '''
+def cost(weight_g, zone):
+    base = {'domestic': 499, 'eu': 1299, 'world': 2499}[zone]
+    return base + max(0, weight_g - 1000) // 500 * 150
+'''
+"pkg/m05_orders.py" = '''
+def new(order_id, items):
+    return {'id': order_id, 'items': items, 'status': 'pending'}
+
+
+def mark_paid(order):
+    order['status'] = 'paid'
+    return order
+'''
+"pkg/m06_webhooks.py" = '''
+import hashlib
+import hmac
+
+WEBHOOK_SECRET = "{{v:whsec}}"
+
+
+def sign(body, ts):
+    return hmac.new(WEBHOOK_SECRET.encode(), f"{ts}.{body}".encode(), hashlib.sha256).hexdigest()
+
+
+def verify(body, ts, sig):
+    return hmac.compare_digest(sign(body, ts), sig)
+'''
+"pkg/m07_refunds.py" = '''
+def refundable(order, days_since):
+    return order['status'] == 'paid' and days_since <= 30
+'''
+"pkg/m08_reports.py" = '''
+def revenue(orders):
+    return sum(o['total'] for o in orders if o['status'] == 'paid')
+
+
+def by_status(orders):
+    out = {}
+    for o in orders:
+        out[o['status']] = out.get(o['status'], 0) + 1
+    return out
+'''
+"tests/test_smoke.py" = '''
+import unittest
+
+
+class Smoke(unittest.TestCase):
+    def test_m01_cart(self):
+        from pkg.m01_cart import add, total_items
+        assert total_items(add({}, 'a', 2)) == 2
+
+    def test_m02_prices(self):
+        from pkg.m02_prices import price, with_tax
+        assert price(250, 3) == 750 and with_tax(1000, 0.2) == 1200
+
+    def test_m03_discounts(self):
+        from pkg.m03_discounts import best
+        assert best(1000, [10, 25]) == 750
+
+    def test_m04_shipping(self):
+        from pkg.m04_shipping import cost
+        assert cost(2100, 'eu') == 1599
+
+    def test_m05_orders(self):
+        from pkg.m05_orders import new, mark_paid
+        assert mark_paid(new('o1', []))['status'] == 'paid'
+
+    def test_m06_webhooks(self):
+        from pkg.m06_webhooks import sign, verify
+        assert verify('{}', 1, sign('{}', 1))
+
+    def test_m07_refunds(self):
+        from pkg.m07_refunds import refundable
+        assert refundable({'status': 'paid'}, 3)
+
+    def test_m08_reports(self):
+        from pkg.m08_reports import revenue
+        assert revenue([{'total': 5, 'status': 'paid'}, {'total': 9, 'status': 'void'}]) == 5
+
+'''
+
+[expect]
+masked = ["whsec"]
+history_stable = true
+files = { ".env" = { contains = "WEBHOOK_SECRET={{v:whsec}}" }, "pkg/m06_webhooks.py" = { lacks = "{{v:whsec}}" } }
+only_new = ["CHANGES.md", "*__pycache__*"]
+
+[[expect.run]]
+cmd = "WEBHOOK_SECRET=x python3 -m unittest -q 2>&1 | tail -1"
+contains = "OK"
