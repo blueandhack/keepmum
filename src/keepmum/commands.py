@@ -26,8 +26,9 @@ from .destinations import COMMAND_KEYS, SHELL_TOOLS
 _SHELL = r"(?:sudo\s+(?:-\S+\s+)*)?(?:env\s+\S+=\S*\s+)*(?:/\S*/)?(?:ba|z|da|k|fi|c|tc)?sh\b"
 _INTERPRETER = rf"(?:{_SHELL}|(?:/\S*/)?(?:python[0-9.]*|perl|ruby|node|php|osascript)\b)"
 _FETCH = r"\b(?:curl|wget|fetch|aria2c|http|https|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b"
-_NETWORK = (r"(?:\b(?:curl|wget|nc|ncat|netcat|socat|scp|sftp|ftp|telnet|http|https|aria2c|Invoke-WebRequest|"
-            r"Invoke-RestMethod)\b|/dev/(?:tcp|udp)/|\brsync\b[^|;&\n]*\S+:\S*)")
+# HTTPie's `http`/`https` only where a command starts: a YAML port is named `http` (k8s-01, Nov 18).
+_NETWORK = (r"(?:\b(?:curl|wget|nc|ncat|netcat|socat|scp|sftp|ftp|telnet|aria2c|Invoke-WebRequest|"
+            r"Invoke-RestMethod)\b|(?:^|[|;&(`]\s*|\$\()\s*https?\s|/dev/(?:tcp|udp)/|\brsync\b[^|;&\n]*\S+:\S*)")
 _CREDENTIALS = (r"(?:\.ssh\b|\bid_(?:rsa|dsa|ecdsa|ed25519)\b|\.aws/credentials|\.netrc\b|\.git-credentials\b|"
                 r"\.docker/config\.json|\.kube/config|\.config/gh/hosts\.yml|\.npmrc\b|\.pypirc\b|\.config/gcloud/|"
                 r"Library/Keychains|\bsecurity\s+(?:find|dump)-(?:generic|internet)-password|\bsecurity\s+dump-keychain)")
@@ -71,13 +72,21 @@ def command_lines(name: str, value) -> list[str]:
 _PRINTED = re.compile(r"""(\b(?:echo|printf)\s+(?:-\S+\s+)*(?:''\s+)*)('[^']*'|"[^"$`]*")""")
 
 
+# A script fed to an interpreter on a heredoc (`python3 - <<'PY' … PY`): its body is that language,
+# not shell. `len(env)` read as the subshell `(env)`, so writing a Kubernetes Secret from .env in
+# Python was "environment variables sent over the network" (k8s-01 on Codex, Nov 18).
+_SCRIPT_HEREDOC = re.compile(
+    r"\b(?:python[0-9.]*|ruby|node|perl|php)\b[^\n]*?<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)^\s*\2\s*$", re.M | re.S)
+
+
 def check(text: str) -> list[str]:
     """The rules a command line breaks, as ids."""
     while (printed := _PRINTED.sub(r"\1''", text)) != text:  # every argument in turn
         text = printed
     hits = [rid for rid, _, rx in RULES if rx.search(text)]
-    if _NETWORK_RE.search(text):
-        hits += [rid for rid, _, rx in SENDS if rx.search(text)]
+    shell = _SCRIPT_HEREDOC.sub(lambda m: m.group(0)[:m.start(3) - m.start(0)] + m.group(2), text)
+    if _NETWORK_RE.search(shell):
+        hits += [rid for rid, _, rx in SENDS if rx.search(shell)]
     return hits
 
 
