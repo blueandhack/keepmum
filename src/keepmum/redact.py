@@ -63,6 +63,8 @@ AGENT_NOTICE = re.compile(r"Claude requested permissions to (?:edit|write to|wri
 # Characters of a secret in a row that make a decoded dump, or a cut-off run, hold it (Redactor._holds_a_piece,
 # Redactor._known_pieces).
 SECRET_PIECE = 12
+# A line's number in front of it, as grep -n, cat -n and agents' read tools print one: `12:`, `     3→`, `3: `.
+_LINE_NUMBER = re.compile(r"^\s*\d+(?:[:\t→|]\s?| {1,2})")
 _KEYLIKE_TOKEN = re.compile(r"(?<![A-Za-z0-9+/_.-])[A-Za-z0-9+/_.-]{12,}(?![A-Za-z0-9+/_.-])")
 
 # Characters of text kept on each side of a masked value for the Logs page's context.
@@ -239,6 +241,10 @@ class Redactor:
         # in it as its type (as_types). Per request, in memory only.
         self.shown: dict[str, str] = {}
         self._role: str | None = None
+        # What the model wrote in this request (its text, its tool calls' inputs): a tool result made
+        # only of it is no outside content for the injection check (Redactor._authored_by_model).
+        self.authored: list[str] = []
+        self._authoring = False
 
     @staticmethod
     def _key(text: str) -> bytes:
@@ -336,6 +342,21 @@ class Redactor:
                 out.append(Span(start, end, min(kinds, key=PRIORITY.__getitem__), 0.9, "decoded"))
         return out
 
+    def _authored_by_model(self, text: str) -> bool:
+        """text, a tool result, is the model's own writing read back: every line of it, a line number
+        and indentation aside, is in what the model wrote earlier in this request. The agent printing
+        its own script's message, or grepping the README it just wrote, is no outside content, and
+        the injection check scored both as attacks (k8s-01 on opencode, deploy-01 on Claude Code, Nov
+        19). Where the model copied its text from was checked when it was read."""
+        if not self.authored:
+            return False
+        lines = [_LINE_NUMBER.sub("", line).strip() for line in text.splitlines()]
+        lines = [line for line in lines if len(line) >= 8]
+        if not lines:
+            return False
+        own = "\n".join(self.authored)
+        return all(line in own for line in lines)
+
     def _holds_a_piece(self, decoded: str) -> bool:
         """decoded holds SECRET_PIECE characters in a row of a secret keepmum masked before: a dump of
         a file cut short (`tail -c 200 .env | od -c | tail -3` printed a key's last 23 characters,
@@ -391,9 +412,11 @@ class Redactor:
     def redact_text(self, text: str) -> str:
         if not text:
             return text
+        if not self._in_result and (self._authoring or self._role in ("assistant", "model")):
+            self.authored.append(text)
         spans, seen = self._spans(text)
         if self._in_result and self._tool not in NOT_FETCHED:
-            if not AGENT_NOTICE.fullmatch(text.strip()):
+            if not AGENT_NOTICE.fullmatch(text.strip()) and not self._authored_by_model(text):
                 self.tool_results.append((self._tool, text, not seen))
             if self.context:
                 self.shown[text] = as_types(text, spans)
@@ -638,6 +661,13 @@ class Redactor:
         return item
 
     def _responses_call(self, item, kind):
+        before, self._authoring = self._authoring, kind in ("function_call", "custom_tool_call", "local_shell_call")
+        try:
+            return self._responses_call_inner(item, kind)
+        finally:
+            self._authoring = before
+
+    def _responses_call_inner(self, item, kind):
         out = {**item, "arguments": self._json_string(item["arguments"])} if isinstance(item.get("arguments"), str) else dict(item)
         if kind in ("function_call_output", "custom_tool_call_output"):
             tool = self._calls.get(item.get("call_id"))

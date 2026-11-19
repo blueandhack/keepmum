@@ -74,6 +74,10 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
             words = value.split()
             if not (_UPPER_KEY.fullmatch(key) or (len(words) <= 4 and char_classes("".join(words)) >= 3)):
                 return None
+            # A command or a phrase, not a password: "Store it as a secret: `gh secret set FLY_API_TOKEN`"
+            # (deploy-01 on Claude Code, Nov 18). A password with spaces does not start with a plain word.
+            if not _UPPER_KEY.fullmatch(key) and words[0].isalpha() and words[0].islower():
+                return None
         return close
     i = start
     while i < stop:
@@ -362,7 +366,7 @@ def public_shape(text: str, start: int, end: int) -> bool:
     rule that knows a key's format still masks it wherever it is."""
     value = text[start:end]
     return (is_file_name(text, start, end) or is_path(value) or in_issued_link(text, start, end)
-            or in_system_path(text, start, end) or in_encoded_file(text, start, end) or is_pin(value) or is_bare_hash(text, start, end) or is_package_ref(value)
+            or in_system_path(text, start + _tag_end(value), end) or in_encoded_file(text, start, end) or is_pin(value) or is_bare_hash(text, start, end) or is_package_ref(value)
             or is_constant_name(value) or is_labeled_digest(value) or is_object_id(value) or is_hostname(value)
             or in_labeled_digest(text, start, end) or in_hostname(text, start, end) or is_regex(value)
             or is_reference(value) or is_markup(value) or in_path_token(text, start, end)
@@ -370,6 +374,16 @@ def public_shape(text: str, start: int, end: int) -> bool:
             # which has capitals all through it.
             or value.isalpha() and len(value) <= 16 and sum(c.isupper() for c in value) <= 2
             or after_nonce(text, start, end))
+
+
+_TAG_END = re.compile(r"[\w-]*>(?=[/~])")
+
+
+def _tag_end(value: str) -> int:
+    """The length of a tag's end the model took in front of a path (`path>/private/var/…`: Codex lists
+    its sandbox's folders as `<path>…</path>`, lock-01, Nov 19)."""
+    m = _TAG_END.match(value)
+    return m.end() if m else 0
 
 
 def in_issued_link(text: str, start: int, end: int) -> bool:
@@ -577,7 +591,14 @@ class RulesDetector:
                     start, opening = m.end(), m.group("open") or ""
                     if opening and closes_a_string(text, start - len(opening), opening):
                         continue
+                    # A shell default, `${GITHUB_TOKEN:-<value>}`: the value is between `:-` and `}`
+                    # (restart-01 on Claude Code, Nov 19).
+                    shell_default = text[max(0, m.start("key") - 2):m.start("key")] == "${" and text[start:start + 1] in ("-", "=", "?", "+")
+                    if shell_default:
+                        start += 1
                     end = assignment_value(text, start, opening, m.group("key"))
+                    if end is not None and shell_default and "}" in text[start:end]:
+                        end = text.index("}", start, end)
                     if end is None or end - start < 6:
                         continue
                 else:

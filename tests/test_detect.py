@@ -530,6 +530,38 @@ def test_a_known_value_at_a_line_end_drops_the_dollar(rules):
     assert out.endswith("$\nAPP_ENV=dev$") and key not in out
 
 
+@pytest.mark.parametrize("text, masked", [
+    # A command in prose after "secret:" is not its value (deploy-01 on Claude Code, Nov 18).
+    ("2. Store it as a secret: `gh secret set FLY_API_TOKEN` (paste the token when asked).", False),
+    ("secret: `kubectl create secret generic app --from-env-file=.env`", False),
+    # A password with spaces still is one.
+    ('password: "p@ss w0rd $X9"', True),
+    ('DB_PASSWORD="correct horse Battery9 staple"', True),
+])
+def test_a_command_after_a_secret_word_is_not_its_value(rules, text, masked):
+    assert bool(Pipeline(rules, None, pii=False).detect(text)) is masked
+
+
+@pytest.mark.parametrize("text, kept", [
+    # From the full live run of Nov 19.
+    ('stripe.api_key = "[removed]"', None),                                     # rotate-01 on Codex
+    ("secrets = [m.group() for text in texts.values() for m in pattern.finditer(text)]", None),  # rotate-01 on opencode
+    ('GITHUB_TOKEN="${GITHUB_TOKEN:-ghp_6TzJ7vdMTJmVIR0kiTOK1Fi6mP2TuhaaGwUc}"', "ghp_6TzJ7vdMTJmVIR0kiTOK1Fi6mP2TuhaaGwUc"),  # restart-01
+    ('DB_PASSWORD="${DB_PASSWORD:-Kq7vX2mLp9RtW4zB8n}"', "Kq7vX2mLp9RtW4zB8n"),
+])
+def test_stand_ins_list_expressions_and_shell_defaults(rules, text, kept):
+    got = values(text, Pipeline(rules, None, pii=False).detect(text))
+    assert got == ([kept] if kept else [])
+
+
+def test_a_path_after_a_tag_end_is_a_path_on_this_mac(rules):
+    # Codex's sandbox description: <entry access="write"><path>/private/var/folders/…</path> (lock-01).
+    text = '<entry access="write"><path>/private/var/folders/ng/f6k2b2nj0k92xndsgmh6bqrh0000gn/T/keepmum-e2e-pa14rgc7/w/ws</path></entry>'
+    for piece in ("path>/private/var/folders/ng/f6k2b2nj0k92xndsgmh6bqrh0000gn/T/keepmum-e2e-pa14rg",
+                  "/private/var/folders/ng/f6k2b2nj0k92xndsgmh6bqrh0000gn/T"):
+        assert Pipeline(rules, _FakePF(_guess(text, piece)), pii=False).detect(text) == [], piece
+
+
 def test_a_token_made_of_letters_is_still_a_secret(rules):
     text = "here: QmXkZpRtWvBnLsJd"
     assert values(text, Pipeline(rules, _FakePF(_guess(text, "QmXkZpRtWvBnLsJd")), pii=False).detect(text)) == ["QmXkZpRtWvBnLsJd"]
