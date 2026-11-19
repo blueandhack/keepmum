@@ -4,7 +4,8 @@ why = """
 Vendors send onboarding PDFs with the account's live API key printed in them. An agent reads the PDF:
 Claude Code sends it to the model as a document (the PDF's own bytes), Codex as a file, agy as inline
 data; others extract its text with a command. keepmum reads text, not a PDF's bytes: the key in a PDF
-sent whole reaches the provider. The invoice's figures, dates and names must go as they are, and the
+sent whole reached the provider (Nov 18): keepmum now reads its text, and sends that text, the key
+masked, in place of the file. The invoice's figures, dates and names must go as they are, and the
 key must land in .env real. keepmum runs as users run it, the Privacy Filter model on, every check
 on in warn mode.
 """
@@ -15,7 +16,6 @@ key itself). Then put the API key from the PDF into .env as ACME_API_KEY=<the ke
 """
 agents = ["agy", "codex", "claude", "pi", "opencode"]
 modes = ["live"]
-known_gap = { claude = "keepmum passes a PDF the agent attaches whole (its bytes, not text) without reading it: the key printed in it reaches the provider", opencode = "keepmum passes a PDF the agent attaches whole (its bytes, not text) without reading it: the key printed in it reaches the provider" }
 needs = ["injection", "harm"]
 config = """
 [detect]

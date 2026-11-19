@@ -501,7 +501,17 @@ class Redactor:
                     # Antigravity CLI's read_file of a picture) or a file as it is. A placeholder in
                     # an image's base64 made Google refuse the request (wf-01, Nov 18).
                     if isinstance(resp.get("parts"), list):
-                        new["parts"] = [self._gemini_part(p) for p in resp["parts"]]
+                        # A result's own parts take files only: a PDF that goes as its text puts that
+                        # text in the result's response (Code Assist refused a text part there: doc-02).
+                        parts, texts = [], []
+                        for p in resp["parts"]:
+                            q = self._gemini_part(p)
+                            was_file = isinstance(p, dict) and any(isinstance(p.get(k), dict) for k in ("inline_data", "inlineData"))
+                            (texts if was_file and isinstance(q, dict) and set(q) == {"text"} else parts).append(q)
+                        new["parts"] = parts
+                        if texts:
+                            response = new.get("response") if isinstance(new.get("response"), dict) else {}
+                            new["response"] = {**response, "file_text": "\n\n".join(t["text"] for t in texts)}
                     elif "parts" in resp:
                         new["parts"] = self._values(resp["parts"])
                     out[key] = new
@@ -509,7 +519,13 @@ class Redactor:
                            ("codeExecutionResult", "output"), ("code_execution_result", "output")):
             if isinstance(out.get(key), dict) and isinstance(out[key].get(field), str):
                 out[key] = {**out[key], field: self.redact_text(out[key][field])}
-        # inlineData and fileData carry files and images: they pass through, like images and PDFs.
+        # inlineData and fileData carry files and images: they pass through, but a PDF that holds a
+        # value keepmum masks goes as its masked text.
+        for key in ("inline_data", "inlineData"):
+            blob = out.get(key)
+            if isinstance(blob, dict) and (blob.get("mime_type") or blob.get("mimeType")) == "application/pdf":
+                if (text := self.pdf_in_place(blob.get("data"))) is not None:
+                    return {"text": text}
         return out
 
     # --- Responses API payloads (OpenAI: Codex, pi) ------------------------------------
@@ -556,7 +572,7 @@ class Redactor:
                     return {**c, "text": self.redact_text(c["text"])}
                 if isinstance(c.get("refusal"), str):
                     return {**c, "refusal": self.redact_text(c["refusal"])}
-                return c
+                return self._responses_file(c)
 
             return {**item, "content": [_part(c) for c in content]}
         return item
@@ -573,11 +589,20 @@ class Redactor:
             if key in out:
                 with self._result_of(tool if key == "output" else None, read=key in ("output", "content", "text", "error")):
                     if isinstance(out[key], list):
-                        out[key] = [p if isinstance(p, dict) and p.get("type") in RESPONSES_BINARY_PARTS else self._values(p)
-                                    for p in out[key]]
+                        out[key] = [self._responses_file(p) if isinstance(p, dict) and p.get("type") in RESPONSES_BINARY_PARTS
+                                    else self._values(p) for p in out[key]]
                     else:
                         out[key] = self._values(out[key])
         return out
+
+    def _responses_file(self, part):
+        """An input_file part: a PDF that holds a value keepmum masks goes as its masked text."""
+        if isinstance(part, dict) and part.get("type") == "input_file" and isinstance(part.get("file_data"), str):
+            data = part["file_data"]
+            if data.startswith("data:application/pdf") or str(part.get("filename", "")).lower().endswith(".pdf"):
+                if (text := self.pdf_in_place(data, part.get("filename"))) is not None:
+                    return {"type": "input_text", "text": text}
+        return part
 
     def _json_string(self, raw: str) -> str:
         """Tool-call arguments are a JSON document in a string: mask its values, keep its keys."""
@@ -597,6 +622,36 @@ class Redactor:
         if isinstance(system, str) and system:
             return [{"type": "text", "text": system}, hint]
         return [hint]
+
+    def pdf_in_place(self, data: str, name: str | None = None) -> str | None:
+        """The text to send in place of a PDF attached whole (base64 or a data: URL), or None: send
+        the PDF as it is. Its text is read on this Mac (pdftext) and goes through keepmum like any
+        other: when it holds a value keepmum masks, the model gets that text, masked, under a note,
+        not the file. A key printed in a vendor's PDF reached the provider before (doc-02, Nov 18).
+        A PDF with nothing to mask, or none that can be read, goes as it is, its text still checked."""
+        from .pdftext import from_base64, is_pdf, text_of
+
+        if not isinstance(data, str) or len(data) < 64:
+            return None
+        key = hashlib.sha256(data.encode("ascii", "replace")).digest()
+        cache = self.__dict__.setdefault("_pdfs", OrderedDict())
+        if key in cache:
+            cache.move_to_end(key)
+            text = cache[key]
+        else:
+            raw = from_base64(data)
+            text = text_of(raw) if raw and is_pdf(raw) else ""
+            cache[key] = text
+            if len(cache) > 32:
+                cache.popitem(last=False)
+        if not text:
+            return None
+        masked = self.redact_text(text)
+        if masked == text:
+            return None
+        what = f"`{name}`" if name else "this PDF"
+        return (f"[keepmum: {what} holds a value keepmum keeps on this Mac, so you get its text, with that "
+                f"value masked, in place of the file. Layout and pictures are left out.]\n\n{masked}")
 
     def _content(self, content):
         if isinstance(content, str):
@@ -628,7 +683,10 @@ class Redactor:
                 out["source"] = {**source, "data": self.redact_text(source.get("data", ""))}
             elif isinstance(source, dict) and source.get("type") == "content":
                 out["source"] = {**source, "content": self._content(source.get("content"))}
-            return out  # PDFs and other binary sources pass through (a v1 risk)
+            if isinstance(source, dict) and source.get("type") == "base64" and source.get("media_type") == "application/pdf":
+                if (text := self.pdf_in_place(source.get("data"), block.get("title"))) is not None:
+                    return {"type": "text", "text": text}
+            return out  # a PDF with nothing to mask, and other binary sources, pass through
         # Unknown block type: scan its content fields, leave protocol fields alone.
         return {k: (self._values(v) if k in CONTENT_KEYS else v) for k, v in block.items()}
 
