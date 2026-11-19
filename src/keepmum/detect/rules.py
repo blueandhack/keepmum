@@ -505,6 +505,18 @@ class _Sequential:
         return total > 0 and total >= SEQUENTIAL_SHARE * len(value)
 
 
+class _PathReference:
+    """The `reference` filter's paths: a value that starts like a path (`/`, `./`, `../`, `~/`) and is
+    one of named pieces (is_path), a dot-file's leading dot aside. Not a key in base64 that happens
+    to start with `/`: the filter let every such AWS secret key through (cloud-01, Nov 19)."""
+
+    def search(self, value: str):
+        if not value.startswith(("/", "./", "../", "~/")):
+            return False
+        flat = "/".join(piece.lstrip(".") for piece in value.lstrip("~").split("/"))
+        return is_path(flat) or is_path("." + flat if flat.startswith("/") else flat)
+
+
 class _Repeated:
     """The `repeated` filter: matches (search) when runs of one character, six or more, are at least
     REPEATED_SHARE of the value. A placeholder is mostly such runs; a real token has one by chance."""
@@ -548,7 +560,7 @@ class RulesDetector:
         if "repeated" in f:  # not a plain search: how much of the value its runs are (_Repeated)
             self._placeholder_filters.append(_Repeated(re.compile(f["repeated"])))
         self._placeholder_filters.append(_Sequential())
-        self._all_filters = self._placeholder_filters + [re.compile(f[k]) for k in ("reference", "numeric") if k in f]
+        self._all_filters = self._placeholder_filters + [re.compile(f[k]) for k in ("reference", "numeric") if k in f] + [_PathReference()]
         self._prose_filters = self._all_filters + [re.compile(f[k]) for k in ("identifier",) if k in f]
         self.entropy = cfg.get("entropy", {"enabled": False})
         if self.entropy.get("enabled"):

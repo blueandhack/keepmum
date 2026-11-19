@@ -562,6 +562,19 @@ def test_a_path_after_a_tag_end_is_a_path_on_this_mac(rules):
         assert Pipeline(rules, _FakePF(_guess(text, piece)), pii=False).detect(text) == [], piece
 
 
+@pytest.mark.parametrize("value", ["/ilHovev1QQ9oShvUjBPMhGB/pjow0utnrvDeSlU", "/joVq2CKJ7H1iBShbr4wAq9EUc+IXdWxgP/zesAp"])
+def test_a_secret_that_starts_with_a_slash_is_masked(rules, value):
+    # 1 in 75 AWS secret keys starts with `/`, and the path filter let each one through (cloud-01, Nov 19).
+    for text in (f'"secret": "{value}",', f"aws_secret_access_key = {value}", f"DB_PASSWORD={value}"):
+        assert value in values(text, Pipeline(rules, None, pii=False).detect(text)), text
+
+
+@pytest.mark.parametrize("text", ["password_file: /run/secrets/db_password", "key_path = ./config/app.key",
+                                  "private_key = ~/.ssh/id_ed25519", "token_file: ../shared/secrets.env"])
+def test_a_path_after_a_secret_word_is_still_a_path(rules, text):
+    assert Pipeline(rules, None, pii=False).detect(text) == []
+
+
 def test_a_token_made_of_letters_is_still_a_secret(rules):
     text = "here: QmXkZpRtWvBnLsJd"
     assert values(text, Pipeline(rules, _FakePF(_guess(text, "QmXkZpRtWvBnLsJd")), pii=False).detect(text)) == ["QmXkZpRtWvBnLsJd"]
