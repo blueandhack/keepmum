@@ -69,7 +69,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .localModels: "The models on this Mac that answer what a check keeps local, and how fast they answer"
         case .handback: "What the local model does with a turn a check keeps on this Mac, what it reads, and whether you look first"
         case .skills: "Your own guidance for the local model, written once and picked for each step in Local turns"
-        case .general: "Appearance, updates, and what the Logs page shows"
+        case .general: "Appearance, opening at login, updates, and what the Logs page shows"
         case .doctor: "The same checks as keepmum doctor, and this app's connection to keepmum"
         }
     }
@@ -146,6 +146,7 @@ struct SettingsPage: View {
             LocalSkillsSection(engine: engine)
         case .general:
             display
+            if engine.isBundled { StartupSection() }
             UpdatesSection()
             if engine.isBundled { LogsPageSection(engine: engine) }
         case .doctor:
