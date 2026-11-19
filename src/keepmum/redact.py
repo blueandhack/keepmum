@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import re
 from collections import Counter, OrderedDict
 
 from .detect import Span
@@ -52,6 +53,11 @@ def preview(value: str) -> str:
 # Tool results the injection check skips: they hold what the user chose or typed, not what a tool
 # fetched (Claude Code's AskUserQuestion returns the user's answers).
 NOT_FETCHED = frozenset({"AskUserQuestion"})
+# Tool results an agent writes itself, not a tool's output: Claude Code's notice that it refused a
+# write. The injection check scored "Claude requested permissions to edit … which is a sensitive
+# file." as an attack (k8s-01, Nov 18). The path is one word, so nothing else can ride in it.
+AGENT_NOTICE = re.compile(r"Claude requested permissions to (?:edit|write to|write|read|use) \S{1,400}"
+                          r"(?: which is a sensitive file\.|, but you haven't granted it yet\.)")
 
 
 # Characters of text kept on each side of a masked value for the Logs page's context.
@@ -327,7 +333,8 @@ class Redactor:
             return text
         spans, seen = self._spans(text)
         if self._in_result and self._tool not in NOT_FETCHED:
-            self.tool_results.append((self._tool, text, not seen))
+            if not AGENT_NOTICE.fullmatch(text.strip()):
+                self.tool_results.append((self._tool, text, not seen))
             if self.context:
                 self.shown[text] = as_types(text, spans)
         elif self._role == "user":
