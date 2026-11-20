@@ -126,6 +126,10 @@ enum Attention {
             return .init(tone: .busy, icon: "hourglass", title: "keepmum is starting",
                          detail: names.isEmpty ? "Loading the model; this takes a few seconds"
                                                : "\(list(names)) connect\(names.count == 1 ? "s" : "") as soon as it answers")
+        case .restarting:
+            return .init(tone: .busy, icon: "hourglass", title: "keepmum is restarting",
+                         detail: names.isEmpty ? "Stopping, then starting again"
+                                               : "\(list(names)) reconnect\(names.count == 1 ? "s" : "") as soon as it answers")
         case .stopping:
             return .init(tone: .busy, icon: "hourglass", title: "keepmum is stopping",
                          detail: names.isEmpty ? "The background service is shutting down" : "Turning protection off first")

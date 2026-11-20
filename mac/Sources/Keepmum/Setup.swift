@@ -33,12 +33,17 @@ struct SetupSection: View {
                     Hairline()
                     step(2, "Background service", done: engine.serviceRunning, detail: serviceDetail) {
                         if let change = engine.serviceChange {
-                            PillButton(title: change == .starting ? "Starting…" : "Stopping…", loading: true) {}
+                            PillButton(title: change == .starting ? "Starting…" : change == .restarting ? "Restarting…" : "Stopping…", loading: true) {}
                         } else if engine.serviceStatus == .requiresApproval {
                             PillButton(title: "Open Login Items", icon: "gearshape") { engine.openLoginItems() }
                         } else if engine.serviceRunning {
-                            PillButton(title: "Stop") { Task { await engine.stopService() } }
-                                .disabled(engine.busy)
+                            HStack(spacing: Space.s) {
+                                PillButton(title: "Restart", icon: "arrow.clockwise") { Task { await engine.restartService() } }
+                                    .help("Stops keepmum and starts it again, to pick up a change. Protection stays on; agents reconnect once it answers.")
+                                PillButton(title: "Stop") { Task { await engine.stopService() } }
+                                    .help("Turns protection off first, so no agent loses its connection")
+                            }
+                            .disabled(engine.busy)
                         } else if engine.serviceStatus == .enabled {
                             PillButton(title: "Restart", icon: "arrow.clockwise") { Task { await engine.restartService() } }
                                 .disabled(engine.busy)
@@ -87,6 +92,7 @@ struct SetupSection: View {
         let port = engine.status?.port ?? 7788
         switch engine.serviceChange {
         case .starting: return engine.modelOn && engine.hasModel ? "Loading the model; this takes a few seconds" : "Waiting for it to answer"
+        case .restarting: return "Stopping, then starting again; agents reconnect once it answers"
         case .stopping: return engine.anyProtected ? "Turning protection off first, so no agent loses its connection" : "Stopping…"
         case nil: break
         }
@@ -255,6 +261,7 @@ struct ServiceRow: View {
     private var state: String {
         switch engine.serviceChange {
         case .starting: return engine.modelOn && engine.hasModel ? "Loading the model…" : "Starting…"
+        case .restarting: return "Restarting…"
         case .stopping: return engine.anyProtected ? "Turning protection off, then stopping" : "Stopping…"
         case nil: break
         }
@@ -312,7 +319,7 @@ struct ProtectionRow: View {
     private var title: String {
         let names = protectedNames
         if names.isEmpty { return "No coding agent is protected" }
-        if engine.serviceChange == .starting {
+        if engine.serviceComingUp {
             return names.count == 1 ? "\(names[0]) is waiting" : "\(names.count) agents are waiting"
         }
         if !engine.serviceRunning { return "keepmum is not running" }
@@ -321,7 +328,7 @@ struct ProtectionRow: View {
 
     private var subtitle: String {
         let names = protectedNames
-        if !names.isEmpty && engine.serviceChange == .starting { return "They connect as soon as keepmum answers" }
+        if !names.isEmpty && engine.serviceComingUp { return "They connect as soon as keepmum answers" }
         if !names.isEmpty && !engine.serviceRunning { return "They cannot connect until keepmum restarts" }
         if names.count > 1 { return names.joined(separator: ", ") }
         if names.count == 1 { return "Every session goes through keepmum" }
@@ -331,7 +338,7 @@ struct ProtectionRow: View {
 
     private var color: Color {
         // Starting is not a fault: the agents wait, and the service row shows the progress.
-        if engine.anyProtected && engine.serviceChange == .starting { return Theme.textSecondary }
+        if engine.anyProtected && engine.serviceComingUp { return Theme.textSecondary }
         if engine.anyProtected { return engine.serviceRunning ? Theme.restored : Theme.blocked }
         return Theme.textSecondary
     }

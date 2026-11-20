@@ -470,8 +470,10 @@ final class Engine {
     private(set) var pendingSettings: [String: String] = [:]
     private var settingsQueue: Task<Void, Never>?
     /// The background service on its way up or down: from the click until it answers, or stops.
-    enum ServiceChange { case starting, stopping }
+    enum ServiceChange { case starting, restarting, stopping }
     private(set) var serviceChange: ServiceChange?
+    /// On its way up, from a start or a restart: the agents wait for it.
+    var serviceComingUp: Bool { serviceChange == .starting || serviceChange == .restarting }
     var error: String?
     /// The menu bar asks the dashboard to open Settings on a pane: Setup, or Tools to review one.
     var settingsRequested: SettingsPane?
@@ -565,13 +567,18 @@ final class Engine {
         }
     }
 
-    /// Registered but not answering: unregister and register again. Protection stays as it is, so
-    /// the agents pointed at keepmum reach it again once it answers.
+    /// Unregister and register again: brings back one that is registered but not answering, and
+    /// reloads one that runs (a config file edited by hand, a model swapped). Protection stays as it
+    /// is, so the agents pointed at keepmum reach it again once it answers; a request sent in the
+    /// few seconds between fails rather than going out unscanned.
     func restartService() async {
         await act {
-            self.serviceChange = .starting
+            let wasRunning = self.serviceRunning
+            self.serviceChange = .restarting
             defer { self.serviceChange = nil }
             try? await self.service.unregister()
+            // Until the old process has gone, it still answers: waiting for "running" would end at once.
+            if wasRunning { try? await self.waitForService(running: false) }
             try self.registerService()
             try await self.waitForService(running: true)
         }
