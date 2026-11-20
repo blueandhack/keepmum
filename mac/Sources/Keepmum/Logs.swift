@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// One value keepmum masked in new text (`GET /_keepmum/findings`). Never the value: its type, the
-/// rule that found it, its length, for values of 8 or more characters the first and last one, and
-/// the text around it with every masked value shown as its type (`‹SECRET›`).
+/// One value keepmum masked in new text (`GET /_keepmum/findings`): its type, the rule that found
+/// it, its length, for values of 8 or more characters the first and last one, and the text around
+/// it with every masked value shown as its type (`‹SECRET›`). The value itself only with [log]
+/// values on, for Show values.
 struct Finding: Decodable, Sendable, Identifiable {
     var ts: Double
     var seq: Int
@@ -13,6 +14,8 @@ struct Finding: Decodable, Sendable, Identifiable {
     var chars: Int
     /// `g…w`, `•••` for short values, nil with [log] previews = false.
     var preview: String?
+    /// The value as it was: only with [log] values on, for Show values (RevealValues.swift).
+    var value: String?
     /// masked, or observed (observe mode: sent unmasked).
     var outcome: String
     var client: String?
@@ -112,10 +115,11 @@ struct Finding: Decodable, Sendable, Identifiable {
 
     var clientName: String { agentName(client) }
 
-    func matches(_ query: String) -> Bool {
+    /// `reveal`: values show, so a search finds them too.
+    func matches(_ query: String, reveal: Bool = false) -> Bool {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         if q.isEmpty { return true }
-        return [preview ?? "", type, Theme.label(type), foundBy, clientName, outcome, before ?? "", after ?? ""].contains { $0.lowercased().contains(q) }
+        return [reveal ? value ?? "" : "", preview ?? "", type, Theme.label(type), foundBy, clientName, outcome, before ?? "", after ?? ""].contains { $0.lowercased().contains(q) }
     }
 
     /// Synthetic rows for preview mode, clearly not real values.
@@ -240,6 +244,7 @@ struct LogCell: View {
     var column: String
     /// A check's flagged text, one line, when keepmum kept it.
     var text: String?
+    @Environment(\.revealValues) private var reveal
 
     var body: some View {
         switch row {
@@ -273,9 +278,9 @@ struct LogCell: View {
                 KindBadge(icon: Theme.icon(f.type), label: name == "URL" ? name : name.prefix(1).uppercased() + name.dropFirst(), tone: Theme.masked)
             case "summary":
                 HStack(spacing: Space.s) {
-                    Text(f.masked).font(.km(.mono)).foregroundStyle(Theme.masked).fixedSize()
+                    Text(f.shown(reveal)).font(.km(.mono)).foregroundStyle(Theme.masked).lineLimit(1).fixedSize()
                     if f.before != nil || f.after != nil {
-                        Text(contextLine(f, around: 14)).font(.km(.monoSmall)).truncationMode(.tail)
+                        Text(contextLine(f, around: 14, reveal: reveal)).font(.km(.monoSmall)).truncationMode(.tail)
                     }
                 }
             case "evidence": FinderLabel(finding: f)
@@ -594,6 +599,8 @@ struct CheckDetail: View {
 /// table, or split into two, one above the other; one filter bar for both, and one details pane.
 struct LogsPage: View {
     var store: StatsStore
+    /// For Show values to turn [log] values on; nil in snapshots.
+    var engine: Engine? = nil
     @State private var query = ""
     /// What shows: "all"; "checks", or "check:<check>"; "masked", or "type:<TYPE>".
     @State private var show = "all"
@@ -611,8 +618,9 @@ struct LogsPage: View {
     enum Layout: String { case together, split }
     private static let defaultShare = 0.42
 
-    init(store: StatsStore, selectedHit: String? = nil, layout: Layout? = nil) {
+    init(store: StatsStore, engine: Engine? = nil, selectedHit: String? = nil, layout: Layout? = nil) {
         self.store = store
+        self.engine = engine
         _selection = State(initialValue: selectedHit.map { "check|" + $0 })
         drawn = layout
     }
@@ -630,7 +638,7 @@ struct LogsPage: View {
             (show == "all" || show == "checks" || show == "check:\(h.check)") && h.matches(query, text: text(h))
         } : []
         let shownValues = wantsValues ? values.filter { f in
-            (!show.hasPrefix("type:") || show == "type:\(f.type)") && (!valuesOnly || f.found(by: source)) && f.matches(query)
+            (!show.hasPrefix("type:") || show == "type:\(f.type)") && (!valuesOnly || f.found(by: source)) && f.matches(query, reveal: store.valuesShown)
         } : []
         let both = wantsChecks && wantsValues
         let current = drawn ?? layout
@@ -642,6 +650,7 @@ struct LogsPage: View {
             PageHeader(title: "Logs", subtitle: checking
                        ? "What the checks flagged and what keepmum masked in new text, newest first. Kept in memory until keepmum exits."
                        : "What keepmum masked in new text, newest first. Kept in memory until keepmum exits.") {
+                ValuesButton(store: store, engine: engine)
                 if checking {
                     Segmented(options: [(Layout.together, "Together"), (Layout.split, "Split")],
                               selection: Binding(get: { current }, set: { layout = $0 }))
@@ -666,6 +675,7 @@ struct LogsPage: View {
                 detail(hits: hits, values: values)
             }
         }
+        .environment(\.revealValues, store.valuesShown)
         .task(id: store.sampleMode) {
             while !Task.isCancelled && !isSnapshot {
                 await store.loadFindings()
@@ -903,6 +913,7 @@ extension Snapshot.GuardHit {
 private struct FindingCell: View {
     var finding: Finding
     var column: String
+    @Environment(\.revealValues) private var reveal
 
     var body: some View {
         let f = finding
@@ -915,14 +926,14 @@ private struct FindingCell: View {
                 Text(Theme.label(f.type))
             }
             .font(.km(.callout)).foregroundStyle(Theme.text)
-        case "value": Text(f.masked).font(.km(.mono)).foregroundStyle(Theme.masked)
+        case "value": Text(f.shown(reveal)).font(.km(.mono)).foregroundStyle(Theme.masked).lineLimit(1).truncationMode(.middle)
         case "length": Text("\(f.chars)").font(.km(.callout)).monospacedDigit().foregroundStyle(Theme.textSecondary)
         case "foundBy": FinderLabel(finding: f)
         case "context":
             if f.before == nil && f.after == nil {
                 Text("—").font(.km(.callout)).foregroundStyle(Theme.textSecondary)
             } else {
-                Text(contextLine(f, around: 14)).font(.km(.monoSmall)).truncationMode(.tail)
+                Text(contextLine(f, around: 14, reveal: reveal)).font(.km(.monoSmall)).truncationMode(.tail)
             }
         case "provider": Text(f.providerName).font(.km(.callout)).foregroundStyle(Theme.text)
         case "outcome": OutcomeLabel(kind: f.outcome == "observed" ? .observed : .masked)
@@ -940,6 +951,7 @@ struct FindingDetail: View {
     /// The Activity row of the request it went out in, when it is still there.
     var request: Snapshot.Event? = nil
     var previewsOn = true
+    @Environment(\.revealValues) private var reveal
 
     var body: some View {
         let f = finding
@@ -947,13 +959,18 @@ struct FindingDetail: View {
             HStack(spacing: Space.s) {
                 Image(systemName: Theme.icon(f.type)).foregroundStyle(Theme.textSecondary)
                 Text(Theme.label(f.type)).font(.km(.headline)).foregroundStyle(Theme.text)
-                Text(f.masked).font(.km(.mono).weight(.semibold)).foregroundStyle(Theme.masked).textSelection(.enabled)
+                Text(f.shown(reveal)).font(.km(.mono).weight(.semibold)).foregroundStyle(Theme.masked).textSelection(.enabled)
+                    .lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: Space.s)
                 OutcomeLabel(kind: f.outcome == "observed" ? .observed : .masked)
             }
             DetailColumns {
                 Text(story(f)).font(.km(.body)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
                 DetailGrid {
+                    if reveal {
+                        DetailField("Value", f.value ?? "Not kept: masked before Original values was turned on, or before keepmum last started",
+                                    mono: f.value != nil, tone: f.value != nil ? Theme.text : Theme.textSecondary)
+                    }
                     DetailField("Shape", "\(f.masked)\n\(shapeNote(f))", mono: false)
                     DetailField("Length", "\(f.chars) characters")
                     GridRow {
@@ -1047,7 +1064,7 @@ struct FindingDetail: View {
     /// Before and after in the secondary color, the value itself highlighted, other values (‹TYPE›) tinted.
     private func contextText(_ f: Finding) -> AttributedString {
         var out = quietTinted(f.before ?? "")
-        var value = AttributedString(f.masked)
+        var value = AttributedString(f.shown(reveal))
         value.foregroundColor = Theme.masked
         value.backgroundColor = Theme.soft(Theme.masked)
         value.font = .km(.mono).weight(.semibold)

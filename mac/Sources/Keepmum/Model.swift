@@ -424,6 +424,13 @@ final class StatsStore {
     /// [log] previews: the feed carries the first and last character of long values.
     private(set) var previewsOn = true
     private(set) var contextOn = true
+    /// [log] values: the feed carries each masked value as it was (off by default).
+    private(set) var valuesOn = false
+    /// Show values was chosen, after Touch ID or the password: until Hide values, the app quits, or
+    /// [log] values goes off. Never saved.
+    var valuesRevealed = false
+    /// The Logs and Activity pages draw masked values as they were.
+    var valuesShown: Bool { valuesOn && valuesRevealed && !sampleMode }
 
     func loadFindings() async {
         if sampleMode {
@@ -440,7 +447,7 @@ final class StatsStore {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 4
-        struct Page: Decodable { var findings: [Finding]; var previews: Bool?; var context: Bool?; var checks: [String: CheckText]? }
+        struct Page: Decodable { var findings: [Finding]; var previews: Bool?; var context: Bool?; var values: Bool?; var checks: [String: CheckText]? }
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { findings = []; return }
         let decoder = JSONDecoder()
@@ -450,6 +457,9 @@ final class StatsStore {
         checkTexts = Dictionary(uniqueKeysWithValues: (page.checks ?? [:]).compactMap { k, v in Int(k).map { ($0, v) } })
         previewsOn = page.previews ?? true
         contextOn = page.context ?? false
+        // Turned off: showing them again asks for Touch ID or the password again.
+        if valuesOn && page.values != true { valuesRevealed = false }
+        valuesOn = page.values ?? false
     }
 
     // MARK: Tools (Settings › Tools): the network tools agents offered, and what each may receive.

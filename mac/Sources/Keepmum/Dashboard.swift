@@ -46,8 +46,8 @@ struct Dashboard: View {
                 Group {
                     switch page {
                     case .overview: OverviewPage(store: store)
-                    case .activity: ActivityPage(store: store)
-                    case .logs: LogsPage(store: store)
+                    case .activity: ActivityPage(store: store, engine: engine)
+                    case .logs: LogsPage(store: store, engine: engine)
                     case .performance: PerformancePage(store: store)
                     case .detection: DetectionPage(store: store, engine: engine)
                     case .map: ProtectionMapPage(store: store, engine: engine)

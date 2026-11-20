@@ -376,3 +376,16 @@ def test_a_prune_by_size_says_so_in_the_log_view():
     assert summary({"event": "pruned", "dropped": 120, "reason": "size", "max_bytes": 1 << 30}) == \
         "120 oldest entries removed to keep the log under 1024 MB"
     assert summary({"event": "pruned", "dropped": 5, "keep_days": 90}) == "5 entries older than 90 days removed"
+
+
+def test_showing_masked_values_is_recorded_as_a_weakening():
+    from keepmum.audit import config_changes, config_state
+    from keepmum.config import Config
+
+    off, on = Config(), Config()
+    on.log_values = True
+    assert config_changes(config_state(off), config_state(on)) == [
+        {"setting": "log.values", "from": False, "to": True, "weakens": True}]
+    older = config_state(off)
+    older.pop("values")  # a log from before the setting: no change
+    assert config_changes(older, config_state(off)) == []

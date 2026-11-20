@@ -36,6 +36,8 @@ final class Engine {
         /// `[log] previews` and `context`: what the Logs page may show (nil from older engines: on).
         var previews: Bool?
         var context: Bool?
+        /// `[log] values`: the Logs and Activity pages may show masked values as they were (nil from older engines: off).
+        var values: Bool?
         /// `[audit] keep_days`.
         var keepDays: Int?
         /// `[log] keep_days`: how long the Logs page's rows outlast a restart; 0: memory only (nil from older engines).
@@ -1092,7 +1094,7 @@ final class Engine {
         await act { try await self.check(["destinations", "remove", rule, host]) }
     }
 
-    /// key: previews or context.
+    /// key: previews, context or values.
     func setLog(_ key: String, _ on: Bool) async {
         await act { try await self.check(["log", key, on ? "on" : "off"]) }
     }

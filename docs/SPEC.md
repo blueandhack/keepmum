@@ -195,7 +195,7 @@ The user experience is one command, `keepmum claude` or `keepmum codex`, or the 
 | `keepmum guard [setup\|injection\|harm\|commands\|local\|remove]` | The optional checks: prompt injection in tool results, harmful requests in what you type, risky shell commands in replies; off, warn, block, or local (a flagged request answered by a model on this Mac). |
 | `keepmum destinations [add\|remove]` | Hosts a shell command may send a rule's tokens to, besides its issuer's own. Adding needs `--yes`. |
 | `keepmum extensions [keep\|remove]` | Plugins, marketplaces, hooks, MCP servers, skills and global instruction files in the agents' settings; what other apps added since you last looked, kept or taken out (one entry, after a backup). |
-| `keepmum log previews\|context on\|off` | What the app's Logs page may show about masked values (memory only). |
+| `keepmum log previews\|context\|values on\|off` | What the app's Logs page may show about masked values (memory only). |
 | `keepmum exclude` / `keepmum include` | Lets one project's Claude Code skip keepmum. |
 | `keepmum status` | Setup, protection and settings as JSON, for the Mac app. |
 | `keepmum audit list\|verify\|head\|export\|keep` | The tamper-evident audit log: requests, protection changes, starts and stops. |

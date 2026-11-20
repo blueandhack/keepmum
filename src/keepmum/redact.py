@@ -218,10 +218,12 @@ class Redactor:
         # request brought that is new. Claude Code resends the whole conversation every turn.
         self.fresh = 0
         # Those spans for the Logs page: type, detector, rule, length, and with `previews` the
-        # first and last character. Never the value. Reset with `fresh`.
+        # first and last character; the value itself only with `values` ([log] values: the Mac
+        # app's Show values, in memory only). Reset with `fresh`.
         self.findings: list[dict] = []
         self.previews = True
         self.context = True
+        self.values = False
         # While masking a tool's result: the server it came from, noted on each value in the vault,
         # so that server may have its own values back (tools.py). Tool call ids -> tool names.
         self._origin: str | None = None
@@ -445,7 +447,8 @@ class Redactor:
                 self.findings.append({"type": s.type, "detector": detector, "rule": rule, "by": by, "earlier": earlier,
                                       "chars": len(value),
                                       "preview": preview(value) if self.previews else None,
-                                      "before": before, "after": after})
+                                      "before": before, "after": after,
+                                      **({"value": value} if self.values else {})})
         if not spans:
             return text
         # A value inside a JSON string (Codex sends command output as JSON text) is kept as it reads

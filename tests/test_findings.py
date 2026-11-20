@@ -14,12 +14,12 @@ from keepmum.stats import History, Stats
 from keepmum.vault import Vault
 
 
-def make(tmp_path, previews=True):
+def make(tmp_path, previews=True, values=False):
     mock = selftest.MockUpstream()
     up = httpx.AsyncClient(transport=httpx.ASGITransport(app=mock.app), base_url="http://up")
     stats = Stats(history=History(tmp_path / "history.jsonl"))
     proxy = Proxy(Redactor(Pipeline(RulesDetector(), None, pii=True), Vault(secrets.token_bytes(32))), upstream="http://up",
-                  client=up, stats=stats, stats_token="t", previews=previews)
+                  client=up, stats=stats, stats_token="t", previews=previews, values=values)
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://127.0.0.1:7788")
     return proxy, client
 
@@ -75,6 +75,29 @@ def test_previews_off_keeps_types_and_drops_the_characters(tmp_path):
     assert before["findings"][0]["preview"] is not None
     assert after["previews"] is False and [f["preview"] for f in after["findings"]] == [None, None]
     assert all(f["preview"] is None for f in proxy.stats.findings)  # forgotten, not just hidden
+
+
+def test_values_are_off_by_default_and_on_reach_the_app_only(tmp_path):
+    canary = selftest.make_canary()
+    state = {"on": False}
+
+    async def go():
+        proxy, client = make(tmp_path, values=lambda: state["on"])
+        await client.post("/v1/messages", json=body(f"export GITHUB_TOKEN={canary}"))
+        off = await findings(client)
+        state["on"] = True
+        await client.post("/v1/messages", json=body(f"export GITHUB_TOKEN={canary}", "mail jane.roe@fastmail.com"))
+        on = await findings(client)
+        state["on"] = False
+        return off, on, await findings(client), proxy
+
+    (_, off), (_, on), (_, again), proxy = anyio.run(go)
+    assert off["values"] is False and canary not in str(off)
+    assert on["values"] is True and [f.get("value") for f in on["findings"]] == ["jane.roe@fastmail.com", None]
+    # Off again: forgotten, not just hidden. Never on disk.
+    assert again["values"] is False and "jane.roe" not in str(again)
+    assert all("value" not in f for f in proxy.stats.findings)
+    assert "jane.roe" not in (tmp_path / "history.jsonl").read_text()
 
 
 def test_context_shows_the_text_around_a_value_with_every_value_as_its_type(tmp_path):

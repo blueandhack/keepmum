@@ -257,7 +257,7 @@ class Proxy:
     def __init__(self, redactor: Redactor, upstream: str = UPSTREAM, policy: dict[str, str] | None = None,
                  client: httpx.AsyncClient | None = None, stats: Stats | None = None, stats_token: str | None = None,
                  info: dict | None = None, observe=None, openai_upstream: str = OPENAI_UPSTREAM,
-                 chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, audit=None,
+                 chatgpt_upstream: str = CHATGPT_UPSTREAM, previews=True, context=True, values=False, audit=None,
                  gemini_upstream: str = GEMINI_UPSTREAM, code_assist_upstream: str = CODE_ASSIST_UPSTREAM,
                  tools=None, guards=None, commands=None, local=None, antigravity_upstream: str = ANTIGRAVITY_UPSTREAM,
                  local_skills=None, handback=None, review=None, speed=None, handback_harm=None,
@@ -321,6 +321,8 @@ class Proxy:
         self._previews = previews if callable(previews) else (lambda: bool(previews))
         # The text around each value on the Logs page, values shown as types ([log] context).
         self._context = context if callable(context) else (lambda: bool(context))
+        # Each masked value as it was, for the Mac app's Show values ([log] values). In memory only.
+        self._values = values if callable(values) else (lambda: bool(values))
         # The detectors and the vault are not thread-safe; scans run one at a time off the event loop.
         self._scan_lock = threading.Lock()
         self.app = Starlette(routes=[Route("/{path:path}", self.handle, methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])])
@@ -483,8 +485,11 @@ class Proxy:
                 self.stats.drop_previews()
             if not self._context():
                 self.stats.drop_context()
+            if not self._values():
+                self.stats.drop_values()
             return JSONResponse({"findings": self.stats.findings_page(), "previews": self._previews(),
-                                 "context": self._context(), "checks": self.stats.check_texts_page()})
+                                 "context": self._context(), "values": self._values(),
+                                 "checks": self.stats.check_texts_page()})
         if path == "/_keepmum/tools" and request.method == "GET":
             # The network tools agents offered, each with its restore setting: names, never values.
             servers = self.tools.snapshot(self.policy) if self.tools else []
@@ -710,6 +715,7 @@ class Proxy:
             self.redactor.shown = {}
             self.redactor.previews = self._previews()
             self.redactor.context = self._context()
+            self.redactor.values = self._values()
             if api == "responses":
                 masked = self.redactor.redact_responses_request(body)
             elif api in ("gemini", "gemini-plain"):

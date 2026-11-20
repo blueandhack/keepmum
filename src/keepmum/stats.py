@@ -563,6 +563,12 @@ class Stats:
             for f in self.findings:
                 f["preview"] = None
 
+    def drop_values(self) -> None:
+        """[log] values turned off: forget the values already kept."""
+        with self._lock:
+            for f in self.findings:
+                f.pop("value", None)
+
     def drop_context(self) -> None:
         """[log] context turned off: forget the text kept around each value, and the checks' texts."""
         with self._lock:

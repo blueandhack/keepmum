@@ -477,6 +477,11 @@ enum Snapshotter {
                        to: "\(dir)/activity-detail-\(dark ? "dark" : "light").png", dark: dark)
             }
         }
+        // Show values: a value's details with its value as it was (a made-up token, 40 characters like the sample's).
+        var shown = Finding.samples[0]
+        shown.value = "ghp_EXAMPLE" + String(repeating: "0", count: 28) + "Q"
+        render(FindingDetail(finding: shown, related: [Finding.samples[8]]).environment(\.revealValues, true).frame(width: 900)
+                .background(Theme.surface), to: "\(dir)/logs-detail-values-light.png", dark: false)
         // Logs and Activity with a row selected: its details beside the table on a wide window, in
         // its place on a narrow one.
         for (name, width, height) in [("wide", 1700.0, 1000.0), ("narrow", 900.0, 720.0)] {

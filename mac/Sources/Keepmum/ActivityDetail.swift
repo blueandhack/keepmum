@@ -5,13 +5,16 @@ import SwiftUI
 
 struct ActivityPage: View {
     var store: StatsStore
+    /// For Show values to turn [log] values on; nil in snapshots.
+    var engine: Engine? = nil
     @State private var filter: Snapshot.Event.Kind? = nil
     @State private var selected: String?
     @Environment(\.isSnapshot) private var isSnapshot
 
     /// `selected`: a row whose details show (the snapshot renderer's).
-    init(store: StatsStore, selected: String? = nil) {
+    init(store: StatsStore, engine: Engine? = nil, selected: String? = nil) {
         self.store = store
+        self.engine = engine
         _selected = State(initialValue: selected)
     }
 
@@ -19,7 +22,10 @@ struct ActivityPage: View {
         let s = store.snapshot
         let events = store.newerThanHistory(kind: filter) + store.history
         VStack(spacing: Space.l) {
-            PageHeader(title: "Activity", subtitle: "Every request, newest first. Counts only: keepmum never shows a value.")
+            PageHeader(title: "Activity", subtitle: store.valuesShown ? "Every request, newest first. Masked values show as they were, on this Mac only."
+                                                                       : "Every request, newest first. Values show as their shape unless you choose Show values.") {
+                ValuesButton(store: store, engine: engine)
+            }
             ListDetail(key: "activity", ids: events.map(\.id), selection: $selected, back: "Requests",
                          hint: "Click a request, or use ↑ ↓ and Return, for what keepmum did with it and why.") {
                 VStack(spacing: Space.l) {
@@ -45,6 +51,7 @@ struct ActivityPage: View {
                 }
             }
         }
+        .environment(\.revealValues, store.valuesShown)
         .task(id: "\(filter?.rawValue ?? ""):\(store.sampleMode)") { await store.loadHistory(kind: filter) }
         // The values masked in a request are in the Logs feed: kept in step for the details.
         .task(id: store.sampleMode) {
@@ -448,6 +455,7 @@ struct ActivityDetail: View {
 /// One masked value, in a list: its type, its shape, who found it, and the text around it.
 struct FoundValue: View {
     var finding: Finding
+    @Environment(\.revealValues) private var reveal
 
     var body: some View {
         let f = finding
@@ -455,12 +463,13 @@ struct FoundValue: View {
             HStack(spacing: Space.s) {
                 Image(systemName: Theme.icon(f.type)).font(.km(.caption)).foregroundStyle(Theme.textSecondary).frame(width: 16)
                 Text(Theme.label(f.type)).font(.km(.callout)).foregroundStyle(Theme.text)
-                Text(f.masked).font(.km(.mono)).foregroundStyle(Theme.masked)
+                Text(f.shown(reveal)).font(.km(.mono)).foregroundStyle(Theme.masked).lineLimit(1).truncationMode(.middle)
+                    .textSelection(.enabled)
                 Text("\(f.chars) chars").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
                 Text(f.foundBy).font(.km(.caption)).foregroundStyle(Theme.textSecondary).lineLimit(1)
             }
             if f.before != nil || f.after != nil {
-                Text(contextLine(f)).font(.km(.monoSmall)).lineLimit(2).padding(.leading, 24)
+                Text(contextLine(f, reveal: reveal)).font(.km(.monoSmall)).lineLimit(2).padding(.leading, 24)
                     .textSelection(.enabled)
             }
         }
@@ -469,12 +478,12 @@ struct FoundValue: View {
 }
 
 /// The text around a value on one line: before, the value's shape, after, line breaks as spaces.
-func contextLine(_ f: Finding, around: Int? = nil) -> AttributedString {
+func contextLine(_ f: Finding, around: Int? = nil, reveal: Bool = false) -> AttributedString {
     func flat(_ s: String?) -> String { (s ?? "").replacingOccurrences(of: "\n", with: " ⏎ ") }
     var before = flat(f.before)
     if let around, before.count > around { before = "…" + before.suffix(around) }
     var out = quietTinted(before)
-    var value = AttributedString(f.masked)
+    var value = AttributedString(f.shown(reveal))
     value.foregroundColor = Theme.masked
     value.backgroundColor = Theme.soft(Theme.masked)
     out += value

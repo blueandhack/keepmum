@@ -77,6 +77,7 @@
     level = "info"
     previews = true        # the Logs page shows the first and last character of masked values (in memory only)
     context = true         # and the text around each, and what the checks flagged, every masked value shown as its type (in memory only)
+    values = false         # the Mac app may show each masked value as it was, behind its Show values button (in memory only)
     keep_days = 30         # the Logs page's rows (no text, no previews) kept on disk across restarts this long; 0: memory only
 """
 
@@ -97,7 +98,7 @@ _SCHEMA = {
     "detect": {"pii": bool, "model": bool, "observe": bool, "pass": list},
     "allowlist": {"strings": list, "patterns": list},
     "rules": {"mask": list, "off": list},
-    "log": {"level": str, "previews": bool, "context": bool, "keep_days": int},
+    "log": {"level": str, "previews": bool, "context": bool, "values": bool, "keep_days": int},
     "audit": {"keep_days": int},
     "guard": {"injection": str, "injection_threshold": float, "harm": str, "harm_model": str, "harm_sensitivity": str, "commands": str, "local_url": str, "local_model": str,
               "local_servers": list, "local_skills": list, "local_handback": str, "local_handback_instructions": str,
@@ -154,6 +155,8 @@ class Config:
     log_level: str = "info"
     log_previews: bool = True
     log_context: bool = True
+    # The masked values as they were, for the Mac app's Show values (in memory only, never on disk).
+    log_values: bool = False
     # How long the Logs page's rows are kept on disk (stats.LogStore): days, 0 for memory only.
     log_keep_days: int = 30
     audit_keep_days: int = 90
@@ -303,6 +306,7 @@ def load(path: Path | None = None) -> Config:
     cfg.log_level = log.get("level", cfg.log_level)
     cfg.log_previews = log.get("previews", cfg.log_previews)
     cfg.log_context = log.get("context", cfg.log_context)
+    cfg.log_values = log.get("values", cfg.log_values)
     cfg.log_keep_days = log.get("keep_days", cfg.log_keep_days)
     if not 0 <= cfg.log_keep_days <= 365:
         raise ConfigError(f"{path}: log.keep_days must be 0 (memory only) to 365")

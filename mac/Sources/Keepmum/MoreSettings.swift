@@ -107,9 +107,10 @@ struct LogsPageSection: View {
     var body: some View {
         let previews = engine.status?.previews ?? true
         let context = engine.status?.context ?? true
+        let values = engine.status?.values ?? false
         let keep = engine.status?.logKeepDays
         FormSection(title: "Logs page",
-                    footer: "Previews and text are kept in keepmum's memory until it exits and sent only to this app; never written to disk. The model provider never sees any of it.",
+                    footer: "Previews, text and original values are kept in keepmum's memory until it exits and sent only to this app; never written to disk. The model provider never sees any of it.",
                     details: "Kept rows are in ~/.config/keepmum/logs.jsonl, readable by you alone: for each check, what it flagged where (the check, the tool, the score, the categories), and what came of it (answered on this Mac, handed back, your review's answers, why a rewrite did not pass); for each masked value, its type, the rule that found it and its length. Never what was flagged, what you typed, a value or a preview. Rows older than this are dropped when keepmum starts; Off deletes the file.") {
             if let keep {
                 FormRow(title: "Keep after a restart",
@@ -133,6 +134,18 @@ struct LogsPageSection: View {
                                     : "Off: no text around masked values, and no flagged text, is kept") {
                 Switch(isOn: context, enabled: engine.isBundled && !engine.busy) { on in Task { await engine.setLog("context", on) } }
                     .accessibilityLabel("Text around values")
+            }
+            Hairline()
+            FormRow(title: "Original values",
+                    detail: values ? "Show values on the Logs and Activity pages draws each masked value as it was, after Touch ID or your password"
+                                   : "Off: the app never gets a masked value, only its shape") {
+                Switch(isOn: values, enabled: engine.isBundled && !engine.busy) { on in
+                    Task {
+                        if on, !(await OwnerCheck.confirm("let the Logs and Activity pages show the values keepmum masked")) { return }
+                        await engine.setLog("values", on)
+                    }
+                }
+                .accessibilityLabel("Original values")
             }
         }
     }

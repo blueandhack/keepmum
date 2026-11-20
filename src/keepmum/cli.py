@@ -2074,6 +2074,14 @@ def log_context(action: str = typer.Argument("status", help="on, off, or status"
                 "context: off; no text around masked values is kept")
 
 
+@log_app.command("values")
+def log_values(action: str = typer.Argument("status", help="on, off, or status")) -> None:
+    """Each masked value as it was, for the Mac app's Logs and Activity pages to show behind Show values
+    (off, the default). In keepmum's memory only, never on disk, never in the audit log."""
+    _log_switch("values", action, "values: the Mac app may show each masked value as it was (Show values)",
+                "values: off; the Logs page never gets a masked value")
+
+
 @log_app.command("keep")
 def log_keep(days: str = typer.Argument("status", help="Days to keep the Logs page's rows across restarts (1-365), off (memory only), or status.")) -> None:
     """How long the Logs page's rows outlast a restart: each check's hit and what came of it, and each masked
@@ -2741,7 +2749,7 @@ def status(as_json: bool = typer.Option(True, "--json/--text", help="Print JSON 
            "protect": prot, "port": cfg.port, "serve_running": shared_serve_port(cfg) is not None,
            "observe": cfg.observe, "model_on": cfg.model, "clients": clients, "pii": cfg.pii, "pass": cfg.pass_types, "rules": _rules_json(cfg),
            "excluded": excluded_projects(), "gateways": cfg.gateways, "destinations": cfg.destinations,
-           "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
+           "previews": cfg.log_previews, "context": cfg.log_context, "values": cfg.log_values, "keep_days": cfg.audit_keep_days,
            "log_keep_days": cfg.log_keep_days,
            "guard": _guard_status(), "extensions": _extensions_status()}
     typer.echo(json.dumps(out) if as_json else "\n".join(f"{k}: {v}" for k, v in out.items()))

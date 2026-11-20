@@ -304,7 +304,7 @@ def config_state(cfg) -> dict:
         "restore": dict(sorted(cfg.restore.items())), "upstream": cfg.upstream,
         "gateways": sorted(f"{name} = {url}" for name, url in cfg.gateways.items()),
         "destinations": sorted(f"{rule} = {h}" for rule, hosts in cfg.destinations.items() for h in hosts),
-        "previews": cfg.log_previews, "context": cfg.log_context, "keep_days": cfg.audit_keep_days,
+        "previews": cfg.log_previews, "context": cfg.log_context, "values": cfg.log_values, "keep_days": cfg.audit_keep_days,
         "log_keep_days": cfg.log_keep_days,
         "guard": cfg.guard_injection, "injection_threshold": cfg.guard_injection_threshold, "harm": cfg.guard_harm,
         "harm_sensitivity": cfg.guard_harm_sensitivity, "harm_model": cfg.guard_harm_model,
@@ -338,10 +338,12 @@ _SETTINGS = {
     "pass": ("detect.pass", "added"), "rules_off": ("rules.off", "added"), "mask_rules": ("rules.mask", "removed"),
     "allow_strings": ("allowlist.strings", "added"), "allow_patterns": ("allowlist.patterns", "added"),
     "upstream": ("server.upstream", "any"), "gateways": ("gateways", "added"), "destinations": ("destinations", "added"), "previews": ("log.previews", None), "context": ("log.context", None),
+    # Values on puts every masked secret a click away on this Mac: recorded as a weakening.
+    "values": ("log.values", True),
     "log_keep_days": ("log.keep_days", None),
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
-_ADDED_LATER = {"context", "log_keep_days", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers", "local_skills",
+_ADDED_LATER = {"context", "values", "log_keep_days", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers", "local_skills",
                 "injection_threshold", "harm_sensitivity", "local_handback", "local_handback_instructions",
                 "local_handback_review", "local_handback_harm", "local_handback_harm_instructions"}
 # Local is below block: a flagged request is answered (on this Mac) rather than refused.

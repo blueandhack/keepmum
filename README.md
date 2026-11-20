@@ -418,6 +418,7 @@ local-3425 = "http://127.0.0.1:3425"
 level = "info"         # logs contain types and counts, never values
 previews = true        # the app's Logs page shows the first and last character of masked values (memory only; `keepmum log previews on|off`)
 context = true         # and the text around each, and what the checks flagged, every masked value shown as its type (memory only; `keepmum log context on|off`)
+values = false         # the app's Logs and Activity pages may show each masked value as it was, behind Show values and Touch ID (memory only; `keepmum log values on|off`)
 keep_days = 30         # the Logs page's rows, without text or previews, kept on disk across restarts this long; 0: memory only (`keepmum log keep`)
 
 [audit]
@@ -454,6 +455,7 @@ local_servers = [{ url = "http://localhost:11434", model = "qwen3:8b" },
 | The Logs page's check details: the flagged text (up to 4,000 characters) and what the user had typed, every masked value and placeholder in them shown as its type | Process memory only, with the last 200 hits; `[log] context = false` turns it off and forgets what was kept |
 | Masked values, and which tool servers returned each | Process memory only, the 10,000 used most recently, cleared on exit |
 | The Logs page: per masked value its type, rule and length, and the first and last character of values of 8 or more characters | Previews: process memory only (the last 2,000), cleared on exit; `[log] previews = false` keeps types and rules only. The rows without previews: as above |
+| The Logs and Activity pages' original values, with `[log] values = true` (off by default) | Process memory only, with the findings; shown in the app only after Touch ID or the login password; `[log] values = false` forgets what was kept |
 | The Logs page's context: up to 80 characters each side of a masked value, with every masked value and placeholder in it shown as its type (`‹SECRET›`), as the provider received it | Process memory only, with the findings; `[log] context = false` turns it off and forgets what was kept |
 
 keepmum makes no network calls except the request it forwards, `keepmum setup`'s one model download, and `keepmum guard setup`'s downloads if you run them. One more: with the injection check on and its model from an earlier keepmum version, the background service downloads the current one (164 MB, from the same Hugging Face org, pinned and checked) when it starts. There is no telemetry. The Mac app can check for updates; it asks on its first launch and checks only if you say yes (Settings › General › Updates). Each check downloads the update feed from keepmum.app (served through Cloudflare), which sees your IP address and keepmum's version; checks and updates are counted per day and version, and no addresses are kept (`worker/`). Settings › General › Updates › Count this Mac turns the counting off; [keepmum.app/privacy](https://keepmum.app/privacy) has the details.
