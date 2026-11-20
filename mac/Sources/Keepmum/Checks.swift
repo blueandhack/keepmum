@@ -76,7 +76,8 @@ struct ChecksSection: View {
                     if downloading {
                         progress(engine.checkDownload?.progress ?? 0)
                     } else {
-                        PillButton(title: (c.outdated == true ? "Update" : "Download") + " (164 MB)",
+                        PillButton(title: (c.outdated == true ? "Update" : "Download")
+                                   + (c.confirm.map { $0.on && !$0.installed } == true ? " (329 MB)" : " (164 MB)"),
                                    icon: "arrow.down.circle", prominent: stalled) {
                             Task { await engine.setUpCheck("injection") }
                         }
@@ -88,14 +89,51 @@ struct ChecksSection: View {
                 Hairline()
                 sensitivity(c, levels: levels, threshold: threshold)
             }
+            if c.installed, let second = c.confirm {
+                Hairline()
+                secondOpinion(second)
+            }
             if c.installed {
                 Hairline()
                 modelLine("Prompt Injection Guard Small \(c.release ?? ""), by Horizon Labs, fine-tuned by keepmum for coding-agent tool output · \(c.licence) · 0.4 GB while in use",
                           card: c.repo, remove: "injection")
+                if let second = c.confirm, second.installed {
+                    modelLine("Second opinion: Wolf Defender Small \(second.release ?? ""), by Patronus Protect · \(second.licence ?? "Apache-2.0") · 0.4 GB for a while after a hit",
+                              card: second.repo)
+                }
             }
             if c.server == nil, c.installed { llamaServerMissing }
         }
     }
+
+    /// Whether a second model must agree with a hit before it is reported ([guard] injection_confirm).
+    /// On, with its model not yet downloaded, every hit is reported, as with it off.
+    @ViewBuilder private func secondOpinion(_ s: Engine.Checks.Injection.Confirm) -> some View {
+        let downloading = engine.checkDownload?.what == "injection"
+        let missing = s.on && !s.installed
+        FormRow(title: "Second opinion",
+                detail: !s.on ? "Off: every hit of the model is reported"
+                    : missing ? "On, but its model is not downloaded yet: every hit is reported until it is"
+                    : "On: a hit is reported only if a second model agrees. Far fewer false alarms, a few injections fewer caught",
+                detailTone: missing ? Theme.warning : s.on ? Theme.text : Theme.textSecondary,
+                help: Self.secondOpinionHelp) {
+            HStack(spacing: Space.s) {
+                if missing {
+                    if downloading {
+                        progress(engine.checkDownload?.progress ?? 0)
+                    } else {
+                        PillButton(title: "Download (164 MB)", icon: "arrow.down.circle", prominent: true) {
+                            Task { await engine.setUpCheck("injection") }
+                        }
+                        .disabled(!engine.isBundled || engine.busy)
+                    }
+                }
+                modePicker(s.on ? "on" : "off", options: [("on", "On"), ("off", "Off")]) { await engine.setInjectionConfirm($0 == "on") }
+            }
+        }
+    }
+
+    private static let secondOpinionHelp = "A tool result the model flags is reported only if Wolf Defender Small (Patronus Protect, Apache-2.0) also scores it 0.001 or more. The two models flag different things: on 3,500 tool results from real Claude Code, Codex and OpenHands sessions, 53 flagged at Medium became 1. Catches stayed within about two points, except malicious repository files, 46% to 37%. It runs only on hits, so it adds nothing to other tool results. If it fails, the hit is reported. Turning it on is recorded in the audit log as weakening protection."
 
     private func injectionSetup(_ c: Engine.Checks.Injection, stalled: Bool) -> String {
         if c.outdated == true {

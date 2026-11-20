@@ -112,6 +112,20 @@ final class Engine {
             var source: String? = nil
             var release: String? { source?.split(separator: "@").last.map(String.init) }
             var repo: String? { model?.split(separator: "@").first.map(String.init) }
+            /// The second opinion ([guard] injection_confirm): a hit is reported only if this model also
+            /// scores it `threshold` or more. `installed`: its model is in place; until then every hit is
+            /// reported. nil from older engines.
+            struct Confirm: Decodable, Equatable {
+                var on: Bool
+                var installed: Bool
+                var model: String? = nil
+                var source: String? = nil
+                var licence: String? = nil
+                var threshold: Double? = nil
+                var release: String? { source?.split(separator: "@").last.map(String.init) }
+                var repo: String? { model?.split(separator: "@").first.map(String.init) }
+            }
+            var confirm: Confirm? = nil
         }
         struct Harm: Decodable, Equatable {
             var mode: String
@@ -650,6 +664,11 @@ final class Engine {
     /// The injection check's sensitivity: a level (high, medium, low, lowest) or a number.
     func setInjectionThreshold(_ value: String) async {
         await act { try await self.check(["guard", "sensitivity", "injection", value]) }
+    }
+
+    /// Whether a second model must agree with an injection hit (`keepmum guard confirm on|off`).
+    func setInjectionConfirm(_ on: Bool) async {
+        await act { try await self.check(["guard", "confirm", on ? "on" : "off"]) }
     }
 
     /// The harm check's sensitivity: high, medium, low or lowest, on whichever model it uses.
@@ -1301,7 +1320,11 @@ final class Engine {
                                                                  "low": .init(threshold: 0.241, caught: 0.972, ordinary: 0.023, security: 0.033, short: 0.4, sessions: 0.009),
                                                                  "lowest": .init(threshold: 0.298, caught: 0.972, ordinary: 0.016, security: 0.026, short: 0.4, sessions: 0.004)],
                                                         model: "keepmum/prompt-injection-guard-small-ft-gguf@5f2c815c67019db09de67f196cf30c9a0f74df87",
-                                                        source: "Horizon-Labs/prompt-injection-guard-small@v2.3-km1"),
+                                                        source: "Horizon-Labs/prompt-injection-guard-small@v2.3-km1",
+                                                        confirm: .init(on: true, installed: !outdated,
+                                                                       model: "keepmum/wolf-defender-prompt-injection-small-gguf@f2bf9100bfb4094b6b5a80781a9374069bf7fd3f",
+                                                                       source: "patronus-studio/wolf-defender-prompt-injection-small@v2.1",
+                                                                       licence: "Apache-2.0", threshold: 0.001)),
                                        harm: .init(mode: harmOnlyLocal || bothLocal ? "local" : "block", model: "small", installed: ["small": true, "0.6b": false, "4b": false],
                                                    server: "Keepmum.app/Contents/Resources/bin/llama-server", licence: "Apache-2.0",
                                                    sensitivity: "medium",
