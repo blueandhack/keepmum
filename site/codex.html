@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self' https://*.google-analytics.com https://*.googletagmanager.com; script-src 'self' https://static.cloudflareinsights.com https://*.googletagmanager.com; connect-src https://cloudflareinsights.com https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Keep API keys and .env secrets out of Codex’s requests · keepmum</title>
+<meta name="description" content="What Codex reads, it sends to OpenAI: your .env, a token in a config file, a password in a command’s output. keepmum, a free local proxy for Mac, masks them before each request leaves and restores them in the answer.">
+<meta name="theme-color" content="#E4572E">
+<link rel="canonical" href="https://keepmum.app/codex">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+<script src="analytics.js" defer></script>
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="keepmum">
+<meta property="og:locale" content="en_US">
+<meta property="og:url" content="https://keepmum.app/codex">
+<meta property="og:title" content="Keep API keys out of Codex’s requests">
+<meta property="og:description" content="Codex can still read your .env and use your keys. OpenAI gets placeholders.">
+<meta property="og:image" content="https://keepmum.app/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Keep mum. The keepmum mark on coral.">
+<meta name="twitter:card" content="summary_large_image">
+<!-- Structured data for search engines (schema.org). The questions and answers match the
+     "Questions" section below, word for word. -->
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebPage",
+   "@id": "https://keepmum.app/codex#page",
+   "url": "https://keepmum.app/codex",
+   "name": "Keep API keys and .env secrets out of Codex’s requests",
+   "inLanguage": "en",
+   "isPartOf": { "@id": "https://keepmum.app/#website" },
+   "about": { "@id": "https://keepmum.app/#app" },
+   "breadcrumb": { "@id": "https://keepmum.app/codex#breadcrumb" }
+  },
+  {
+   "@type": "BreadcrumbList",
+   "@id": "https://keepmum.app/codex#breadcrumb",
+   "itemListElement": [
+    { "@type": "ListItem", "position": 1, "name": "keepmum", "item": "https://keepmum.app/" },
+    { "@type": "ListItem", "position": 2, "name": "Codex", "item": "https://keepmum.app/codex" }
+   ]
+  },
+  {
+   "@type": "FAQPage",
+   "@id": "https://keepmum.app/codex#faq",
+   "mainEntity": [
+    {
+     "@type": "Question",
+     "name": "Does Codex send my .env file to OpenAI?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "If it reads it, yes. A file Codex reads, or a command’s output, becomes part of the conversation, and each request sends the conversation to OpenAI. With keepmum in between, the keys and passwords in it go as placeholders."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Does it work with a ChatGPT login?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Yes. keepmum codex works with a ChatGPT login or an API key, and keeps the login you already have."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Does keepmum change my Codex config?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "keepmum codex does not: its settings apply to that run only. keepmum protect on does: it adds a keepmum model provider to ~/.codex/config.toml and selects it, after backing the file up, and keepmum protect off removes only what it added."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "How much slower is Codex with keepmum?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "About 100 to 145 ms a request at the 95th percentile for 4K tokens of new text; earlier turns are cached. With the rules alone (keepmum model off), 8 to 9 ms."
+     }
+    }
+   ]
+  }
+ ]
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="doc-top">
+  <div class="wrap top">
+    <a class="brand" href="/">
+      <svg width="30" height="30" viewBox="0 0 100 100" aria-hidden="true"><path d="M21.6 69.8 L21.6 46.3 C21.6 37 27.8 30.9 35.8 30.9 C43.8 30.9 50 37 50 46.3 L50 69.8 M50 69.8 L50 46.3 C50 37 56.2 30.9 64.2 30.9 C72.2 30.9 78.4 37 78.4 46.3 L78.4 69.8 M12.9 69.8 L87.1 69.8" fill="none" stroke="#1A0F0B" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      keepmum
+    </a>
+    <nav aria-label="Main">
+      <a class="hide-phone" href="https://github.com/blueandhack/keepmum">GitHub</a>
+      <a class="btn small" href="/download">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main" class="doc">
+  <div class="wrap">
+    <p class="kicker"><a href="/">keepmum</a> › Codex</p>
+    <h1>Keep your keys out of Codex’s requests</h1>
+    <p class="updated">Last updated November 20, 2026</p>
+
+    <p>Codex reads your <code>.env</code> to find out why the build can’t reach the cache, runs <code>printenv</code>, and gets a log with a token in it. All of that becomes part of the conversation, and every request sends the conversation to OpenAI. keepmum is a free, open-source proxy on your Mac that masks those values before the request leaves and puts them back when the answer comes in, so Codex keeps working with the real values and OpenAI never receives them.</p>
+
+    <h2>What changes</h2>
+    <p>Codex reads a <code>.env</code> file. What it holds, and what goes to OpenAI:</p>
+    <pre><code><span class="cmt"># on your Mac</span>
+GITHUB_TOKEN=ghp_4Rk9vTq2LmX8wZbN7cYpD3fH6jS1aE0uGx5K
+REDIS_URL=redis://default:Pq7Lx2Vn9Rt4Mz8W@cache.internal:6379
+
+<span class="cmt"># sent to OpenAI</span>
+GITHUB_TOKEN=KEEPMUM_SECRET_9c4e2a71
+REDIS_URL=redis://default:KEEPMUM_SECRET_51d8f3b0@cache.internal:6379</code></pre>
+    <p>Only the secret is replaced: Codex still sees which service, host and port it is working with. When the model answers with a patch, a shell command or a script that uses the token, keepmum swaps the placeholder back on your Mac, quoted for the shell or escaped for JavaScript as needed, so the command gets the real value exactly as it was. The same value always gets the same placeholder, so OpenAI’s prompt cache keeps working.</p>
+
+    <h2>Set it up</h2>
+    <p>keepmum runs on a Mac with Apple silicon and macOS 14 or later. Pick one way in.</p>
+
+    <h3>The Mac app</h3>
+    <p><a href="/download">Download the app</a>, drag it into Applications, open it and follow <strong>Settings › Setup</strong>: download the model, start the background service, and switch on protection for Codex.</p>
+
+    <h3>The terminal: one session</h3>
+    <p>With the <a href="https://github.com/blueandhack/keepmum#install">command line installed</a>, start Codex through keepmum. It works with a ChatGPT login or an API key, and arguments pass through to <code>codex</code>.</p>
+    <pre><code>keepmum codex</code></pre>
+    <p>For that run only, keepmum adds a model provider pointed at itself, with your existing login and WebSockets off (keepmum can’t scan them, so it refuses them, and Codex uses HTTPS). Your Codex config file is not changed.</p>
+
+    <h3>The command line: every session</h3>
+    <pre><code>keepmum serve                       <span class="cmt"># the proxy, on http://127.0.0.1:7788</span>
+keepmum protect on --client codex   <span class="cmt"># Codex now sends every session to it</span></code></pre>
+    <p><code>keepmum protect on</code> adds a marked <code>[model_providers.keepmum]</code> block to <code>~/.codex/config.toml</code> and sets <code>model_provider = "keepmum"</code>, after backing the file up. <code>keepmum protect off</code> removes only what it added. Codex picks the change up when it next starts. Without <code>--client</code>, it protects the other agents you have installed too (Claude Code, pi, opencode). <code>keepmum serve</code> must keep running while protection is on; the Mac app runs it at login.</p>
+
+    <h3>With a gateway you already use</h3>
+    <p>If Codex already goes through a gateway (LiteLLM, OpenRouter, a company proxy), <code>keepmum protect on</code> puts keepmum in front of it. keepmum’s provider copies yours, its key variable, headers and auth, with only the address changed, so the gateway still picks models and accounts and only ever receives placeholders. A provider with <code>wire_api = "chat"</code> is refused, because keepmum doesn’t scan Chat Completions.</p>
+
+    <h3>Check that it works</h3>
+    <pre><code>keepmum doctor          <span class="cmt"># every line should be ✓</span>
+keepmum selftest        <span class="cmt"># fails if a test secret gets past keepmum</span></code></pre>
+    <p>To see what keepmum would catch before it changes anything, <code>keepmum observe on</code> scans and counts but sends every request as Codex wrote it. <code>keepmum observe off</code> masks again.</p>
+
+    <h2>What gets masked</h2>
+    <ul>
+      <li><strong>Always, secrets:</strong> API keys, tokens, passwords, private keys and connection strings, in code, config files, command-line flags and plain sentences. Output Codex prints encoded, such as <code>xxd .env</code> or <code>base64 &lt; .env</code>, is decoded and scanned too.</li>
+      <li><strong>If you turn it on, personal data</strong> (<code>keepmum pii on</code>): names, emails, phone numbers, addresses, account numbers and dates of birth.</li>
+      <li><strong>Your own rules:</strong> <code>keepmum rules mask</code> adds a pattern, <code>keepmum rules allow</code> lets an exact value through.</li>
+    </ul>
+    <p>Detection runs on your Mac: 96 rules with entropy and checksum checks, then a local model on the Mac’s GPU. If keepmum can’t scan a request, it blocks it rather than send it raw.</p>
+
+    <h2>What Codex can still do</h2>
+    <ul>
+      <li><strong>Patch files and run commands with the real values.</strong> A placeholder in a patch, a shell command or one of Codex’s JavaScript tool calls is put back first, so <code>git push</code>, your tests and a database login keep working.</li>
+      <li><strong>Use MCP servers, with less.</strong> A server gets back only the values it returned itself, so a search can be followed by opening what it found. That holds when Codex calls an MCP server from inside a script, too. Web search keeps placeholders. None of them ever gets a secret.</li>
+      <li><strong>Not send a known token somewhere else.</strong> A token whose issuer keepmum knows (GitHub, Stripe, AWS, OpenAI and 68 more) stays a placeholder in a command that would send it to any other host.</li>
+    </ul>
+
+    <h2>Where it stops</h2>
+    <ul>
+      <li><strong>A Codex script can pass what a command read to a network tool.</strong> Codex runs a model’s tool calls as one JavaScript program, so a script can read a file and hand its contents to an MCP tool without the model, or keepmum, seeing them. keepmum adds a check to such scripts that withholds any key in a provider’s format (<code>[a secret, withheld by keepmum]</code>); a bare password still goes, with a warning. To keep every secret out, ask Codex to make the network call in a step of its own.</li>
+      <li><strong>Shell commands get real values.</strong> A password, or a command built to hide where it sends things, can get past the check on known tokens. Keep Codex’s own sandbox on, with network access off where you can: keepmum controls what OpenAI sees, and the sandbox controls what commands can reach.</li>
+      <li><strong>The Responses API only.</strong> Codex’s WebSocket transport is refused (it falls back to HTTPS), and Chat Completions requests are blocked, not sent unscanned.</li>
+      <li><strong>Your local history keeps real values.</strong> Codex’s session files on your disk hold the restored conversation. keepmum protects what leaves your Mac, not what is stored on it.</li>
+      <li><strong>Images and PDFs pass unscanned</strong>, and the local model is strongest on English.</li>
+      <li><strong>keepmum is alpha</strong> and not yet independently audited. <a href="https://github.com/blueandhack/keepmum#limitations">Every limitation, in full</a>.</li>
+    </ul>
+
+    <h2>Questions</h2>
+    <h3>Does Codex send my .env file to OpenAI?</h3>
+    <p>If it reads it, yes. A file Codex reads, or a command’s output, becomes part of the conversation, and each request sends the conversation to OpenAI. With keepmum in between, the keys and passwords in it go as placeholders.</p>
+    <h3>Does it work with a ChatGPT login?</h3>
+    <p>Yes. <code>keepmum codex</code> works with a ChatGPT login or an API key, and keeps the login you already have.</p>
+    <h3>Does keepmum change my Codex config?</h3>
+    <p><code>keepmum codex</code> does not: its settings apply to that run only. <code>keepmum protect on</code> does: it adds a keepmum model provider to <code>~/.codex/config.toml</code> and selects it, after backing the file up, and <code>keepmum protect off</code> removes only what it added.</p>
+    <h3>How much slower is Codex with keepmum?</h3>
+    <p>About 100 to 145 ms a request at the 95th percentile for 4K tokens of new text; earlier turns are cached. With the rules alone (<code>keepmum model off</code>), 8 to 9 ms.</p>
+
+    <p class="doc-cta"><a class="btn" href="/download">Download for Mac</a></p>
+    <p>keepmum also works with <a href="/claude-code">Claude Code</a>, the Antigravity CLI, Gemini CLI, pi and opencode. <a href="/">See how it works</a>.</p>
+  </div>
+</main>
+
+<div class="doc-footer">
+  <div class="wrap">
+    <footer>
+      <p>keepmum is an independent open-source project, not affiliated with or endorsed by Anthropic, OpenAI or Google. Codex is OpenAI’s. Apache 2.0.</p>
+      <nav aria-label="Footer">
+        <a href="/">Home</a>
+        <a href="/claude-code">keepmum for Claude Code</a>
+        <a href="/privacy">Privacy</a>
+        <a href="https://github.com/blueandhack/keepmum">GitHub</a>
+        <a href="https://github.com/blueandhack/keepmum/blob/main/LICENSE">License</a>
+      </nav>
+    </footer>
+  </div>
+</div>
+</body>
+</html>
