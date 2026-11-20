@@ -57,6 +57,7 @@ from starlette.routing import Route
 
 from .gateway import ROUTE, api_of_route
 from .gemini import GeminiStreamRestorer, restore_gemini
+from .provided import ReplyCollector, items_of
 from .local import CHAT_PATH as LOCAL_CHAT_PATH
 from .local import APIS_LOCAL
 from .local import PATHS as LOCAL_PATHS
@@ -622,6 +623,8 @@ class Proxy:
         if t.path != "/v1/messages/count_tokens" and resp.status_code < 300:
             try:
                 data = json.loads(content)
+                if self._checks_replies():
+                    self._check_reply(items_of(t.api, data), path, origin, "masked" if new else "clean")
                 policy = self._reply_policy(path, origin, "masked" if new else "clean", texts)
                 content = json.dumps(await anyio.to_thread.run_sync(self._restore, data, restored, t.api, policy),
                                      ensure_ascii=False).encode("utf-8", "replace")
@@ -1569,6 +1572,23 @@ class Proxy:
             await after(answer_text(api, content, False), server.model)
         return Response(content, status_code=resp.status_code, headers=headers)
 
+    def _checks_replies(self) -> bool:
+        guard = next((g for g in self.guards if g.name == "injection"), None)
+        return guard is not None and guard.mode != "off"
+
+    def _check_reply(self, items: list[tuple[str, str]], path: str, origin, kind: str) -> None:
+        """The results of tools the provider ran, in a reply (provided.py): checked once it is in, as
+        in warn mode whatever the mode, since the model has read them and the agent has the reply.
+        Block and local mode apply when the agent sends them back (Messages API)."""
+        guard = next((g for g in self.guards if g.name == "injection"), None)
+        if guard is None or not items:
+            return
+        from .redact import as_types
+
+        texts = {"shown": {text: as_types(text) for _, text in items}} if self._context() else None
+        self._later(self._check_later(guard, [(s, text, True) for s, text in items], path, origin, kind,
+                                      secrets.token_hex(6), texts))
+
     async def _check_later(self, guard, items, path: str, origin, kind: str = "clean", request: str | None = None,
                            texts: dict | None = None) -> None:
         """Warn mode, after the request is sent: record new hits; a failure is logged and nothing more."""
@@ -1741,10 +1761,13 @@ class Proxy:
         # Observed requests went out unmasked: there is nothing to restore, and no command is reviewed.
         policy = self._reply_policy(path, origin, "masked" if new else "clean", texts) if is_sse and outcome != "observed" else None
         restorer = kind(self.redactor.vault, policy, restored) if policy is not None else None
+        collector = ReplyCollector(t.api) if is_sse and self._checks_replies() else None
 
         async def body():
             try:
                 async for chunk in resp.aiter_raw():
+                    if collector is not None:
+                        collector.feed(chunk)
                     out = restorer.feed(chunk) if restorer else chunk
                     if out:
                         yield out
@@ -1754,6 +1777,8 @@ class Proxy:
                         yield tail
             finally:
                 await resp.aclose()
+                if collector is not None:
+                    self._check_reply(collector.items(), path, origin, "observed" if outcome == "observed" else "masked" if new else "clean")
                 self._warn_unresolved(path, restored)
                 self._record(path, outcome, resp.status_code, scan_ms, counts, restored, new=new, origin=origin, found=found,
                              flight=flight)

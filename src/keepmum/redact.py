@@ -228,6 +228,10 @@ class Redactor:
         # so that server may have its own values back (tools.py). Tool call ids -> tool names.
         self._origin: str | None = None
         self._calls: dict[str, str] = {}
+        # Provider-run tools (provided.py): their calls' names by id, and the results already read,
+        # so a result the agent resends every turn is scored once.
+        self._server_calls: dict[str, str] = {}
+        self._provided_seen: OrderedDict[bytes, None] = OrderedDict()
         # The text of every tool result in the request being masked, for the guard (guard.py):
         # (tool, text, new), where new means this redactor had not seen the text before. Reset
         # with `findings`. The text is the original, before masking, and never leaves the process.
@@ -760,6 +764,7 @@ class Redactor:
         if not isinstance(block, dict):
             return self._content(block)
         kind = block.get("type")
+        self._provider_run(block, kind)
         if kind in PASS_THROUGH:
             return block
         if kind == "text":
@@ -785,6 +790,33 @@ class Redactor:
             return out  # a PDF with nothing to mask, and other binary sources, pass through
         # Unknown block type: scan its content fields, leave protocol fields alone.
         return {k: (self._values(v) if k in CONTENT_KEYS else v) for k, v in block.items()}
+
+    def _provider_run(self, block: dict, kind) -> None:
+        """A result of a tool the provider ran (provided.py), resent with the conversation: for the
+        injection check, as any tool's result, new the first time it is read."""
+        from . import provided
+
+        if kind in ("server_tool_use", "mcp_tool_use") and isinstance(block.get("id"), str):
+            self._server_calls[block["id"]] = provided.call_name(block)
+            return
+        if provided.is_result(kind):
+            name = self._server_calls.get(block.get("tool_use_id")) or kind.removesuffix("_tool_result")
+            text = provided.result_text(block)
+        elif kind == "text" and block.get("citations"):
+            name, text = "web_search", provided.cited_text(block)
+        else:
+            return
+        if not text:
+            return
+        key = self._key(text)
+        new = key not in self._provided_seen
+        self._provided_seen[key] = None
+        self._provided_seen.move_to_end(key)
+        if len(self._provided_seen) > self._cache_size:
+            self._provided_seen.popitem(last=False)
+        self.tool_results.append((provided.source(name), text, new))
+        if self.context:
+            self.shown[text] = as_types(text)
 
     def _values(self, value):
         """Every string value in a JSON tree, recursively. Keys are never changed."""

@@ -60,7 +60,7 @@ struct ChecksSection: View {
         // A check left on with no model in place: the old model, or a deleted one. It checks nothing.
         let stalled = !c.installed && c.mode != "off"
         FormSection(title: "Prompt injection",
-                    footer: "Reads what tools return (web pages, files, MCP replies, command output) for instructions planted for the agent.",
+                    footer: "Reads what tools return (web pages, files, MCP replies, command output) for instructions planted for the agent, and, as a reply arrives, the results of tools the provider ran itself (web search, web fetch, code runs). A hit on arrival is logged: the reply has already reached the agent.",
                     details: "Warn sends a request at once and checks its tool results afterwards, so it adds no delay. Block checks first and refuses a request carrying a likely injection, and every retry of it. Local checks first and sends it to a model on this Mac instead of the cloud (Local models). A tool result is read in windows of 2,048 tokens, and the most likely window counts; one under \(c.shortChars ?? 200) characters needs a higher score. Logs shows each hit with what it flagged and what you had asked, masked values as their types, in memory only (with text around values on); the audit log keeps the check, the score and the length, never the text.") {
             if c.installed || stalled {
                 FormRow(title: "Mode", detail: stalled ? "Paused: no model to check with" : injectionDetail(c.mode),
