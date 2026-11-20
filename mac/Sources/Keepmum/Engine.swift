@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 import ServiceManagement
 
 /// The engine bundled in Keepmum.app (bundle-runtime.sh): keepmum's Python runtime, pf-serve, and the
@@ -464,6 +465,10 @@ final class Engine {
     /// A local model downloading to Ollama: the server's number (nil: a new one), the model, and 0...1.
     private(set) var localPull: (server: Int?, model: String, progress: Double)?
     private(set) var busy = false
+    /// Settings changes made and not yet in the status: what each control shows meanwhile, by setting
+    /// ("guard injection": "block"). They run one after another (`setting`), apart from `busy`.
+    private(set) var pendingSettings: [String: String] = [:]
+    private var settingsQueue: Task<Void, Never>?
     /// The background service on its way up or down: from the click until it answers, or stops.
     enum ServiceChange { case starting, stopping }
     private(set) var serviceChange: ServiceChange?
@@ -663,21 +668,46 @@ final class Engine {
     /// their next request.
     /// The injection check's sensitivity: a level (high, medium, low, lowest) or a number.
     func setInjectionThreshold(_ value: String) async {
-        await act { try await self.check(["guard", "sensitivity", "injection", value]) }
+        await setting("guard sensitivity injection", value, ["guard", "sensitivity", "injection", value])
     }
 
     /// Whether a second model must agree with an injection hit (`keepmum guard confirm on|off`).
     func setInjectionConfirm(_ on: Bool) async {
-        await act { try await self.check(["guard", "confirm", on ? "on" : "off"]) }
+        await setting("guard confirm", on ? "on" : "off", ["guard", "confirm", on ? "on" : "off"])
     }
 
     /// The harm check's sensitivity: high, medium, low or lowest, on whichever model it uses.
     func setHarmSensitivity(_ level: String) async {
-        await act { try await self.check(["guard", "sensitivity", "harm", level]) }
+        await setting("guard sensitivity harm", level, ["guard", "sensitivity", "harm", level])
     }
 
     func setCheck(_ check: String, mode: String, model: String? = nil) async {
-        await act { try await self.check(["guard", check, mode] + (model.map { ["--model", $0] } ?? [])) }
+        let args = ["guard", check, mode] + (model.map { ["--model", $0] } ?? [])
+        if let model {
+            await setting("guard \(check) model", model, args)
+        } else {
+            await setting("guard \(check)", mode, args)
+        }
+    }
+
+    /// A settings change: the control shows the new value at once (`pendingSettings`), and the change
+    /// runs after any made before it, without making the whole engine busy, so the rest of the window
+    /// stays usable and no click is dropped. Each is one config write, which the CLI serializes under
+    /// its own lock. Once the last of them is done the status is read again; a failure shows as the
+    /// error, and the control goes back to what is set.
+    func setting(_ key: String, _ value: String, _ args: [String]) async {
+        pendingSettings[key] = value
+        error = nil
+        let previous = settingsQueue
+        let task = Task { @MainActor in
+            await previous?.value
+            do { try await self.check(args) } catch { self.error = (error as? EngineError)?.message ?? error.localizedDescription }
+        }
+        settingsQueue = task
+        await task.value
+        guard settingsQueue == task else { return }  // a later change reads the status when it is done
+        await refresh()
+        pendingSettings = [:]
     }
 
     /// The local servers and what each has, for Settings › Local models. Asks each (on this Mac) every time.
@@ -1255,9 +1285,23 @@ final class Engine {
         }
     }
 
-    /// Run the bundled `keepmum` off the main thread. `onLine` sees stderr lines as they arrive.
+    private static let log = Logger(subsystem: "app.keepmum.Keepmum", category: "engine")
+
+    /// Run the bundled `keepmum` off the main thread. `onLine` sees stderr lines as they arrive. A run
+    /// over a second is logged with its command (its first two words, never values) and how long it
+    /// took: `log stream --predicate 'subsystem == "app.keepmum.Keepmum"'`.
     private func run(_ args: [String], input: Data? = nil, process box: ProcessBox? = nil,
                      onLine: (@Sendable (String) -> Void)? = nil) async throws -> Output {
+        let started = ContinuousClock.now
+        defer {
+            let took = ContinuousClock.now - started
+            if took > .seconds(1) {
+                // Command words only: a path, URL or value (`exclude /Users/…`) is left out.
+                let what = args.prefix(2).filter { $0.count <= 24 && $0.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" } }
+                    .joined(separator: " ")
+                Self.log.notice("keepmum \(what, privacy: .public) took \(took.formatted(.units(allowed: [.seconds], fractionalPart: .show(length: 2))), privacy: .public)")
+            }
+        }
         guard let cli else { throw EngineError("This copy of Keepmum has no bundled engine.") }
         return try await Task.detached {
             let p = Process()

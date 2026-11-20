@@ -65,7 +65,7 @@ struct ChecksSection: View {
             if c.installed || stalled {
                 FormRow(title: "Mode", detail: stalled ? "Paused: no model to check with" : injectionDetail(c.mode),
                         detailTone: stalled ? Theme.warning : c.mode == "off" ? Theme.textSecondary : Theme.text) {
-                    modePicker(c.mode, options: modesWithLocal) { await engine.setCheck("injection", mode: $0) }
+                    modePicker(c.mode, key: "guard injection", options: modesWithLocal) { await engine.setCheck("injection", mode: $0) }
                 }
             }
             if !c.installed {
@@ -128,7 +128,9 @@ struct ChecksSection: View {
                         .disabled(!engine.isBundled || engine.busy)
                     }
                 }
-                modePicker(s.on ? "on" : "off", options: [("on", "On"), ("off", "Off")]) { await engine.setInjectionConfirm($0 == "on") }
+                modePicker(s.on ? "on" : "off", key: "guard confirm", options: [("on", "On"), ("off", "Off")]) {
+                    await engine.setInjectionConfirm($0 == "on")
+                }
             }
         }
     }
@@ -167,7 +169,7 @@ struct ChecksSection: View {
         let isDefault = abs(threshold - (c.defaultThreshold ?? 0.222)) < 0.0005
         FormRow(title: "Sensitivity", detail: sensitivitySummary(c, levels: levels, current: current, threshold: threshold, isDefault: isDefault),
                 help: sensitivityDetail(c, levels: levels, current: current, threshold: threshold, isDefault: isDefault)) {
-            modePicker(current ?? "custom", options: options) { level in
+            modePicker(current ?? "custom", key: "guard sensitivity injection", options: options) { level in
                 if level != "custom" { await engine.setInjectionThreshold(level) }
             }
         }
@@ -229,7 +231,7 @@ struct ChecksSection: View {
                     detail: have ? harmDetail(c.mode) : "Download the model below to turn it on",
                     detailTone: have && c.mode != "off" ? Theme.text : Theme.textSecondary) {
                 if have {
-                    modePicker(c.mode, options: modesWithLocal) { await engine.setCheck("harm", mode: $0) }
+                    modePicker(c.mode, key: "guard harm", options: modesWithLocal) { await engine.setCheck("harm", mode: $0) }
                 } else if downloading {
                     progress(engine.checkDownload?.progress ?? 0)
                 } else {
@@ -245,8 +247,9 @@ struct ChecksSection: View {
                 if isSnapshot {
                     Segmented(options: Self.sizes, selection: .constant(c.model))
                 } else {
-                    Segmented(options: Self.sizes, selection: Binding(get: { c.model }, set: { size in
-                        guard size != c.model else { return }
+                    let shown = engine.pendingSettings["guard harm model"] ?? c.model
+                    Segmented(options: Self.sizes, selection: Binding(get: { shown }, set: { size in
+                        guard size != shown else { return }
                         Task {
                             if !(c.installed[size] ?? false) {
                                 await engine.setUpCheck("harm", model: size)
@@ -262,7 +265,7 @@ struct ChecksSection: View {
                 Hairline()
                 FormRow(title: "Sensitivity", detail: harmSensitivitySummary(levels, level, model: c.model),
                         help: harmSensitivityDetail(levels, level, model: c.model)) {
-                    modePicker(level, options: Self.levelOrder) { await engine.setHarmSensitivity($0) }
+                    modePicker(level, key: "guard sensitivity harm", options: Self.levelOrder) { await engine.setHarmSensitivity($0) }
                 }
             }
             if c.installed.values.contains(true) {
@@ -325,7 +328,7 @@ struct ChecksSection: View {
         FormSection(title: "Risky commands",
                     footer: "Reads the shell commands a model asks your agent to run, as they arrive. Rules only: nothing to download.") {
             FormRow(title: "Mode", detail: commandsDetail(c.mode), detailTone: c.mode == "off" ? Theme.textSecondary : Theme.text) {
-                modePicker(c.mode) { await engine.setCheck("commands", mode: $0) }
+                modePicker(c.mode, key: "guard commands") { await engine.setCheck("commands", mode: $0) }
             }
             Hairline()
             VStack(alignment: .leading, spacing: Space.s) {
@@ -349,18 +352,28 @@ struct ChecksSection: View {
 
     // MARK: Pieces
 
-    private func modePicker(_ mode: String, options: [(String, String)]? = nil, set: @escaping (String) async -> Void) -> some View {
+    /// A setting's segments. A click shows at once, with a spinner beside it until the engine has it
+    /// (`Engine.setting`, by `key`); the control is never held by other work, and a click is never dropped.
+    private func modePicker(_ mode: String, key: String, options: [(String, String)]? = nil,
+                            set: @escaping (String) async -> Void) -> some View {
         let options = options ?? modes
+        let pending = engine.pendingSettings[key]
+        let shown = pending ?? mode
         return Group {
             if isSnapshot {
                 Segmented(options: options, selection: .constant(mode))
             } else {
-                Segmented(options: options, selection: Binding(get: { mode }, set: { new in
-                    if new != mode { Task { await set(new) } }
+                Segmented(options: options, selection: Binding(get: { shown }, set: { new in
+                    if new != shown { Task { await set(new) } }
                 }))
             }
         }
-        .disabled(!engine.isBundled || engine.busy)
+        .overlay(alignment: .leading) {
+            if pending != nil {
+                ProgressView().controlSize(.small).offset(x: -Space.xl).transition(.opacity)
+            }
+        }
+        .disabled(!engine.isBundled)
     }
 
     private func progress(_ p: Double) -> some View {

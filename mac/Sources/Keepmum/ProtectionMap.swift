@@ -1150,15 +1150,15 @@ struct MapDiagram: View {
     // MARK: Cards
 
     @ViewBuilder private var cards: some View {
-        gate(.injection, icon: "syringe", mode: s.injection, options: Self.four, rect: layout.injectionCard,
+        gate(.injection, key: "guard injection", icon: "syringe", mode: s.injection, options: Self.four, rect: layout.injectionCard,
              caption: injectionCaption, paused: s.paused) { await engine.setCheck("injection", mode: $0) }
-        gate(.harm, icon: "exclamationmark.bubble", mode: s.harm, options: Self.four, rect: layout.harmCard,
+        gate(.harm, key: "guard harm", icon: "exclamationmark.bubble", mode: s.harm, options: Self.four, rect: layout.harmCard,
              caption: harmCaption) { await engine.setCheck("harm", mode: $0) }
         maskingCard
         localCard
         restoreCard
         arrivalCard
-        gate(.commands, icon: "terminal", mode: s.commands, options: Self.three, rect: layout.commandsCard,
+        gate(.commands, key: "guard commands", icon: "terminal", mode: s.commands, options: Self.three, rect: layout.commandsCard,
              caption: s.commands == "off" ? "Off: commands reach the agent unchecked" : "Rules: curl | sh, rm -rf ~\u{2026}") {
             await engine.setCheck("commands", mode: $0)
         }
@@ -1220,10 +1220,12 @@ struct MapDiagram: View {
         .help("Settings for \(part.title), under the map")
     }
 
-    private func gate(_ part: MapPart, icon: String, mode: String, options: [(String, String)], rect: CGRect, caption: String,
-                      paused: Bool = false, set: @escaping (String) async -> Void) -> some View {
-        VStack(alignment: .leading, spacing: Space.xs + 1) {
-            title(part, icon: icon, dot: paused ? Theme.warning : modeColor(mode))
+    /// A check's card. A click shows at once, as on Settings › Checks (`Engine.setting`, by `key`).
+    private func gate(_ part: MapPart, key: String, icon: String, mode: String, options: [(String, String)], rect: CGRect,
+                      caption: String, paused: Bool = false, set: @escaping (String) async -> Void) -> some View {
+        let shown = engine.pendingSettings[key] ?? mode
+        return VStack(alignment: .leading, spacing: Space.xs + 1) {
+            title(part, icon: icon, dot: paused ? Theme.warning : modeColor(shown))
             if paused {
                 Button {
                     selected = part
@@ -1240,10 +1242,10 @@ struct MapDiagram: View {
             } else if isSnapshot {
                 Segmented(options: options, selection: .constant(mode), compact: true)
             } else {
-                Segmented(options: options, selection: Binding(get: { mode }, set: { new in
-                    if new != mode { Task { await set(new) } }
+                Segmented(options: options, selection: Binding(get: { shown }, set: { new in
+                    if new != shown { Task { await set(new) } }
                 }), compact: true)
-                .disabled(!engine.isBundled || engine.busy)
+                .disabled(!engine.isBundled)
             }
             Text(caption).font(.km(.caption)).foregroundStyle(paused ? Theme.warning : Theme.textSecondary).lineLimit(1)
         }
