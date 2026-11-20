@@ -1229,7 +1229,8 @@ def test_setup_fetches_both_models_and_remove_deletes_both(tmp_path, monkeypatch
 
 def test_the_second_model_scores_like_the_first_from_its_own_file(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    m = guard.ConfirmModel()
+    # A server given, so the missing model is what it reports on a machine without llama-server (CI's).
+    m = guard.ConfirmModel(server=Path("llama-server"))
     assert not m.available() and m.label == f"Wolf Defender Small {guard.CONFIRM_RELEASE}"
     with pytest.raises(guard.GuardError, match="second model is not set up"):
         m.score("x" * 100)
