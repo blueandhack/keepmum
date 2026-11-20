@@ -1,6 +1,8 @@
 """Convert Horizon-Labs' guards (Apache-2.0) to GGUFs that llama.cpp runs: Prompt Injection Guard
 Small (`--model injection`, keepmum's injection check) and Content Safety Guard Small
-(`--model safety`, the harm check's small model).
+(`--model safety`, the harm check's small model). Also, for comparison and as a second opinion on the
+injection check's hits (bench/guard_both.py), Patronus' Wolf Defender Small and Edge (`--model wolf-small`,
+`--model wolf-edge`, Apache-2.0), the same architecture.
 
 Both are ModernBertForSequenceClassification on mmBERT-small with mean pooling, which llama.cpp
 supports (mean -> head dense -> GELU -> head norm -> classifier). Their weights are float
@@ -49,6 +51,14 @@ MODELS = {
                      "Prompt Injection Guard Small, keepmum fine-tune", ["SAFE", "INJECTION"],
                      "Apply its tokenizer normalizer before tokenizing (see the model card). Fine-tuned by keepmum on "
                      "agent tool output (bench/ft_data.py, bench/ft_train.py)."),
+    # For comparison only (bench/guard_public.py): Patronus' 80M model, mmBERT-small cut to 16 layers and a
+    # 128,000-token vocabulary, so its vocabulary is not mmBERT's (check()).
+    "wolf-edge": ("patronus-studio/wolf-defender-prompt-injection-edge", "a65713895aafa398e71f151f50d33449b477b4c9", "v2.1",
+                  "Wolf Defender Prompt Injection Edge", ["BENIGN", "INJECTION"], "Logits: benign, injection."),
+    # Patronus' 141M model, on mmBERT-small with its vocabulary: a second opinion on the injection check's hits
+    # (bench/guard_both.py).
+    "wolf-small": ("patronus-studio/wolf-defender-prompt-injection-small", "2484cc9a13550aa4f2c29b577ff3ef331dc6ba07",
+                   "v2.1", "Wolf Defender Prompt Injection Small", ["BENIGN", "INJECTION"], "Logits: benign, injection."),
     "safety": ("Horizon-Labs/content-safety-guard-small", "e2995329cff04dd2d3bcb5f97a02c6bf77d341ef", "v1.2",
                "Content Safety Guard Small", SAFETY_LABELS, "Logits: unsafe, then 15 categories; a sigmoid each."),
 }
@@ -58,17 +68,17 @@ FILES = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config
 
 def metadata(model: str) -> dict:
     repo, revision, version, name, _, note = MODELS[model]
-    basename = repo.split("/")[1]
+    org, basename = repo.split("/")
     return {
         "general.name": name, "general.basename": basename, "general.version": version,
-        "general.organization": "keepmum" if model.endswith("-ft") else "Horizon-Labs", "general.quantized_by": "keepmum",
+        "general.organization": "keepmum" if model.endswith("-ft") else org, "general.quantized_by": "keepmum",
         "general.description": (f"keepmum's fine-tune of Horizon-Labs' Prompt Injection Guard Small (v2.3), as a GGUF. "
                                  f"Not made or endorsed by Horizon-Labs. {note}") if model.endswith("-ft") else
-                               f"GGUF conversion of Horizon-Labs' {name} ({version}). Not made or endorsed by Horizon-Labs. {note}",
+                               f"GGUF conversion of {org}'s {name} ({version}). Not made or endorsed by {org}. {note}",
         "general.license": "apache-2.0", "general.license.name": "Apache License 2.0",
         "general.license.link": "https://www.apache.org/licenses/LICENSE-2.0",
         "general.source.url": f"https://huggingface.co/{repo}/tree/{revision}", "general.source.repo_url": f"https://huggingface.co/{repo}",
-        "general.base_models": [{"name": name, "organization": "Horizon-Labs", "version": version,
+        "general.base_models": [{"name": name, "organization": org, "version": version,
                                  "repo_url": f"https://huggingface.co/{repo}"}],
     }
 
@@ -82,7 +92,10 @@ def check(src: Path, mmbert: Path, model: str) -> None:
         raise SystemExit(f"not {MODELS[model][3]}'s config")
     a, b = (json.loads((p / "tokenizer.json").read_text()) for p in (mmbert, src))
     merges = lambda m: [" ".join(x) if isinstance(x, list) else x for x in m["merges"]]
-    if a["model"]["vocab"] != b["model"]["vocab"] or merges(a["model"]) != merges(b["model"]):
+    if model == "wolf-edge":  # a smaller vocabulary of its own; still a BPE one
+        if b["model"]["type"] != "BPE":
+            raise SystemExit("not a BPE vocabulary")
+    elif a["model"]["vocab"] != b["model"]["vocab"] or merges(a["model"]) != merges(b["model"]):
         raise SystemExit("vocabulary or merges differ from mmBERT-small's")
     pa, pb = a["pre_tokenizer"], b["pre_tokenizer"]
     if pa.get("type") != "Metaspace" or pb.get("type") != "Metaspace" or pa["replacement"] != pb["replacement"] or \
@@ -134,6 +147,14 @@ def main() -> None:
     tj = json.loads((hf / "tokenizer.json").read_text())
     tj["pre_tokenizer"] = json.loads((a.mmbert / "tokenizer.json").read_text())["pre_tokenizer"]
     (hf / "tokenizer.json").write_text(json.dumps(tj, ensure_ascii=False))
+    # A tokenizer_config.json written by transformers 5 (Wolf Defender's), in the converter's transformers 4 terms:
+    # the fast tokenizer is named TokenizersBackend there, and extra special tokens are a list.
+    tc = json.loads((hf / "tokenizer_config.json").read_text())
+    if tc.get("tokenizer_class") == "TokenizersBackend" or isinstance(tc.get("extra_special_tokens"), list):
+        tc["tokenizer_class"] = "PreTrainedTokenizerFast"
+        if isinstance(tc.get("extra_special_tokens"), list):
+            tc["additional_special_tokens"] = tc.pop("extra_special_tokens")
+        (hf / "tokenizer_config.json").write_text(json.dumps(tc, ensure_ascii=False, indent=1))
     meta = a.out / "metadata.json"
     meta.write_text(json.dumps(metadata(a.model), indent=1))
     repo, _, version, name, *_ = MODELS[a.model]

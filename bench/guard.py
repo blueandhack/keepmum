@@ -38,8 +38,10 @@ MAX_CHARS = 16_000  # one tool result; Claude Code's Read returns up to 2,000 li
 # name: (kind, repo, labels that count as injection, window tokens, licence, note)
 DETECTORS = {
     "gliguard": ("gliner2", "fastino/gliguard-LLMGuardrails-300M", None, None, "Apache-2.0", "safety or any attack label"),
-    "wolf-small": ("hf", "patronus-studio/wolf-defender-prompt-injection-small", {"injection"}, 2048, "Apache-2.0", ""),
-    "wolf": ("hf", "patronus-studio/wolf-defender-prompt-injection", {"injection"}, 2048, "Apache-2.0", "308M"),
+    "wolf-small": ("hf", "patronus-studio/wolf-defender-prompt-injection-small", {"injection", "INJECTION"}, 2048, "Apache-2.0", ""),
+    "wolf": ("hf", "patronus-studio/wolf-defender-prompt-injection", {"injection", "INJECTION"}, 2048, "Apache-2.0", "308M"),
+    "wolf-edge": ("hf", "patronus-studio/wolf-defender-prompt-injection-edge", {"INJECTION"}, 2048, "Apache-2.0",
+                  "80M, mmBERT-small cut to 16 layers"),
     # Trained on injections in documents and tool outputs; the tokenizer runs their obfuscation normalizer.
     "horizon-small": ("hf", "Horizon-Labs/prompt-injection-guard-small", {"INJECTION"}, 2048, "Apache-2.0", "141M"),
     "horizon-base": ("hf", "Horizon-Labs/prompt-injection-guard-base", {"INJECTION"}, 2048, "Apache-2.0", "308M"),

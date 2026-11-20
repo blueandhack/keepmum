@@ -178,7 +178,92 @@ Three runs; each column is at the threshold that flags 1% of the calibrate half 
 - **Its scores sit lower than the original's**, so keepmum's sensitivity levels (`keepmum.guard.LEVELS`) would need setting again: 1% of coding-agent output is flagged at 0.25, against the original's 0.98.
 - Run 1 and run 2's files: [`guard-public-20261113-151510.md`](guard-public-20261113-151510.md), [`guard-20261113-151358.md`](guard-20261113-151358.md) (run 1, the checkpoint at step 300 of 605); [`guard-public-20261113-160727.md`](guard-public-20261113-160727.md), [`guard-20261113-160650.md`](guard-20261113-160650.md) (run 2). Each names the model `horizon-small-ft`.
 
+## Wolf Defender v2.1, and Wolf Small as a veto on keepmum's hits (Nov 19–20, 2026)
+
+*Nov 19, 2026.* The question this time was false alarms, not catches. In a week of the maintainer's own use (warn mode, Codex and Claude Code), most of the injection check's hits were not the model's doing. They came from settings more sensitive than they are now and from two bugs, both fixed: screenshots' base64 in Codex `view_image` output was scored as text (`189e4e3`), and so was Codex's JSON wrapper around a command's output (`def98ff`). With today's code, a `git push` output that scored 0.938 then scores 0.0. What remains at Medium on real sessions is mostly files the agent reads: 6.1% of SWE-chat's Read results.
+
+**Two new Patronus checkpoints, both Apache-2.0:**
+
+- [Wolf Defender Small](https://huggingface.co/patronus-studio/wolf-defender-prompt-injection-small) v2.1 (`2484cc9a`, 141M, mmBERT-small's vocabulary), the retrain point 4 of the verdict waited for.
+- [Wolf Defender Edge](https://huggingface.co/patronus-studio/wolf-defender-prompt-injection-edge) v2.1 (`a6571389`, 80M): mmBERT-small cut to 16 layers and a 128,000-token vocabulary.
+
+Their label is now `INJECTION`, no longer `injection`.
+
+### On the hand-written set
+
+[`guard-20261119-233334.md`](guard-20261119-233334.md); keepmum's fine-tune in PyTorch alongside.
+
+| Detector | Holdout AUC | Bare @0.5 | @0.5: recall / ordinary / security | Dev threshold | @dev: recall / ordinary / security |
+| --- | --- | --- | --- | --- | --- |
+| keepmum's fine-tune (v2.3-km1) | 1.00 | 1.00 | **0.98** / 0.00 / **0.02** | 0.094 | 0.98 / **0.03** / 0.12 |
+| Wolf Small v2.1 | 1.00 | 0.94 | 0.85 / 0.00 / 0.04 | 0.000 | 0.98 / 0.06 / 0.13 |
+| Wolf Edge v2.1 | 1.00 | 0.75 | 0.83 / 0.00 / 0.04 | 0.000 | 1.00 / 0.16 / 0.13 |
+
+- **Wolf Small has caught up.** At 0.5 it catches 85% of the injected documents, against v2's 35% (Nov 4).
+- **Every model's false alarms are security writing** (a CTF write-up, a pentest finding) and keepmum's own tests.
+- Wolf's scores for safe text sit so close to zero that a dev threshold rounds to 0.000.
+
+### On public data
+
+[`guard-public-20261119-233531.md`](guard-public-20261119-233531.md). Each detector's threshold flags 1% of one half of SWE-chat and SWE-Hero; the first two columns are the other half.
+
+| Detector (threshold) | SWE-chat flagged | SWE-Hero flagged | prodnull benign flagged | AgentDojo | InjecAgent | LLMail* | CodeIPI | prodnull |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| keepmum's fine-tune (0.246) | **0.9%** | 0.3% | 1.6% | 93.7%† | 75.0% | **98.7%** | 40.0% | **48.6%** |
+| Wolf Edge (0.003) | 1.4% | 0.4% | **1.4%** | 99.0% | 85.3% | 97.3% | 45.7% | 39.5% |
+| Wolf Small (0.001) | 2.3% | **0.1%** | 1.5% | **99.6%** | **88.3%** | 98.2% | **57.1%** | 46.7% |
+
+\* LLMail is in both Horizon-Labs' and Patronus' training data. † keepmum's fine-tune trained on AgentDojo's banking and slack suites and on other SWE-chat sessions than these, so those columns flatter it.
+
+- **At 0.5, keepmum's model flags none of SWE-chat; Edge flags 0.9% and Small 0.5%.**
+- **Wolf trips on Claude Code's own output.** At its 1% threshold, Edge flags 28% of SWE-chat's Agent results (a subagent's report), 13% of Task and 15% of AskUserQuestion; Small flags 23%, 13% and 15%; keepmum's model, none. keepmum's model trips on Read instead: 3.9%, against Edge's 1.2% and Small's 2.2%.
+- **Neither replaces keepmum's model.** Both catch more of InjecAgent and CodeIPI. Edge catches less of prodnull and raises more false alarms on real sessions.
+
+### Cost: Edge as a GGUF
+
+[`../horizon_gguf.py`](../horizon_gguf.py) `--model wolf-edge`, which accepts its smaller vocabulary and its transformers 5 tokenizer config. Measured in `keepmum.guard.InjectionModel` on 600 SWE-chat tool results (1.7M characters), twice each; [`../guard_cost.py`](../guard_cost.py):
+
+| Q8_0 in llama-server | File | Resident, idle → busy | Footprint, busy | p50 / p95 per result | per 10k characters | Server CPU, 600 results |
+| --- | --- | --- | --- | --- | --- | --- |
+| keepmum's fine-tune | 164 MB | 349 → 390 MB | 206 MB | 8.3 / 133 ms | 99 ms | 6.0 s |
+| Wolf Edge | 92 MB | 231 → 274 MB | 183 MB | 6.6 / 117 ms | 87 ms | 6.2 s |
+
+- **About 117 MB less resident memory**, most of it the smaller mapped file (footprint: 23 MB less).
+- **13% faster.** Its 16 layers against 22 would save more, but tokenizing, HTTP and windows cost the same.
+- **The same CPU time**: Metal does the arithmetic, and the CPU time is request handling.
+
+Not a reason to switch.
+
+### Both must flag: Wolf Small as a veto
+
+*Nov 20, 2026.* [`../guard_either.py`](../guard_either.py) asks whether a second model catches what keepmum misses. [`../guard_both.py`](../guard_both.py) asks whether it can veto keepmum's false alarms: keepmum's check stays at its sensitivity level, and a hit stands only if Wolf also scores it at least at a small threshold. Wolf then runs only on keepmum's hits (1–3% of tool results), so it can start on demand and stop when idle, like keepmum's model.
+
+Wolf Small as a Q8_0 GGUF (`--model wolf-small`, 164 MB), in keepmum's runtime, normalizer and windows: [`wolf-gguf-20261120-021432.md`](wolf-gguf-20261120-021432.md). Real sessions are all 3,500 SWE-chat and SWE-Hero results; the attack columns are every document.
+
+| Rule | Real sessions flagged (3,500) | prodnull benign flagged (1,690) | AgentDojo | InjecAgent | LLMail | CodeIPI | prodnull |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| keepmum at High alone | 100 | 32 | 93.8% | 75.2% | 98.8% | 40.0% | 51.1% |
+| keepmum at Medium alone (the default) | 53 | 24 | 93.7% | 75.0% | 98.7% | 40.0% | 45.8% |
+| keepmum at Lowest alone | 10 | 24 | 93.4% | 74.2% | 98.5% | 40.0% | 45.7% |
+| **Medium, and Wolf Small ≥ 0.001** | **1** | 12 | 93.4% | 73.3% | 97.2% | 40.0% | 36.7% |
+| Medium, and Wolf Small ≥ 0.003 | 1 | 10 | 93.2% | 72.7% | 96.8% | 37.1% | 35.6% |
+| High, and Wolf Small ≥ 0.001 | 4 | 14 | 93.5% | 73.3% | 97.3% | 40.0% | 39.3% |
+| Medium, and Wolf Edge ≥ 0.003 (PyTorch) | 2 | 7 | 92.9% | 71.8% | 96.3% | 31.4% | 31.9% |
+
+On the hand-written holdout (Wolf in PyTorch), keepmum at Medium catches 98% and flags 3% of ordinary and 4% of security documents. With Wolf Small ≥ 0.003 it catches 92% and flags 0% and 2%; with Edge ≥ 0.003, 98%, 0% and 2%.
+
+- **The veto removes nearly every false alarm on real sessions.** At Medium, 53 of 3,500 become 1, and all 25 Read hits go. That is fewer than Lowest alone (10) for more catches.
+- **Catches hold within about two points**, except **prodnull's malicious repository files: 45.8% → 36.7%.** These are build scripts, CI files and READMEs that keepmum's model flags and Wolf scores near zero, the cost to weigh.
+- **Wolf Small vetoes better than Edge**: Edge drops more of CodeIPI (31% against Small's 37–40%) and prodnull.
+- **A Q8_0 GGUF is close enough at these thresholds.**
+  - Given the same token ids, F16 agrees with PyTorch on every veto verdict over keepmum's 3,083 hits at High (logit margin difference median 0.005, max 0.096).
+  - Q8_0 differs on 2–6 of 3,083 (median 0.094, max 1.43), each scoring within a factor of two of the threshold, in both directions. No count in the table above moves by more than one document.
+  - keepmum's runtime tokenizes 3,604 of 3,683 documents as Wolf's tokenizer does. The rest differ by keepmum's normalizer, which Wolf's tokenizer lacks, and changes no veto verdict. It helped once: an LLMail attack in invisible characters scored 0.076 in PyTorch and 1.000 in keepmum's runtime.
+- **The threshold is fragile.** Wolf's safe text scores near zero, so 0.001 sits in the tail of its scores, and a retrain would move it. Pin the checkpoint and measure again with each one.
+
 ## Verdict
+
+*Nov 20, 2026:* keepmum's fine-tune stays the injection check's model. Wolf Defender Small v2.1 (Q8_0, Apache-2.0) could become a veto on its hits: at Medium, a hit stands only when Wolf also scores at least 0.001. That cuts false alarms on real coding-agent output from 1.5% to 0.03%, and catches stay within about two points, except prodnull's repository files (−9 points). It would cost about 390 MB while Wolf runs, started only after a hit, and about 0.5 s on a hit in block mode while it starts. It needs a published, pinned GGUF first.
 
 *Nov 4, 2026:* superseded in part. Horizon-Labs Prompt Injection Guard Small (Apache-2.0) now beats Shield Small on this benchmark (above), so point 1's "the best Apache model misses six of ten" no longer holds. keepmum's injection check now uses it, as a GGUF in llama-server, and no longer offers Shield Small or asks users to confirm non-commercial use. Points 2 and 3 stand: the check is optional, off by default, and on top of the restore guards.
 
