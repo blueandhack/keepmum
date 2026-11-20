@@ -193,6 +193,14 @@ def _guard_checks(r, cfg) -> None:
                else "llama-server not found (brew install llama.cpp)" if find_server() is None else None)
         _check(r, FAIL if why else OK, f"injection check {cfg.guard_injection}: " + (why or
                f"Prompt Injection Guard Small {guard.RELEASE}, Apache-2.0; {GUARD_MEMORY['injection']} while in use"))
+        if not cfg.guard_injection_confirm:
+            _check(r, OK, "injection second opinion off: every hit of the model is reported ([guard] injection_confirm)")
+        elif guard.confirm_installed():
+            _check(r, OK, f"injection second opinion: {guard.CONFIRM_ATTRIBUTION}; "
+                          f"{GUARD_MEMORY['injection']} more for a while after a hit")
+        else:
+            _check(r, WARN, "injection second opinion on, its model not set up: every hit is reported until keepmum "
+                            "downloads it when it starts (or `keepmum guard setup injection`)")
     if "local" in (cfg.guard_injection, cfg.guard_harm):
         from .local import kind, missing, models, servers_for
 

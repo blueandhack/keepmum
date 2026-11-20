@@ -546,7 +546,11 @@ def _guard_status() -> dict:
                       "server": server, "model": f"{guard.REPO}@{guard.REVISION}", "source": f"{guard.SOURCE}@{guard.RELEASE}",
                       "licence": guard.LICENCE, "threshold": cfg.guard_injection_threshold, "default_threshold": guard.THRESHOLD,
                       "short_chars": guard.SHORT_CHARS, "short_threshold": guard.short_threshold(cfg.guard_injection_threshold),
-                      "levels": {k: v._asdict() for k, v in guard.LEVELS.items()}},
+                      "levels": {k: v._asdict() for k, v in guard.LEVELS.items()},
+                      "confirm": {"on": cfg.guard_injection_confirm, "installed": guard.confirm_installed(),
+                                  "model": f"{guard.CONFIRM_REPO}@{guard.CONFIRM_REVISION}",
+                                  "source": f"{guard.CONFIRM_SOURCE}@{guard.CONFIRM_RELEASE}", "licence": "Apache-2.0",
+                                  "threshold": guard.CONFIRM_THRESHOLD}},
         "commands": {"mode": cfg.guard_commands, "rules": [label for _, label, _ in RULES + SENDS]},
         "local": {"servers": [{"url": x.url, "model": x.model, "checks": list(x.checks), "api": x.api}
                               for x in cfg.guard_local_servers],
@@ -604,6 +608,13 @@ def guard_status(ctx: typer.Context, as_json: bool = typer.Option(False, "--json
     else:
         typer.echo(f"  model: an earlier one; `keepmum guard setup injection` replaces it with {guard.RELEASE}"
                    if inj.get("outdated") else "  model: not set up (`keepmum guard setup injection`)")
+    second = inj["confirm"]
+    if not second["on"]:
+        typer.echo("  second opinion: off, every hit of the model is reported (`keepmum guard confirm on`)")
+    elif second["installed"]:
+        typer.echo(f"  second opinion: {guard.CONFIRM_ATTRIBUTION}, must score a hit {guard.CONFIRM_THRESHOLD} or more")
+    else:
+        typer.echo("  second opinion: on, its model not set up (`keepmum guard setup injection`); until then every hit is reported")
     typer.echo(f"harm: {_MODE_TEXT[hm['mode']]}")
     have = [size for size, ok in hm["installed"].items() if ok]
     typer.echo(f"  model: {harm.NAMES[hm['model']]} (Apache-2.0)"
@@ -649,6 +660,8 @@ def guard_setup(check: str = typer.Argument(..., help="injection or harm"),
             raise typer.Exit(1)
         AuditLog().append("guard-model", action="installed", model=f"{guard.REPO}@{guard.REVISION}", licence=guard.LICENCE,
                           by=caller("keepmum guard setup injection"))
+        AuditLog().append("guard-model", action="installed", model=f"{guard.CONFIRM_REPO}@{guard.CONFIRM_REVISION}",
+                          licence="Apache-2.0", by=caller("keepmum guard setup injection"))
     else:
         repo, commit, file, *_ = harm.MODELS[model]
         typer.echo(f"{harm.NAMES[model]} (Apache-2.0), {file} from {repo}", err=True)
@@ -1992,6 +2005,39 @@ def guard_sensitivity(check: str = typer.Argument(..., help="injection or harm")
         raise typer.Exit(1)
     typer.echo(f"injection threshold: {number}" + (" (more is let through: fewer false alarms, fewer injections caught)"
                                                    if number > cfg.guard_injection_threshold else ""), err=True)
+    typer.echo("Running proxies switch on their next request.", err=True)
+
+
+@guard_app.command("confirm")
+def guard_confirm(value: str = typer.Argument(None, help="on, off, or default (on). No value: show it.")) -> None:
+    """Whether a second model (Wolf Defender Small) must agree with an injection hit. On: far fewer false
+    alarms on real coding-agent output, a few injections fewer caught (bench/results/GUARD.md)."""
+    from . import guard
+    from .config import ConfigError
+
+    cfg = _config()
+    if value is None:
+        state = "on" if cfg.guard_injection_confirm else "off"
+        typer.echo(f"second opinion: {state}" + ("" if guard.confirm_installed() or not cfg.guard_injection_confirm
+                                                 else ", its model not set up (`keepmum guard setup injection`)"))
+        typer.echo(f"  {guard.CONFIRM_ATTRIBUTION}; a hit stands if it scores {guard.CONFIRM_THRESHOLD} or more")
+        typer.echo("  On 3,500 real Claude Code, Codex and OpenHands tool results, at Medium: 53 flagged alone, 1 with it;")
+        typer.echo("  catches within about two points, except malicious repository files (prodnull): 46% -> 37%")
+        return
+    if value not in ("on", "off", "default"):
+        typer.echo(f"keepmum guard confirm: {value!r}: use on, off or default", err=True)
+        raise typer.Exit(2)
+    on = value != "off"
+    try:
+        _update_config(cfg.path, "guard", "injection_confirm", None if on else False, f"keepmum guard confirm {value}")
+    except (ConfigError, OSError) as e:
+        typer.echo(f"keepmum guard confirm: {e}", err=True)
+        raise typer.Exit(1)
+    typer.echo("second opinion: on (fewer false alarms, a few injections fewer caught)" if on
+               else "second opinion: off (every hit of the model is reported)", err=True)
+    if on and not guard.confirm_installed():
+        typer.echo("Its model is not set up yet: `keepmum guard setup injection` (or the service fetches it when it starts).",
+                   err=True)
     typer.echo("Running proxies switch on their next request.", err=True)
 
 

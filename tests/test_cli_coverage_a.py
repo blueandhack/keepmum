@@ -549,8 +549,10 @@ def test_guard_setup_injection_downloads_audits_and_says_what_is_missing(home, m
     r = cli.invoke(app, ["guard", "setup", "injection"])
     assert r.exit_code == 0 and "model ready:" in r.output and r.output.count("10% of") == 1
     assert "llama-server is not installed" in r.output and "keepmum guard injection warn" in r.output
-    entry = [e for e in audit.read() if e.get("event") == "guard-model"][-1]
-    assert entry["model"] == f"{guard.REPO}@{guard.REVISION}" and entry["action"] == "installed"
+    first, second = [e for e in audit.read() if e.get("event") == "guard-model"][-2:]
+    assert first["model"] == f"{guard.REPO}@{guard.REVISION}" and first["action"] == "installed"
+    assert second["model"] == f"{guard.CONFIRM_REPO}@{guard.CONFIRM_REVISION}" and second["licence"] == "Apache-2.0"
+    assert "Wolf Defender Small" in r.output  # setup says what the second model is
 
 
 def test_guard_setup_reports_a_failed_download(home, monkeypatch):

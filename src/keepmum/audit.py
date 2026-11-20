@@ -306,7 +306,8 @@ def config_state(cfg) -> dict:
         "destinations": sorted(f"{rule} = {h}" for rule, hosts in cfg.destinations.items() for h in hosts),
         "previews": cfg.log_previews, "context": cfg.log_context, "values": cfg.log_values, "keep_days": cfg.audit_keep_days,
         "log_keep_days": cfg.log_keep_days,
-        "guard": cfg.guard_injection, "injection_threshold": cfg.guard_injection_threshold, "harm": cfg.guard_harm,
+        "guard": cfg.guard_injection, "injection_threshold": cfg.guard_injection_threshold,
+        "injection_confirm": cfg.guard_injection_confirm, "harm": cfg.guard_harm,
         "harm_sensitivity": cfg.guard_harm_sensitivity, "harm_model": cfg.guard_harm_model,
         "commands": cfg.guard_commands,
         "local_servers": [f"{x.model or '(no model)'} at {x.url}"
@@ -341,10 +342,12 @@ _SETTINGS = {
     # Values on puts every masked secret a click away on this Mac: recorded as a weakening.
     "values": ("log.values", True),
     "log_keep_days": ("log.keep_days", None),
+    # A second model that must agree with an injection hit: on, fewer false alarms and a few catches fewer.
+    "injection_confirm": ("guard.injection_confirm", True),
 }
 # Settings newer than some logs: missing from a recorded state is not a change.
 _ADDED_LATER = {"context", "values", "log_keep_days", "gateways", "destinations", "guard", "harm", "harm_model", "commands", "local_servers", "local_skills",
-                "injection_threshold", "harm_sensitivity", "local_handback", "local_handback_instructions",
+                "injection_threshold", "injection_confirm", "harm_sensitivity", "local_handback", "local_handback_instructions",
                 "local_handback_review", "local_handback_harm", "local_handback_harm_instructions"}
 # Local is below block: a flagged request is answered (on this Mac) rather than refused.
 _GUARD_RANK = {"off": 0, "warn": 1, "local": 2, "block": 3}

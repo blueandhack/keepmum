@@ -38,6 +38,8 @@
     harm_model = "small"   # "small" (Content Safety Guard, 0.4 GB while in use), or Qwen3Guard "0.6b" (1.1 GB) or "4b" (4.9 GB)
     injection_threshold = 0.222  # the injection check's score to flag (0.05-0.45): higher, fewer false alarms and fewer catches
                            # (`keepmum guard sensitivity injection` lists the levels; 0.5 or more is read as an older model's level)
+    injection_confirm = true  # a hit stands only if a second model (Wolf Defender Small) agrees: far fewer false
+                           # alarms, a few catches fewer; false reports every hit of the first model alone
     harm_sensitivity = "medium"  # "high", "medium", "low" or "lowest": lower, fewer false alarms and fewer catches
     commands = "off"       # shell commands in the model's replies, against a few rules (commands.py): "warn" or "block"
     # injection or harm = "local": a flagged request is answered by a model on this Mac (local.py),
@@ -100,7 +102,7 @@ _SCHEMA = {
     "rules": {"mask": list, "off": list},
     "log": {"level": str, "previews": bool, "context": bool, "values": bool, "keep_days": int},
     "audit": {"keep_days": int},
-    "guard": {"injection": str, "injection_threshold": float, "harm": str, "harm_model": str, "harm_sensitivity": str, "commands": str, "local_url": str, "local_model": str,
+    "guard": {"injection": str, "injection_threshold": float, "injection_confirm": bool, "harm": str, "harm_model": str, "harm_sensitivity": str, "commands": str, "local_url": str, "local_model": str,
               "local_servers": list, "local_skills": list, "local_handback": str, "local_handback_instructions": str,
               "local_handback_instructions_off": bool, "local_handback_harm": str, "local_handback_harm_instructions": str,
               "local_handback_harm_instructions_off": bool,
@@ -162,6 +164,7 @@ class Config:
     audit_keep_days: int = 90
     guard_injection: str = "off"
     guard_injection_threshold: float = 0.222  # guard.THRESHOLD
+    guard_injection_confirm: bool = True  # a second model must agree with a hit (guard.ConfirmModel)
     guard_harm: str = "off"
     guard_harm_sensitivity: str = "medium"
     guard_harm_model: str = "small"
@@ -329,6 +332,7 @@ def load(path: Path | None = None) -> Config:
     cfg.guard_injection_threshold = from_previous(cfg.guard_injection_threshold)  # an older model's scale
     if cfg.guard_injection_threshold > RANGE[1]:
         raise ConfigError(f"{path}: guard.injection_threshold must be {RANGE[0]}-{RANGE[1]} ({THRESHOLD} is the default)")
+    cfg.guard_injection_confirm = guard.get("injection_confirm", cfg.guard_injection_confirm)
     cfg.guard_harm_sensitivity = guard.get("harm_sensitivity", cfg.guard_harm_sensitivity)
     if cfg.guard_harm_sensitivity not in ("high", "medium", "low", "lowest"):
         raise ConfigError(f"{path}: guard.harm_sensitivity must be \"high\", \"medium\", \"low\" or \"lowest\"")

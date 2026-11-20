@@ -189,7 +189,7 @@ Personal data is off by default: only secrets and your own rules are masked unti
 ### Optional checks: prompt injection and harmful requests
 
 ```sh
-keepmum guard setup injection        # downloads Prompt Injection Guard Small, keepmum's fine-tune (164 MB)
+keepmum guard setup injection        # downloads Prompt Injection Guard Small, keepmum's fine-tune, and Wolf Defender Small, its second opinion (164 MB each)
 keepmum guard setup harm             # downloads Content Safety Guard Small (164 MB); --model 0.6b or 4b for Qwen3Guard (805 MB, 4.7 GB)
 keepmum guard injection warn         # check what tools return; log a possible injection and send the request
 keepmum guard harm block             # check what you type; refuse a request the model flags
@@ -197,6 +197,7 @@ keepmum guard harm warn --model 4b   # switch the harm check to Qwen3Guard 4B, t
 keepmum guard commands block         # check the shell commands in the model's replies; no download
 keepmum guard sensitivity injection low          # fewer false alarms: high, medium (0.222, the default), low, lowest, or a number
 keepmum guard sensitivity harm low               # the harm check: high, medium (the default), low or lowest
+keepmum guard confirm off                        # report every injection hit of the first model, without its second opinion (on by default)
 keepmum guard local pull                             # downloads keepmum's pick to Ollama and uses it for local mode
 keepmum guard local picks                            # the tested models, with their download and memory
 keepmum guard local pull https://huggingface.co/owner/repo --quant Q4_K_M   # any GGUF on Hugging Face, or an Ollama name
@@ -285,6 +286,8 @@ keepmum holds a request only while something is there to answer: the Mac app ask
 
 AgentDojo is counted on its travel and workspace suites, which the model was not trained on. No level catches every attack: on the public sets, about half of those hidden in code files and repository docs get through. The check is a warning, not a guarantee.
 
+**Second opinion.** A tool result the model flags is reported only if a second model agrees: [Wolf Defender Small](https://huggingface.co/patronus-studio/wolf-defender-prompt-injection-small) v2.1 by Patronus Protect (Apache-2.0, a [GGUF](https://huggingface.co/keepmum/wolf-defender-prompt-injection-small-gguf) keepmum hosts) must score it 0.001 or more. The two models flag different things, so together they raise far fewer false alarms: on 3,500 real Claude Code, Codex and OpenHands tool results, 53 flagged at Medium become 1, and none of the 25 files read (Read) that the model alone flagged. Catches stay within about two points (AgentDojo 93%, InjecAgent 73%, LLMail 97%, CodeIPI 40%), except malicious repository files (prodnull), 46% to 37% ([GUARD.md](bench/results/GUARD.md)). The second model runs only on the first one's hits, in a llama-server of its own that starts on a hit and stops after 10 minutes unused: 0.4 GB for that while, and about half a second on the first hit in block mode while it starts. Until its model is downloaded (`keepmum guard setup injection`, or the service fetches it when it starts with the check on), every hit is reported, as with it off; if it fails, the hit stands too. `keepmum guard confirm off` (`[guard] injection_confirm = false`) reports every hit of the first model, and turning it on is audited as weakening protection. The levels in the table above are the model's alone: with the second opinion, each flags far less.
+
 The harm check has the same four levels (`keepmum guard sensitivity harm …`, `[guard] harm_sensitivity`), with Medium as its default. Its models score on different scales, so it takes a level, not a number: each level flags about the same share of safe prompts on every model, and carries over when you change the model. On keepmum's harm test set (`bench/results/HARM.md`: 862 harmful and 994 safe prompts, 44 of them coding prompts that only sound harmful), harmful prompts caught / safe prompts flagged:
 
 | Level | Small | 0.6B | 4B |
@@ -301,6 +304,7 @@ A text flagged under a lower threshold stops counting once its score is under th
 | Check | Model | Licence | Benchmark | Memory while in use | Time |
 | --- | --- | --- | --- | --- | --- |
 | injection | [Prompt Injection Guard Small](https://huggingface.co/Horizon-Labs/prompt-injection-guard-small) v2.3 (Horizon Labs), fine-tuned by keepmum on coding-agent tool output (v2.3-km1), as a [GGUF](https://huggingface.co/keepmum/prompt-injection-guard-small-ft-gguf) in llama.cpp on Metal | Apache-2.0 | at Medium, against the unmodified model: 91% of AgentDojo attacks caught (81%), 50% of prodnull's (25%), InjecAgent 75% (same), CodeIPI 40% (49%) ([GUARD.md](bench/results/GUARD.md)) | 0.4 GB | about 40 ms for a 6,000-character tool result |
+| injection, second opinion | [Wolf Defender Small](https://huggingface.co/patronus-studio/wolf-defender-prompt-injection-small) v2.1 (Patronus Protect), as a [GGUF](https://huggingface.co/keepmum/wolf-defender-prompt-injection-small-gguf) in llama.cpp on Metal; scores only the first model's hits | Apache-2.0 | with it at Medium: 1 of 3,500 real tool results flagged (53 without), catches within about two points except prodnull, 37% (46%) ([GUARD.md](bench/results/GUARD.md)) | 0.4 GB, for 10 minutes after a hit | about 10 ms a hit |
 | harm | Small (default): [Content Safety Guard Small](https://huggingface.co/Horizon-Labs/content-safety-guard-small) v1.2 (Horizon Labs), as a [GGUF](https://huggingface.co/keepmum/content-safety-guard-small-gguf); or [Qwen3Guard-Gen](https://huggingface.co/Qwen/Qwen3Guard-Gen-0.6B) 0.6B or 4B, Q8 GGUFs; in llama.cpp on Metal | Apache-2.0 | Small: 66% of harmful prompts caught, 5% of safe ones flagged; 0.6B: 76% and 4%; 4B: 82% and 4%; of 44 ordinary coding prompts, Small flags 3, the 0.6B 1, the 4B none ([HARM.md](bench/results/HARM.md)) | 0.4 GB (Small), 1.1 GB (0.6B), 4.9 GB (4B) | 8 ms (Small), 30 ms (0.6B), 150 ms (4B) |
 
 The models load on the first check and unload after 10 minutes unused, so they take memory only while agents are working, as the privacy filter does. With both checks on and the Small harm model, keepmum needs about 1.0 GB while busy (1.7 GB with the 0.6B), and the privacy filter's 1.6 GB file in macOS's cache; `keepmum doctor` warns if the 4B is too much for the Mac.
@@ -426,6 +430,7 @@ keep_days = 90         # how long the audit log keeps entries (`keepmum audit ke
 
 [guard]
 injection = "off"      # check tool results for prompt injection: "warn" or "block" (`keepmum guard setup injection` first)
+injection_confirm = true  # report an injection hit only if a second model agrees: far fewer false alarms (`keepmum guard confirm`)
 harm = "off"           # check what you type for harmful requests: "warn" or "block" (`keepmum guard setup harm` first)
 harm_model = "small"   # or Qwen3Guard "0.6b" or "4b"
 commands = "off"       # check the shell commands in the model's replies: "warn" or "block" (no setup)

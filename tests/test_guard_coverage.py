@@ -30,6 +30,7 @@ def test_model_path_is_the_gguf_in_its_release_folder(data):
 def test_download_fetches_each_file_with_progress_and_skips_what_is_in_place(data, monkeypatch):
     blobs = {"LICENSE": b"licence text", "NOTICE": b"notice!", "m.gguf": b"g" * 30}
     monkeypatch.setattr(guard, "FILES", files(*blobs.items()))
+    monkeypatch.setattr(guard, "CONFIRM_FILES", {})  # the second model's files: test_guard.py
     (guard.model_dir()).mkdir(parents=True)
     (guard.model_dir() / "LICENSE").write_bytes(blobs["LICENSE"])  # already there
     asked, seen = [], []

@@ -26,6 +26,12 @@ threshold, Medium's 0.8 by default; one under SHORT_CHARS must reach a much high
 On real coding-agent sessions (bench/results/guard-public-*.md) short results were most of the false
 alarms: a grep line, an error, an agent's own notice. Few published attacks are that short, and a line
 planted in a repository usually arrives inside a longer file.
+
+A new hit then needs a second opinion ([guard] injection_confirm, on by default): Patronus' Wolf Defender
+Small (Apache-2.0, `ConfirmModel`, CONFIRM_*), which must score it CONFIRM_THRESHOLD or more. It runs
+only on the first model's hits, in a llama-server of its own. The two flag different things, so together
+they raise far fewer false alarms on real sessions (53 of 3,500 tool results at Medium become 1) for a
+few points of catches (bench/results/GUARD.md). Without it in place, a hit stands.
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import re
@@ -61,6 +68,27 @@ FILES = {
     "LICENSE": ("cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30", 11_358),
     "NOTICE": ("5ffe2383027c7510933df2e7055440edde8c96b67b7a58fb477f9632c72b9c14", 1_566),
 }
+# The second opinion (bench/results/GUARD.md, "Wolf Defender v2.1, and Wolf Small as a veto"): a new hit
+# stands only if Patronus' Wolf Defender Small also scores it CONFIRM_THRESHOLD or more. The two models
+# flag different things, so on 3,500 real coding-agent tool results the pair flagged 1 where keepmum's
+# model at Medium flagged 53; catches held within about two points, except prodnull's malicious
+# repository files (45.8% -> 36.7%). Its own GGUF (bench/horizon_gguf.py --model wolf-small), in
+# keepmum's runtime, normalizer and windows: bench/wolf_parity.py. [guard] injection_confirm turns it off.
+CONFIRM_REPO = "keepmum/wolf-defender-prompt-injection-small-gguf"
+CONFIRM_REVISION = "f2bf9100bfb4094b6b5a80781a9374069bf7fd3f"
+CONFIRM_SOURCE = "patronus-studio/wolf-defender-prompt-injection-small"
+CONFIRM_SOURCE_REVISION = "2484cc9a13550aa4f2c29b577ff3ef331dc6ba07"
+CONFIRM_RELEASE = "v2.1"
+CONFIRM_ATTRIBUTION = "Wolf Defender Small v2.1 by Patronus Protect, Apache-2.0"
+CONFIRM_GGUF = "wolf-defender-prompt-injection-small-v2.1.Q8_0.gguf"
+CONFIRM_FILES = {
+    CONFIRM_GGUF: ("45a0ce1f3c99bad62bc30f999e3f7807b08bf1216892f3a3faa8632bc341f8f5", 164_357_632),
+    "LICENSE": ("cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30", 11_358),  # Patronus' own
+    "NOTICE": ("367f45842bd7d0c52f4d1afab866cf7248b78026878f2aa5ff5a11ae3853baa8", 1_894),  # mmBERT-small's MIT notice
+}
+# Safe text scores near zero with this model, so the threshold sits in that tail: a new checkpoint needs
+# it measured again (bench/guard_both.py).
+CONFIRM_THRESHOLD = 0.001
 # What earlier keepmum versions downloaded: Shield Small (ZeroLeaks, CC BY-NC 4.0), then Horizon-Labs'
 # model unchanged (v2.3). Removed on setup; with the check on, keepmum downloads this one in their place.
 LEGACY = ("shield-small-s15e", "prompt-injection-guard-small-v2.3")
@@ -121,7 +149,12 @@ INFO = f"""The prompt-injection check uses Prompt Injection Guard Small (v2.3) b
 licensed {LICENCE}: https://huggingface.co/{SOURCE}
 keepmum downloads its own fine-tune of it on coding-agent tool output ({RELEASE}), which runs in
 llama.cpp and which Horizon Labs does not endorse: {sum(size for _, size in FILES.values()) / 1e6:.0f} MB from
-huggingface.co/{REPO}, checked against pinned SHA-256s."""
+huggingface.co/{REPO}, checked against pinned SHA-256s.
+A hit stands only if a second model agrees: Wolf Defender Small ({CONFIRM_RELEASE}) by Patronus Protect,
+licensed Apache-2.0: https://huggingface.co/{CONFIRM_SOURCE}
+keepmum downloads its conversion to llama.cpp, which Patronus Protect does not endorse:
+{sum(size for _, size in CONFIRM_FILES.values()) / 1e6:.0f} MB from huggingface.co/{CONFIRM_REPO}, checked the same way.
+([guard] injection_confirm = false reports every hit of the first model alone.)"""
 
 # The model's tokenizer normalizer (its tokenizer.json), which llama.cpp does not run: text smuggled
 # in Unicode tag characters or variation selectors decoded to ASCII, NFKC, then invisible and
@@ -191,10 +224,26 @@ def model_path() -> Path:
     return model_dir() / GGUF
 
 
+def _complete(d: Path, files: dict) -> bool:
+    return all((d / p).is_file() and (d / p).stat().st_size == size for p, (_, size) in files.items())
+
+
 def installed() -> bool:
     """Every pinned file is in place at its size."""
-    d = model_dir()
-    return all((d / p).is_file() and (d / p).stat().st_size == size for p, (_, size) in FILES.items())
+    return _complete(model_dir(), FILES)
+
+
+def confirm_dir() -> Path:
+    return data_dir() / "guard" / f"wolf-defender-prompt-injection-small-{CONFIRM_RELEASE}"
+
+
+def confirm_path() -> Path:
+    return confirm_dir() / CONFIRM_GGUF
+
+
+def confirm_installed() -> bool:
+    """The second model's pinned files are in place at their sizes."""
+    return _complete(confirm_dir(), CONFIRM_FILES)
 
 
 def outdated() -> bool:
@@ -219,14 +268,12 @@ def _remove_legacy() -> None:
             shutil.rmtree(p)
 
 
-def download(progress=None) -> Path:
-    """Fetch every pinned file into model_dir(), checking size and SHA-256."""
+def _fetch(repo: str, revision: str, files: dict, d: Path, progress, done: int, total: int) -> int:
+    """Fetch each pinned file of `repo` at `revision` into `d`, checking size and SHA-256; one already in
+    place is kept. Returns `done` plus the bytes of these files, for one progress over several repos."""
     import httpx
 
-    _remove_legacy()
-    d = model_dir()
-    total, done = sum(size for _, size in FILES.values()), 0
-    for rel, (sha, size) in FILES.items():
+    for rel, (sha, size) in files.items():
         dest = d / rel
         if dest.is_file() and dest.stat().st_size == size and _sha256(dest) == sha:
             done += size
@@ -235,7 +282,7 @@ def download(progress=None) -> Path:
         part = dest.with_name(dest.name + ".part")
         h, got = hashlib.sha256(), 0
         try:
-            url = f"https://huggingface.co/{REPO}/resolve/{REVISION}/{rel}"
+            url = f"https://huggingface.co/{repo}/resolve/{revision}/{rel}"
             with httpx.stream("GET", url, follow_redirects=True, timeout=60) as r:
                 r.raise_for_status()
                 with open(part, "wb") as f:
@@ -253,14 +300,32 @@ def download(progress=None) -> Path:
             raise GuardError(f"{rel} does not match its pinned size and SHA-256")
         part.replace(dest)
         done += size
-    return d
+    return done
+
+
+def download(progress=None, confirm: bool = True) -> Path:
+    """Fetch every pinned file into model_dir(), and with `confirm` the second model's into confirm_dir(),
+    checking size and SHA-256."""
+    _remove_legacy()
+    total = sum(size for _, size in FILES.values()) + (sum(size for _, size in CONFIRM_FILES.values()) if confirm else 0)
+    done = _fetch(REPO, REVISION, FILES, model_dir(), progress, 0, total)
+    if confirm:
+        _fetch(CONFIRM_REPO, CONFIRM_REVISION, CONFIRM_FILES, confirm_dir(), progress, done, total)
+    return model_dir()
+
+
+def download_confirm(progress=None) -> Path:
+    """Fetch only the second model (an install from before it, with the check on)."""
+    _fetch(CONFIRM_REPO, CONFIRM_REVISION, CONFIRM_FILES, confirm_dir(), progress, 0,
+           sum(size for _, size in CONFIRM_FILES.values()))
+    return confirm_dir()
 
 
 def remove() -> list[Path]:
-    """Delete the model, and any model an earlier keepmum version downloaded."""
+    """Delete both models, and any model an earlier keepmum version downloaded."""
     import shutil
 
-    gone = [p for p in [model_dir(), *(data_dir() / "guard" / old for old in LEGACY)] if p.exists()]
+    gone = [p for p in [model_dir(), confirm_dir(), *(data_dir() / "guard" / old for old in LEGACY)] if p.exists()]
     for p in gone:
         shutil.rmtree(p)
     return gone
@@ -326,13 +391,23 @@ class InjectionModel(Idle):
             self._server.stop()
         self._server = None
 
+    missing = "the injection model is not set up: run `keepmum guard setup injection`"
+
+    @staticmethod
+    def default_path() -> Path:
+        return model_path()
+
+    def available(self) -> bool:
+        """Its GGUF is in place (it may still fail to start)."""
+        return (self.model or self.default_path()).is_file()
+
     def _start(self) -> None:
         server = self.server or find_server()
         if server is None:
             raise GuardError(f"llama-server is not installed ({INSTALL_HINT})")
-        model = self.model or model_path()
+        model = self.model or self.default_path()
         if not model.is_file():
-            raise GuardError("the injection model is not set up: run `keepmum guard setup injection`")
+            raise GuardError(self.missing)
         # A slot per window of a batch, all in one micro-batch: a window must fit in one (non-causal attention).
         self._server = Server(server, model, ["--embedding", "-c", str(WINDOW * BATCH), "--parallel", str(BATCH),
                                               "-b", str(WINDOW * BATCH), "-ub", str(WINDOW * BATCH), "--cache-ram", "0"], GuardError)
@@ -362,6 +437,19 @@ class InjectionModel(Idle):
                     safe, injection = e["embedding"][0]  # the classifier's logits: [SAFE, INJECTION]
                     best = max(best, sigmoid(injection - safe))  # softmax over two labels: a sigmoid of the margin
             return best
+
+
+class ConfirmModel(InjectionModel):
+    """The second opinion, Wolf Defender Small: the same architecture, tokenizer and logits ([BENIGN,
+    INJECTION]), scored as keepmum scores its own model (normalizer, windows, server settings), in its own
+    llama-server. It starts on the first hit of the first model, not on every result, and stops when idle."""
+
+    label = f"Wolf Defender Small {CONFIRM_RELEASE}"
+    missing = "the injection check's second model is not set up: run `keepmum guard setup injection`"
+
+    @staticmethod
+    def default_path() -> Path:
+        return confirm_path()
 
 
 # A piece of a flagged result that comes back in a later one (a line of it, or part of a line) is
@@ -484,10 +572,18 @@ class Guard:
     asked only for a new hit."""
 
     def __init__(self, mode, model=None, threshold: float = THRESHOLD, keep: int = 4096, name: str = "injection",
-                 min_chars: int = MIN_CHARS, short_chars: int = 0, store: FlaggedStore | None = None):
+                 min_chars: int = MIN_CHARS, short_chars: int = 0, store: FlaggedStore | None = None,
+                 confirm=None, confirm_on=False, confirm_threshold: float = CONFIRM_THRESHOLD):
         self._mode = mode if callable(mode) else (lambda: mode)
         self.model = model if model is not None else InjectionModel()
         self.threshold = threshold
+        # A second model that must agree with a new hit ([guard] injection_confirm, CONFIRM_*): `confirm_on`
+        # is a callable (the live config). Without its model in place, or if it fails, a hit stands: the
+        # check never goes quiet for want of the second opinion. `vetoed` counts hits it set aside.
+        self.confirm = confirm
+        self._confirm_on = confirm_on if callable(confirm_on) else (lambda: confirm_on)
+        self.confirm_threshold = confirm_threshold
+        self.vetoed = 0
         self.name = name
         self.min_chars = min_chars
         self.short_chars = short_chars  # the injection check's SHORT_CHARS; 0: one threshold for every length
@@ -550,7 +646,8 @@ class Guard:
                 s = carried["score"]
             else:
                 s = self.model.score(scored)
-                if s < self.threshold_for(len(scored)):
+                # Set aside by the second model, it is no hit of its own; it may still repeat a flagged piece.
+                if s < self.threshold_for(len(scored)) or not self._confirmed(scored):
                     carried = self._carried(scored) if self.carry else None
                     if carried is None:
                         continue
@@ -578,6 +675,25 @@ class Guard:
             hit_keys.add(key)
         return hits
 
+    def confirming(self) -> bool:
+        """The second model is on and in place: a new hit needs its agreement."""
+        return self.confirm is not None and bool(self._confirm_on()) and getattr(self.confirm, "available", lambda: True)()
+
+    def _confirmed(self, text: str) -> bool:
+        """Whether a new hit stands: the second model agrees, or is off, missing or failing."""
+        if not self.confirming():
+            return True
+        try:
+            c = self.confirm.score(text)
+        except Exception as e:  # a hit stands without its second opinion
+            logging.getLogger("keepmum").warning("%s check: the second model failed, the hit stands: %s", self.name, e)
+            return True
+        if c >= self.confirm_threshold:
+            return True
+        with self._lock:
+            self.vetoed += 1
+        return False
+
     def _carried(self, text: str) -> dict | None:
         """The hit of a flagged text that a line of text (20 characters or more) repeats, or None."""
         with self._lock:
@@ -592,7 +708,8 @@ class Guard:
             # line of the flagged text, but carries one.
             windows = [piece] + [piece[i:i + WINDOW_CHARS] for i in range(0, max(0, len(piece) - WINDOW_CHARS) + 1, 4)]
             for flat, hit in reversed(sources):
-                # A window of a few characters over and over (`xxxx…`, a `----` rule) is in everything.
-                if any(w in flat for w in windows if len(w) >= PIECE_CHARS and (w is piece or len(set(w)) >= 12)):
+                # A line or window of a few characters over and over (`xxxx…`, a `----` rule, pytest's `====`
+                # banner) is in everything: a flagged test run carried every later one (Nov 20, guard_both).
+                if any(w in flat for w in windows if len(w) >= PIECE_CHARS and len(set(w)) >= 12):
                     return hit
         return None
