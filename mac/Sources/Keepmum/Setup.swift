@@ -203,6 +203,8 @@ func hostPort(_ url: String) -> String {
 /// does in Settings, so no agent is left pointed at a proxy that is gone.
 struct ServiceRow: View {
     var engine: Engine
+    /// On its own surface; false inside a group that draws one.
+    var framed = true
 
     var body: some View {
         HStack(spacing: Space.s + Space.xxs) {
@@ -223,7 +225,7 @@ struct ServiceRow: View {
             controls
         }
         .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
-        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
+        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(framed ? Theme.fill : .clear))
     }
 
     @ViewBuilder private var controls: some View {
@@ -274,6 +276,8 @@ struct ServiceRow: View {
 
 struct ProtectionRow: View {
     var engine: Engine
+    /// On its own surface; false inside a group that draws one.
+    var framed = true
     var openSetup: () -> Void
 
     var body: some View {
@@ -296,8 +300,8 @@ struct ProtectionRow: View {
                 PillButton(title: "Set up", prominent: true, action: openSetup)
             }
         }
-        .padding(.horizontal, Space.m).padding(.vertical, Space.s + Space.xxs)
-        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
+        .padding(.leading, Space.m - Space.xxs).padding(.trailing, Space.s).padding(.vertical, Space.s + Space.xxs)
+        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(framed ? Theme.fill : .clear))
     }
 
     /// The coding agents protected right now, by name.

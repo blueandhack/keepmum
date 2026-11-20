@@ -28,24 +28,33 @@ struct Dashboard: View {
     @AppStorage("appearance") private var appearance: Appearance = .system
     @State private var page: Page
     @State private var settingsPane: SettingsPane
+    /// ⌘K's command palette, over the page.
+    @State private var paletteOpen: Bool
+    private let paletteQuery: String
 
-    /// `page` and `settingsPane`: where it opens (the snapshot renderer opens each in turn).
-    init(store: StatsStore, engine: Engine, page: Page = .overview, settingsPane: SettingsPane = .setup) {
+    /// `page` and `settingsPane`: where it opens (the snapshot renderer opens each in turn), and
+    /// `palette`, a query in the open command palette.
+    init(store: StatsStore, engine: Engine, page: Page = .overview, settingsPane: SettingsPane = .setup, palette: String? = nil) {
         self.store = store
         self.engine = engine
         _page = State(initialValue: page)
         _settingsPane = State(initialValue: settingsPane)
+        _paletteOpen = State(initialValue: palette != nil)
+        paletteQuery = palette ?? ""
     }
 
     var body: some View {
         HStack(spacing: 0) {
-            Sidebar(store: store, page: $page).frame(width: 208)
+            Sidebar(store: store, page: $page, needsYou: Attention.items(store: store, engine: engine).count) {
+                paletteOpen = true
+            }
+            .frame(width: 208)
             Hairline(vertical: true)
             VStack(spacing: Space.l) {
                 Notices(store: store, engine: engine, page: $page)
                 Group {
                     switch page {
-                    case .overview: OverviewPage(store: store)
+                    case .overview: OverviewPage(store: store, engine: engine)
                     case .activity: ActivityPage(store: store, engine: engine)
                     case .logs: LogsPage(store: store, engine: engine)
                     case .performance: PerformancePage(store: store)
@@ -62,6 +71,19 @@ struct Dashboard: View {
             }
             .padding(Space.xl)
         }
+        .overlay(alignment: .top) {
+            if paletteOpen {
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.18).ignoresSafeArea().onTapGesture { paletteOpen = false }
+                    CommandPalette(store: store, engine: engine, appearance: $appearance,
+                                   close: { paletteOpen = false }, initialQuery: paletteQuery)
+                        .padding(.top, 96)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(Motion.quick, value: paletteOpen)
+        .background { shortcuts }
         .followsPalette()
         // Up under the hidden title bar, so the sidebar's material reaches the top of the window.
         .ignoresSafeArea(.container, edges: .top)
@@ -77,6 +99,19 @@ struct Dashboard: View {
             if let p { store.configuredPort = p }
         }
     }
+
+    /// ⌘K for the command palette, ⌘1 to ⌘8 for the pages in the sidebar's order: buttons no one
+    /// sees, there for their keyboard shortcuts.
+    private var shortcuts: some View {
+        ZStack {
+            Button("Search") { paletteOpen.toggle() }.keyboardShortcut("k")
+            ForEach(Array(Page.shortcutOrder.enumerated()), id: \.element) { i, p in
+                Button(p.title) { paletteOpen = false; page = p }.keyboardShortcut(KeyEquivalent(Character("\(i + 1)")))
+            }
+            Button("Settings") { paletteOpen = false; page = .settings }.keyboardShortcut(",")
+        }
+        .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
+    }
 }
 
 // MARK: - Sidebar
@@ -84,6 +119,9 @@ struct Dashboard: View {
 struct Sidebar: View {
     var store: StatsStore
     @Binding var page: Page
+    /// How many things the Overview lists as needing you: a count beside it.
+    var needsYou = 0
+    var search: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xxs) {
@@ -94,10 +132,11 @@ struct Sidebar: View {
                     Text("privacy proxy").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
                 }
             }
-            .padding(.horizontal, Space.s).padding(.top, 44).padding(.bottom, Space.l)
+            .padding(.horizontal, Space.s).padding(.top, 44).padding(.bottom, Space.m)
+            SearchButton(action: search).padding(.bottom, Space.xs)
             ForEach(Page.groups, id: \.0) { title, pages in
                 Text(title).eyebrow().padding(.horizontal, Space.s).padding(.top, Space.m).padding(.bottom, Space.xs)
-                ForEach(pages) { SidebarItem(page: $0, selection: $page) }
+                ForEach(pages) { SidebarItem(page: $0, selection: $page, badge: $0 == .overview && needsYou > 0 ? needsYou : nil) }
             }
             Spacer()
             SidebarItem(page: .settings, selection: $page)
@@ -124,9 +163,35 @@ struct Sidebar: View {
     }
 }
 
+/// Looks like a search field; opens the command palette.
+private struct SearchButton: View {
+    var action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Space.s) {
+                Image(systemName: "magnifyingglass").font(.km(.callout)).frame(width: 18)
+                Text("Search").font(.km(.body))
+                Spacer(minLength: 0)
+                Text("⌘K").font(.km(.caption).weight(.medium))
+            }
+            .foregroundStyle(Theme.textSecondary)
+            .padding(.horizontal, Space.s).padding(.vertical, Space.xs + 1)
+            .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(hovering ? Theme.fillStrong : Theme.fill))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Find any page, setting or action (⌘K)")
+        .accessibilityLabel("Search pages, settings and actions")
+    }
+}
+
 private struct SidebarItem: View {
     var page: Page
     @Binding var selection: Page
+    var badge: Int? = nil
     @State private var hovering = false
 
     var body: some View {
@@ -137,6 +202,12 @@ private struct SidebarItem: View {
                     .foregroundStyle(on ? Theme.accent : Theme.textSecondary)
                 Text(page.title).font(.km(.body).weight(on ? .medium : .regular)).foregroundStyle(Theme.text)
                 Spacer(minLength: 0)
+                if let badge {
+                    Text("\(badge)").font(.km(.caption).weight(.semibold)).foregroundStyle(Theme.onAccent)
+                        .padding(.horizontal, Space.xs + 1).frame(minWidth: 18, minHeight: 16)
+                        .background(Capsule().fill(Theme.accentFill))
+                        .help(badge == 1 ? "One thing needs you" : "\(badge) things need you")
+                }
             }
             .padding(.horizontal, Space.s).padding(.vertical, Space.xs + 1)
             .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
@@ -145,6 +216,8 @@ private struct SidebarItem: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .help(Page.shortcutOrder.firstIndex(of: page).map { "\(page.title) (⌘\($0 + 1))" } ?? page.title)
+        .accessibilityLabel(page.title + (badge.map { ", \($0) need you" } ?? ""))
     }
 }
 
@@ -158,8 +231,10 @@ private struct Notices: View {
     @Binding var page: Page
 
     var body: some View {
-        let observing = store.snapshot.observe == true && !isOffline
-        if observing || isOffline || store.sampleMode {
+        // The Overview's status header says both of these itself, with the same button.
+        let onOverview = page == .overview
+        let observing = store.snapshot.observe == true && !isOffline && !onOverview
+        if observing || (isOffline && !onOverview) || store.sampleMode {
             VStack(spacing: Space.s) {
                 if observing {
                     Banner(tone: .danger, icon: "eye.trianglebadge.exclamationmark", title: "Observe only.",
@@ -168,7 +243,7 @@ private struct Notices: View {
                             .disabled(!engine.isBundled || engine.busy)
                     }
                 }
-                if case .offline(let reason) = store.connection {
+                if case .offline(let reason) = store.connection, !onOverview {
                     Banner(tone: .warning, icon: "bolt.horizontal.circle", title: "Not connected.",
                            message: "\(reason.sentence). Start the background service in Settings, or run keepmum claude.") {
                         if page != .settings { PillButton(title: "Open Settings") { engine.settingsRequested = .setup } }
@@ -194,22 +269,29 @@ private struct Notices: View {
 
 struct OverviewPage: View {
     var store: StatsStore
+    /// Nil in the tour, whose cursor is placed for the page's plain title.
+    var engine: Engine? = nil
 
     var body: some View {
         let s = store.snapshot
         VStack(spacing: Space.l) {
-            PageHeader(title: "Overview", subtitle: "What left this Mac, and what stayed")
+            // Where protection stands comes first; the numbers and the flow say what it did.
+            if let engine {
+                StatusHeader(store: store, engine: engine) { $0.perform(store: store, engine: engine) }
+            } else {
+                PageHeader(title: "Overview", subtitle: "What left this Mac, and what stayed")
+            }
             HStack(spacing: Space.m) {
                 Metric(title: "Unique values masked", value: (s.vaultSize ?? 0).compact, icon: "lock.fill",
-                       footnote: "\(s.maskedTotal.compact) masks applied, incl. resends")
+                       footnote: engine == nil ? "\(s.maskedTotal.compact) masks applied, incl. resends" : "\(s.maskedTotal.compact) masks with resends", compact: engine != nil)
                 Metric(title: "Requests scanned", value: s.funnel.scanned.compact, icon: "doc.text.magnifyingglass",
-                       footnote: s.funnel.withNew.map { "\($0.compact) brought new sensitive values" }
-                           ?? "\(percent(s.funnel.withFindings, of: s.funnel.scanned)) carried sensitive data")
+                       footnote: s.funnel.withNew.map { engine == nil ? "\($0.compact) brought new sensitive values" : "\($0.compact) with new values" }
+                           ?? "\(percent(s.funnel.withFindings, of: s.funnel.scanned)) carried sensitive data", compact: engine != nil)
                 Metric(title: "Blocked before leaving", value: s.blocked.compact, icon: "hand.raised.fill",
-                       footnote: "fail-closed: never sent raw", tone: s.blocked > 0 ? Theme.blocked : nil)
+                       footnote: engine == nil ? "fail-closed: never sent raw" : "never sent raw", tone: s.blocked > 0 ? Theme.blocked : nil, compact: engine != nil)
                 Metric(title: "Scan time (p95)", value: milliseconds(s.scanMs.p95), icon: "timer",
                        footnote: "budget \(Int(LatencyChart.budget)) ms",
-                       tone: (s.scanMs.p95 ?? 0) > LatencyChart.budget ? Theme.warning : nil)
+                       tone: (s.scanMs.p95 ?? 0) > LatencyChart.budget ? Theme.warning : nil, compact: engine != nil)
             }
             Card(title: "Live flow", subtitle: "Requests out on top, replies back below; band width is the number of requests") {
                 Segmented(options: [(3600.0, "Last hour"), (86400.0, "24 hours"), (604800.0, "7 days")],

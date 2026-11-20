@@ -1342,7 +1342,7 @@ final class Engine {
     /// whose background service was just started and has yet to answer.
     /// With `around`, Claude Code was pointed back at the gateway keepmum was in front of.
     static func preview(starting: Bool = false, around: Bool = false, localOff: Bool = false, outdated: Bool = false,
-                        harmOnlyLocal: Bool = false, bothLocal: Bool = false) -> Engine {
+                        harmOnlyLocal: Bool = false, bothLocal: Bool = false, agentsOff: Bool = false) -> Engine {
         let e = Engine()
         e.previewing = true
         e.status = Status(model: "~/.local/share/keepmum/models/privacy-filter-q8.gguf", modelSize: 1_637_572_192,
@@ -1449,6 +1449,11 @@ final class Engine {
             e.status?.protect = .init(settings: "~/.claude/settings.json", on: false, baseUrl: "http://127.0.0.1:3425")
             e.status?.clients?["claude"] = .init(installed: true, on: false, other: .one("http://127.0.0.1:3425"),
                                                  otherUrl: "http://127.0.0.1:3425", around: "http://127.0.0.1:3425")
+        }
+        // Set up but for the last step: no coding agent switched on yet.
+        if agentsOff {
+            e.status?.protect.on = false
+            e.status?.clients?["codex"]?.on = false
         }
         if starting {
             e.status?.serveRunning = false

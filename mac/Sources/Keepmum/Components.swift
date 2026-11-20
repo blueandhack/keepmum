@@ -244,6 +244,8 @@ struct Metric: View {
     var footnote: String
     /// A signal color when the number is a warning, such as blocked requests.
     var tone: Color? = nil
+    /// The note beside the number rather than under it: the Overview, where the flow needs the height.
+    var compact = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
@@ -253,13 +255,25 @@ struct Metric: View {
                 Image(systemName: icon).foregroundStyle(tone ?? Theme.textSecondary)
             }
             .font(.km(.caption).weight(.medium)).foregroundStyle(Theme.textSecondary)
-            Text(value).font(.km(.metric)).monospacedDigit()
-                .foregroundStyle(tone ?? Theme.text).contentTransition(.numericText())
-            Text(footnote).font(.km(.caption)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+            if compact {
+                HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                    number
+                    Text(footnote).font(.km(.caption)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                }
+                .help(footnote)
+            } else {
+                number
+                Text(footnote).font(.km(.caption)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+            }
         }
-        .padding(Space.m + Space.xxs)
+        .padding(compact ? Space.m : Space.m + Space.xxs)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.surface))
+    }
+
+    private var number: some View {
+        Text(value).font(.km(.metric)).monospacedDigit().fixedSize()
+            .foregroundStyle(tone ?? Theme.text).contentTransition(.numericText())
     }
 }
 

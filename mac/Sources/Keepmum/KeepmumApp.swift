@@ -43,8 +43,7 @@ struct MenuLabel: View {
         let unique = store.snapshot.vaultSize ?? 0
         HStack(spacing: 3) {
             let live = store.connection == .live || store.connection == .sample
-            let attention = store.toolsNeedReview || engine.aroundClient != nil || store.scriptWarning != nil
-                || !ReviewCenter.shared.pending.isEmpty || !ReviewCenter.shared.turns.isEmpty
+            let attention = !Attention.items(store: store, engine: engine).isEmpty
             Image(nsImage: !live ? Brand.menuBarIdle : attention ? Brand.menuBarAttention : Brand.menuBarActive)
             if unique > 0 { Text(unique.compact).monospacedDigit() }
         }
@@ -85,119 +84,57 @@ struct MenuPanel: View {
                 .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
                 .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.blockedFill))
             }
-            VStack(alignment: .leading, spacing: Space.xxs) {
-                Text((s.vaultSize ?? 0).compact).font(.km(.display)).monospacedDigit()
-                    .foregroundStyle(Theme.text).contentTransition(.numericText())
-                Text("unique values kept on this Mac").font(.km(.callout)).foregroundStyle(Theme.textSecondary)
+            // Status first: is every agent protected, and is the service running, on one surface.
+            VStack(spacing: 0) {
+                ProtectionRow(engine: engine, framed: false) {
+                    engine.settingsRequested = .setup
+                    DashboardWindow.show(openWindow)
+                }
+                if engine.isBundled {
+                    Hairline().padding(.leading, Space.m)
+                    ServiceRow(engine: engine, framed: false)
+                }
             }
-            HStack(spacing: 0) {
-                stat("Requests", s.contentRequests.compact)
-                stat("Sensitive", s.funnel.withFindings.compact)
-                stat("Blocked", s.blocked.compact, color: s.blocked > 0 ? Theme.blocked : Theme.text)
-                stat("p95", milliseconds(s.scanMs.p95))
-            }
-            .padding(.vertical, Space.s + Space.xxs)
             .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
-            if engine.isBundled {
-                ServiceRow(engine: engine)
-                if let error = engine.error {
-                    Text(error).font(.km(.caption)).foregroundStyle(Theme.blocked)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            if engine.isBundled, let error = engine.error {
+                Text(error).font(.km(.caption)).foregroundStyle(Theme.blocked)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            ProtectionRow(engine: engine) {
-                engine.settingsRequested = .setup
-                DashboardWindow.show(openWindow)
-            }
-            if !ReviewCenter.shared.pending.isEmpty || !ReviewCenter.shared.turns.isEmpty {
-                let waiting = ReviewCenter.shared.pending.count
-                let turns = ReviewCenter.shared.turns.count
-                HStack(spacing: Space.s) {
-                    Image(systemName: "hand.raised.square").foregroundStyle(Theme.accent)
-                    Text(turns > 0 && waiting == 0 ? (turns == 1 ? "A turn waits for your review" : "\(turns) turns wait for your review")
-                         : waiting + turns == 1 ? "A hand-back waits for you" : "\(waiting + turns) reviews wait for you")
-                        .font(.km(.callout)).foregroundStyle(Theme.text)
-                    Spacer(minLength: Space.s)
-                    PillButton(title: "Review") { ReviewCenter.shared.reopen() }
-                }
-                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
-                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
-            }
-            if let around = engine.aroundClient {
-                // The gateway's own app pointed the agent back at itself (switching a model, say).
-                HStack(spacing: Space.s) {
-                    Image(systemName: "exclamationmark.shield").foregroundStyle(Theme.blocked)
-                    Text("\(around.name) skips keepmum").font(.km(.callout)).foregroundStyle(Theme.text)
-                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                        .help("It goes to \(hostPort(around.url)) directly, unscanned: that gateway's app most likely set it back")
-                    Spacer(minLength: Space.s)
-                    PillButton(title: "Protect") { Task { await engine.setProtection(true, client: around.id) } }
-                        .disabled(!engine.isBundled || engine.busy || !engine.serviceRunning)
-                }
-                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
-                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
-            }
-            if let warning = store.scriptWarning {
-                // A Codex script handed values keepmum could not see to a network tool (ScriptWarnings).
-                HStack(spacing: Space.s) {
-                    Image(systemName: "curlybraces").foregroundStyle(Theme.warning)
-                    // The server alone ("notes"): the tool is on the Logs page.
-                    let to = (warning.categories ?? []).first?.replacingOccurrences(of: "computed values sent to ", with: "")
-                        .components(separatedBy: " › ").first ?? "a network tool"
-                    Text("Unchecked values to \(to)")
-                        .font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                        .help("A Codex script passed values it worked out, such as a command's output, to a network tool. keepmum could not check them.")
-                    Spacer(minLength: Space.s)
-                    PillButton(title: "Logs") {
-                        store.markScriptWarningsSeen()
-                        engine.pageRequested = .logs
-                        DashboardWindow.show(openWindow)
+            // Then what needs you, every kind in one list, each with its one action.
+            let items = Attention.items(store: store, engine: engine)
+            if !items.isEmpty {
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    HStack(spacing: Space.xs) {
+                        Text("Needs you").eyebrow()
+                        Text("\(items.count)").font(.km(.label)).foregroundStyle(Theme.textSecondary)
                     }
-                }
-                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
-                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
-            }
-            if let review = store.toolServers.first(where: { $0.paused }) ?? store.toolServers.first(where: { $0.new }) {
-                let others = store.toolServers.filter { $0.new || $0.paused }.count - 1
-                HStack(spacing: Space.s) {
-                    Image(systemName: review.paused ? "exclamationmark.shield" : "puzzlepiece.extension")
-                        .foregroundStyle(review.paused ? Theme.warning : Theme.accent)
-                    Text(review.paused ? "\(review.label): tools changed" : "New tool: \(review.label)" + (others > 0 ? " and \(others) more" : ""))
-                        .font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1)
-                    Spacer(minLength: Space.s)
-                    PillButton(title: "Review") {
-                        engine.settingsRequested = .tools
-                        DashboardWindow.show(openWindow)
+                    .padding(.leading, Space.xs)
+                    AttentionList(items: items, compact: true, limit: 4) { action in
+                        action.perform(store: store, engine: engine)
+                        if action.opensDashboard { DashboardWindow.show(openWindow) }
                     }
+                    .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
                 }
-                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
-                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
             }
-            if let added = engine.status?.extensions?.new, let first = added.first {
-                // Another app added a plugin, hook or MCP server to a coding agent (Settings › Extensions).
-                HStack(spacing: Space.s) {
-                    Image(systemName: "puzzlepiece.extension").foregroundStyle(Theme.warning)
-                    Text(added.count == 1 ? "\(first.agent) changed: \(first.name)" : "\(added.count) added to your agents")
-                        .font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: Space.s)
-                    PillButton(title: "Review") {
-                        engine.settingsRequested = .extensions
-                        DashboardWindow.show(openWindow)
-                    }
+            // Then what keepmum did: the values it kept here, and the requests behind them.
+            VStack(spacing: Space.s + Space.xxs) {
+                HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                    Text((s.vaultSize ?? 0).compact).font(.km(.display)).monospacedDigit()
+                        .foregroundStyle(Theme.text).contentTransition(.numericText())
+                    Text("unique values kept on this Mac").font(.km(.callout)).foregroundStyle(Theme.textSecondary)
+                    Spacer(minLength: 0)
                 }
-                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
-                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
-            }
-            if let version = Updates.shared.available {
-                HStack(spacing: Space.s) {
-                    Image(systemName: "arrow.down.circle").foregroundStyle(Theme.accent)
-                    Text("keepmum \(version) is available").font(.km(.callout)).foregroundStyle(Theme.text).lineLimit(1)
-                    Spacer(minLength: Space.s)
-                    PillButton(title: "Install…") { Updates.shared.checkNow() }
+                .padding(.horizontal, Space.m)
+                Hairline()
+                HStack(spacing: 0) {
+                    stat("Requests", s.contentRequests.compact)
+                    stat("Sensitive", s.funnel.withFindings.compact)
+                    stat("Blocked", s.blocked.compact, color: s.blocked > 0 ? Theme.blocked : Theme.text)
+                    stat("p95", milliseconds(s.scanMs.p95))
                 }
-                .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
-                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
             }
+            .padding(.top, Space.s).padding(.bottom, Space.s + Space.xxs)
+            .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
             // With the bundled engine, the service row above says what to do; this is for when it
             // runs and still cannot be reached, or for the command line.
             if case .offline(let reason) = store.connection, !engine.isBundled || engine.serviceRunning {
@@ -530,6 +467,19 @@ enum Snapshotter {
             render(Dashboard(store: store, engine: .preview(), page: .map).frame(width: 1900, height: 1100),
                    to: "\(dir)/map-wide-\(dark ? "dark" : "light").png", dark: dark)
         }
+        // The Overview's status header in its other states, and the command palette.
+        render(Dashboard(store: store, engine: .preview(agentsOff: true)).frame(width: 1200, height: 780),
+               to: "\(dir)/overview-setup-light.png", dark: false)
+        render(Dashboard(store: store, engine: .preview(starting: true)).frame(width: 1200, height: 780),
+               to: "\(dir)/overview-starting-light.png", dark: false)
+        render(Dashboard(store: store, engine: .preview(around: true)).frame(width: 1200, height: 780),
+               to: "\(dir)/overview-around-light.png", dark: false)
+        for dark in [false, true] {
+            render(Dashboard(store: store, engine: .preview(), palette: "").frame(width: 1200, height: 780),
+                   to: "\(dir)/palette-\(dark ? "dark" : "light").png", dark: dark)
+        }
+        render(Dashboard(store: store, engine: .preview(), palette: "exce").frame(width: 1200, height: 780),
+               to: "\(dir)/palette-search-light.png", dark: false)
         // The background service just started, waiting for it to answer.
         render(Dashboard(store: store, engine: .preview(starting: true), page: .settings).frame(width: 1200, height: 780),
                to: "\(dir)/settings-starting-light.png", dark: false)
