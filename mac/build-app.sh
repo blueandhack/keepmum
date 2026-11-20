@@ -7,6 +7,10 @@
 #   BUNDLE_ID=com.example.keepmum ./build-app.sh
 #   SPARKLE_FEED_URL=http://127.0.0.1:8000/appcast.xml ./build-app.sh   another update feed, to test updates
 #   APP_OUT=/tmp/test/Keepmum.app ./build-app.sh   build somewhere other than build/Keepmum.app
+#   OPEN=1 ./build-app.sh   then quit the copy running from there, if any, and open the new one
+#
+# The app is put together beside its destination (Keepmum.partial.app) and moved there only once it
+# is signed and checked: a failed build leaves the last good one in place.
 #
 # Updates (Sparkle) are on only when the build has a public key: SPARKLE_PUBLIC_KEY, or the one in
 # sparkle-public-key (mac/README.md, "Releasing"). Without one the app has no updater.
@@ -33,19 +37,24 @@ SPARKLE_PUBLIC_KEY=${SPARKLE_PUBLIC_KEY:-$(cat sparkle-public-key 2>/dev/null ||
 # keepmum.app serves the feed from mac/appcast.xml unchanged and counts checks per hour and version
 # (worker/): the version is in the URL for that. Nothing else about a check is kept.
 SPARKLE_FEED_URL=${SPARKLE_FEED_URL:-https://keepmum.app/appcast.xml?v=$VERSION}
-APP=${APP_OUT:-build/Keepmum.app}
+DEST=${APP_OUT:-build/Keepmum.app}
+APP=${DEST%.app}.partial.app
+TMP=$(mktemp -d)
+ok=
+trap 'echo "build-app.sh: failed at line $LINENO: $BASH_COMMAND" >&2' ERR
+trap 'rm -rf "$TMP"; [ -n "$ok" ] || rm -rf "$APP"' EXIT
 
 CONFIG=${SWIFT_CONFIG:-release}
 swift build -c "$CONFIG"
-rm -rf "$APP" build/icon.iconset
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" build/icon.iconset
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$TMP/icon.iconset"
 cp ".build/$CONFIG/Keepmum" "$APP/Contents/MacOS/Keepmum"
 # Sparkle, without its XPC services: those are for sandboxed apps, and keepmum is not one.
 mkdir -p "$APP/Contents/Frameworks"
 ditto ".build/$CONFIG/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 rm -rf "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices" "$APP/Contents/Frameworks/Sparkle.framework/XPCServices"
-"$APP/Contents/MacOS/Keepmum" --icon build/icon.iconset
-iconutil -c icns build/icon.iconset -o "$APP/Contents/Resources/Keepmum.icns"
+"$APP/Contents/MacOS/Keepmum" --icon "$TMP/icon.iconset"
+iconutil -c icns "$TMP/icon.iconset" -o "$APP/Contents/Resources/Keepmum.icns"
 # Claude and Anthropic logos (see Brand/NOTICE.md).
 if compgen -G "Brand/*.png" >/dev/null; then cp Brand/*.png "$APP/Contents/Resources/"; fi
 
@@ -112,4 +121,19 @@ if [ -x "$APP/Contents/Resources/python/bin/python3" ]; then
   "$APP/Contents/Resources/python/bin/python3" -I -B -c 'import zstandard, keepmum.cli' \
     || { echo "the signed engine cannot load its native libraries" >&2; exit 1; }
 fi
-echo "built $APP, signed by: $(codesign -dv --verbose=2 "$APP" 2>&1 | awk -F= '/^Authority/ {print $2; exit}')"
+signer=$(codesign -dv --verbose=2 "$APP" 2>&1 | awk -F= '/^Authority/ && !n++ {print $2}')
+
+# The copy running from the destination, by its path: not an installed one with the same bundle id.
+# It has nothing to save, and the engine runs apart from it (launchd), so it is simply stopped.
+running=$(pgrep -f "^$(cd "$(dirname "$DEST")" && pwd)/$(basename "$DEST")/Contents/MacOS/Keepmum( |\$)" || true)
+if [ -n "${OPEN:-}" ] && [ -n "$running" ]; then
+  kill $running
+  for _ in $(seq 50); do kill -0 $running 2>/dev/null || break; sleep 0.1; done
+fi
+rm -rf "$DEST" && mv "$APP" "$DEST" && ok=1
+echo "built $DEST, signed by: ${signer:-ad-hoc}"
+if [ -n "${OPEN:-}" ]; then
+  open "$DEST"
+elif [ -n "$running" ]; then
+  echo "the copy running from there is the old build: quit and reopen it (or OPEN=1 next time)" >&2
+fi

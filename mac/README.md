@@ -45,7 +45,12 @@ A menu-bar app that sets keepmum up, runs it in the background and shows what it
 SKIP_RUNTIME=1 ./build-app.sh   # the dashboard alone, for UI work
 SWIFT_CONFIG=debug ./build-app.sh  # unoptimized dashboard, ~1 s to rebuild after an edit
 open build/Keepmum.app
+OPEN=1 ./build-app.sh           # rebuild, quit the copy running from build/, open the new one
+./clean.sh                      # delete mac/.build and mac/build: the app, the engine cache, SwiftLint
+./clean.sh all                  # also native/*/.work: llama.cpp and pf-serve are fetched and compiled again
 ```
+
+A failed build leaves the last good `build/Keepmum.app` in place: the app is put together in `build/Keepmum.partial.app` and moved there once it is signed and checked.
 
 **What the app bundles** (`bundle-runtime.sh`): a relocatable CPython 3.15 with keepmum and its locked dependencies (without rich, which only draws boxed help), pf-serve and llama-server (the optional checks' runtime) built from pinned sources, the `keepmum` command the app runs for setup and protection, and a LaunchAgent (`Contents/Library/LaunchAgents/app.keepmum.agent.plist`) that runs `keepmum serve` at login, registered with SMAppService. The bundled Python runs isolated (`-I`) and never writes into the signed bundle (`-B`; everything is compiled at build time). The model (1.6 GB) is downloaded on first use into `~/.local/share/keepmum`, which the command line shares; the optional checks' models only when you set one up. The app and the command line share one placeholder key, `~/.config/keepmum/salt` (0600), so a placeholder made by either is restored by the other.
 
