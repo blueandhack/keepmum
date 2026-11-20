@@ -27,9 +27,17 @@ private struct ColumnLayout: Codable, Equatable {
     var shown: [String] = []
 }
 
+/// Opens the selected row's details. Always equal to another: it only sets ListDetail's state,
+/// which an older copy sets just the same, so a new one needn't redraw the table.
+struct OpenDetailsAction: Equatable {
+    let action: () -> Void
+    func callAsFunction() { action() }
+    static func == (_: Self, _: Self) -> Bool { true }
+}
+
 extension EnvironmentValues {
     /// Set by ListDetail while the details take the table's place: opens them for the selected row.
-    @Entry var openDetails: (() -> Void)? = nil
+    @Entry var openDetails: OpenDetailsAction? = nil
 }
 
 /// A table in pages of as many rows as fit, so it never scrolls up and down: the rows stay put
@@ -513,7 +521,7 @@ struct ListDetail<List: View, Detail: View>: View {
                     list.opacity(showing ? 0 : 1).allowsHitTesting(!showing).accessibilityHidden(showing)
                     if showing { pane(wide: false) }
                 }
-                .environment(\.openDetails, { open = true })
+                .environment(\.openDetails, OpenDetailsAction { open = true })
             }
         }
         .onChange(of: selection) { _, s in if s == nil { open = false } }
