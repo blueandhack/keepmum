@@ -4,7 +4,7 @@ import SwiftUI
 // The Protection map: a request's round trip drawn once, with each setting on the part of the flow
 // it acts on. Requests out run along the top (your agents, the two checks before a request leaves,
 // masking, the line where it leaves this Mac, the providers) and replies back along the bottom (the
-// commands check, restore, your agents). A check's hits branch off by its mode: nowhere (Off), a
+// commands check, the injection check on the results of tools the provider ran, restore, your agents). A check's hits branch off by its mode: nowhere (Off), a
 // dashed line to Logs while the request still leaves (Warn), a red line that stops on this Mac's
 // side (Block), or a green line to your local model, and from there back to the agent or, with a
 // hand-back, into masking (Local). The bands are the Overview's last hour; the cards are the
@@ -32,12 +32,13 @@ enum MapPart: String, CaseIterable {
 
 /// A made-up request sent along the map, routed by the settings as they are. Nothing is sent.
 enum MapSample: String, CaseIterable, Identifiable {
-    case injection, mcp, harm, jailbreak, falseAlarm, both, secret, email, fileSecret, command, wipe, keys
+    case injection, mcp, provided, harm, jailbreak, falseAlarm, both, secret, email, fileSecret, command, wipe, keys
     var id: String { rawValue }
     var title: String {
         switch self {
         case .injection: "Planted in a web page"
         case .mcp: "Planted in an MCP reply"
+        case .provided: "Planted in a search result"
         case .harm: "Harmful request"
         case .jailbreak: "Jailbreak, then your task"
         case .falseAlarm: "Role-play prompt (a false alarm)"
@@ -186,9 +187,13 @@ struct MapLayout {
     var harmCard: CGRect { CGRect(x: gateX, y: 162, width: 184, height: 84) }
     var maskCard: CGRect { CGRect(x: maskX, y: 92, width: 122, height: 108) }
     var localCard: CGRect { CGRect(x: gateX, y: 304, width: 184, height: 82) }
-    var restoreCard: CGRect { CGRect(x: gateX + 46, y: 428, width: 96, height: 100) }
-    var commandsCard: CGRect { CGRect(x: edge - 200, y: 428, width: 180, height: 100) }
-    var commandsX: CGFloat { commandsCard.minX + 90 }
+    // Replies, right to left: the first thing a reply passes is the injection check on the results of
+    // tools the provider ran (they arrive inside it), then the commands check, then restore. Restore
+    // sits under the gates, or further left when the two arrival cards need the room.
+    var arrivalCard: CGRect { CGRect(x: edge - 20 - 150, y: 428, width: 150, height: 100) }
+    var commandsCard: CGRect { CGRect(x: arrivalCard.minX - 12 - 168, y: 428, width: 168, height: 100) }
+    var commandsX: CGFloat { commandsCard.midX }
+    var restoreCard: CGRect { CGRect(x: min(gateX + 46, commandsCard.minX - 14 - 96), y: 428, width: 96, height: 100) }
 
     init(flows: Flows, width: CGFloat = MapLayout.minWidth) {
         self.width = max(width, Self.minWidth)
@@ -296,6 +301,8 @@ struct MapLayout {
     var handback: Route { Route(gateRight, 364).curve(maskX + 60, 202, gateRight + 50, 364, maskX + 60, 300) }
     func answer(to y: CGFloat) -> Route { Route(gateX, 346).curve(118, y, gateX - 56, 346, gateX - 66, y) }
     func commands(to y: CGFloat) -> Route { Route(commandsX, 528).downRight(y, to: terminalX - 4) }
+    /// A hit on arrival: down from its card to Logs, where the commands check's line joins it.
+    var arrivalOut: Route { Route(arrivalCard.midX, arrivalCard.maxY).downRight(MapLayout.cmdLogY, to: terminalX - 4) }
 
     /// A ribbon between two spans, its edges curving like the Overview's bands.
     static func ribbon(_ x0: CGFloat, _ a: ClosedRange<CGFloat>, _ x1: CGFloat, _ b: ClosedRange<CGFloat>) -> Path {
@@ -394,7 +401,7 @@ struct SampleRun {
         /// From the local model back into masking, and on to the cloud.
         var handedBack: Route { l.handback.line(l.maskX + 60, 133).line(l.maskRight, 133).flow(l.providerX, py) }
         var answer: Route { l.answer(to: backY) }
-        var replyIn: Route { Route(l.providerX, providerBackY).flow(l.commandsCard.maxX, 465).line(l.commandsX, 465) }
+        var replyIn: Route { Route(l.providerX, providerBackY).flow(l.arrivalCard.maxX, 465).line(l.commandsX, 465) }
     }
 
     init(route: Path, dots: [MapDot], title: String, story: String) {
@@ -411,6 +418,7 @@ struct SampleRun {
             self = Self.injection(p, s, title: "\(p.agent) fetched a page with an instruction planted for the agent", what: "the page")
         case .mcp:
             self = Self.injection(p, s, title: "An MCP server returned an issue with an instruction planted for the agent", what: "the reply")
+        case .provided: self = Self.provided(p, s)
         case .harm: self = Self.harm(p, s)
         case .jailbreak:
             self = Self.harm(p, s, title: "You typed \u{201C}ignore your rules\u{201D}, then asked for a fix in sync.py",
@@ -523,7 +531,7 @@ struct SampleRun {
                                fromTool: Bool = false) -> SampleRun {
         let l = p.l
         let out = fromTool ? p.toolOn : p.typedOn
-        let back = Route(l.providerX, p.providerBackY).flow(l.commandsCard.maxX, 444).line(l.restoreCard.minX, 444).flow(118, p.backY - 8)
+        let back = Route(l.providerX, p.providerBackY).flow(l.arrivalCard.maxX, 444).line(l.restoreCard.minX, 444).flow(118, p.backY - 8)
         let skipped = personal && !s.pii
         let found = s.observe || skipped ? Theme.warning : Theme.masked
         let story = skipped ? "Personal data is off (Settings › Masking), so the emails went to \(p.provider) as they were. Secrets in the log were still masked."
@@ -582,6 +590,27 @@ struct SampleRun {
                 + " The page: " + tool.story.prefix(1).lowercased() + tool.story.dropFirst()
         }
         return SampleRun(route: route, dots: dots, title: title, story: story)
+    }
+
+    /// A web search the provider ran itself, its result in the reply: checked as it arrives.
+    private static func provided(_ p: Places, _ s: MapSettings) -> SampleRun {
+        let l = p.l, provider = p.provider
+        let title = "\(provider) searched the web for \(p.agent), and a result's title had an instruction planted for the agent"
+        let on = Route(l.providerX, p.providerBackY).flow(l.arrivalCard.maxX, 465).line(l.restoreCard.minX, 465).flow(118, p.backY)
+        guard s.injectionActs != "off" else {
+            return SampleRun(route: on.path, dots: [MapDot(path: on.path, duration: 3, colors: [(0, grey)])], title: title,
+                             story: s.paused ? "The injection check is paused until its model is updated, so the search result reached \(p.agent) unchecked."
+                                 : "The injection check is off, so the search result reached \(p.agent) unchecked.")
+        }
+        let logged = then(Route(l.arrivalCard.midX, 465).line(l.arrivalCard.midX, l.arrivalCard.maxY), l.arrivalOut)
+        let later = s.injectionActs == "warn" ? ""
+            : s.injectionActs == "block" ? " Block mode refuses the agent's next request while it still carries that result."
+            : " Local mode sends the agent's next request, which carries that result, to your local model instead."
+        return SampleRun(route: on.path,
+                         dots: [MapDot(path: on.path, duration: 3.4, colors: [(0, grey)]),
+                                MapDot(path: logged, delay: 0.7, duration: 1.3, colors: [(0, Theme.warning)])],
+                         title: title,
+                         story: "The provider ran the search and read the pages itself, so the result came back inside the reply. The injection check read the titles and the passages the reply quoted as they arrived, flagged the planted one and logged it; the reply had already reached \(p.agent)." + later)
     }
 
     private static func command(_ p: Places, _ s: MapSettings, title: String, rule: String) -> SampleRun {
@@ -822,7 +851,7 @@ struct MapDiagram: View {
         // The edge of this Mac, and the line between the lanes.
         ctx.stroke(Path { p in p.move(to: CGPoint(x: layout.edge, y: 10)); p.addLine(to: CGPoint(x: layout.edge, y: 630)) },
                    with: .color(Theme.textTertiary), style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
-        ctx.stroke(Path { p in p.move(to: CGPoint(x: 0, y: 390)); p.addLine(to: CGPoint(x: layout.commandsCard.maxX, y: 390)) },
+        ctx.stroke(Path { p in p.move(to: CGPoint(x: 0, y: 390)); p.addLine(to: CGPoint(x: layout.arrivalCard.maxX, y: 390)) },
                    with: .color(Theme.separator), lineWidth: 1)
 
         // Requests out.
@@ -846,8 +875,9 @@ struct MapDiagram: View {
 
         // Replies back.
         for p in layout.providersBack {
-            ctx.fill(MapLayout.ribbon(layout.providerX, p.rect.minY...p.rect.maxY, layout.commandsCard.maxX, p.join), with: band)
+            ctx.fill(MapLayout.ribbon(layout.providerX, p.rect.minY...p.rect.maxY, layout.arrivalCard.maxX, p.join), with: band)
         }
+        ctx.fill(MapLayout.ribbon(layout.arrivalCard.minX, MapLayout.backIn, layout.commandsCard.maxX, MapLayout.backIn), with: band)
         ctx.fill(MapLayout.ribbon(layout.commandsCard.minX, MapLayout.backIn, layout.restoreCard.maxX, MapLayout.backIn), with: band)
         for a in layout.agentsBack {
             let target = a.rect.minY...a.rect.maxY
@@ -885,11 +915,12 @@ struct MapDiagram: View {
              on: s.handback != "stay" || s.harmHandback == "rewrite")
         line(layout.answer(to: layout.agentsBack.first.map { $0.rect.midY } ?? 459), Theme.restored, 2,
              on: answersLocally)
+        line(layout.arrivalOut, Theme.warning, injectionWidth, dashed: true, on: inj != "off")
         line(layout.commands(to: MapLayout.cmdLogY), Theme.warning, 2, dashed: true, on: s.commands == "warn")
         line(layout.commands(to: MapLayout.cmdReplaceY), Theme.blocked, 2, on: s.commands == "block")
         terminal(MapLayout.logY, Theme.warning, on: inj == "warn" || s.harm == "warn")
         terminal(MapLayout.refuseY, Theme.blocked, on: inj == "block" || s.harm == "block")
-        terminal(MapLayout.cmdLogY, Theme.warning, on: s.commands == "warn", hidden: true)
+        terminal(MapLayout.cmdLogY, Theme.warning, on: s.commands == "warn" || inj != "off", hidden: true)
         terminal(MapLayout.cmdReplaceY, Theme.blocked, on: s.commands == "block", hidden: true)
     }
 
@@ -951,7 +982,8 @@ struct MapDiagram: View {
             // The drift and the dashes run on the clock itself: where it stood when the tour began.
             "clock": tour.origin.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1000),
             // The cards are drawn over what moves: the page leaves them out of where it draws.
-            "cards": [layout.injectionCard, layout.harmCard, layout.maskCard, layout.localCard, layout.restoreCard, layout.commandsCard]
+            "cards": [layout.injectionCard, layout.harmCard, layout.maskCard, layout.localCard, layout.restoreCard, layout.commandsCard,
+                      layout.arrivalCard]
                 .map { [$0.minX, $0.minY, $0.width, $0.height] },
             "radius": Radius.m,
         ]
@@ -1005,9 +1037,9 @@ struct MapDiagram: View {
         return [
             Route(118, ay).flow(199, 141).flow(l.gateX, 100).line(l.gateRight, 100).flow(l.maskX, 133).line(l.maskRight, 133).flow(l.providerX, py).path,
             Route(118, ay2).flow(199, 186).flow(l.gateX, 204).line(l.gateRight, 204).flow(l.maskX, 178).line(l.maskRight, 178).flow(l.providerX, py2).path,
-            Route(l.providerX, pby).flow(l.commandsCard.maxX, 465).line(l.restoreCard.minX, 465).flow(118, backY).path,
+            Route(l.providerX, pby).flow(l.arrivalCard.maxX, 465).line(l.restoreCard.minX, 465).flow(118, backY).path,
             Route(118, ay).flow(199, 130).flow(l.gateX, 116).line(l.gateRight, 116).flow(l.maskX, 150).line(l.maskRight, 150).flow(l.providerX, py).path,
-            Route(l.providerX, pby).flow(l.commandsCard.maxX, 480).line(l.restoreCard.minX, 480).flow(118, backY + 4).path,
+            Route(l.providerX, pby).flow(l.arrivalCard.maxX, 480).line(l.restoreCard.minX, 480).flow(118, backY + 4).path,
         ]
     }
 
@@ -1069,7 +1101,7 @@ struct MapDiagram: View {
         let logOn = inj == "warn" || s.harm == "warn", refuseOn = inj == "block" || s.harm == "block"
         terminalLabel("Logged" + (logOn && warned > 0 ? " \(warned)" : ""), Theme.warning, MapLayout.logY, on: logOn)
         terminalLabel("Refused" + (refuseOn && refused > 0 ? " \(refused)" : ""), Theme.blocked, MapLayout.refuseY, on: refuseOn)
-        terminalLabel("Logged", Theme.warning, MapLayout.cmdLogY, on: s.commands == "warn", hidden: true)
+        terminalLabel("Logged", Theme.warning, MapLayout.cmdLogY, on: s.commands == "warn" || inj != "off", hidden: true)
         terminalLabel("Replaced", Theme.blocked, MapLayout.cmdReplaceY, on: s.commands == "block", hidden: true)
         let hb = ["answer": "answer", "summary": "summary", "rewrite": "rewrite", "withhold": "notice"][s.handback] ?? ""
         VStack(alignment: .leading, spacing: 0) {
@@ -1125,8 +1157,9 @@ struct MapDiagram: View {
         maskingCard
         localCard
         restoreCard
+        arrivalCard
         gate(.commands, icon: "terminal", mode: s.commands, options: Self.three, rect: layout.commandsCard,
-             caption: s.commands == "off" ? "Off: commands reach the agent unchecked" : "Rules: curl | sh, rm -rf ~, keys sent out\u{2026}") {
+             caption: s.commands == "off" ? "Off: commands reach the agent unchecked" : "Rules: curl | sh, rm -rf ~\u{2026}") {
             await engine.setCheck("commands", mode: $0)
         }
     }
@@ -1297,6 +1330,48 @@ struct MapDiagram: View {
         .background(cardBackground())
         .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Theme.separator, lineWidth: 1))
         .offset(x: rect.minX, y: rect.minY)
+    }
+
+    /// The injection check on arrival: the first card a reply passes. It reads the results of tools the
+    /// provider ran (they come back inside the reply), and a hit is logged, since the reply has reached
+    /// the model and the agent. It has no mode of its own: it is the injection check's, so it selects
+    /// and highlights with the card above, and says what Block or Local does later.
+    private var arrivalCard: some View {
+        let rect = layout.arrivalCard
+        let inj = s.injectionActs
+        let status = s.paused ? "Paused" : inj == "off" ? "Off" : "Logs as it arrives"
+        let tone = s.paused || inj != "off" ? Theme.warning : Theme.textTertiary
+        let detail = s.paused ? "Until its model updates"
+            : inj == "block" ? "Refused when sent back"
+            : inj == "local" ? "Local when sent back"
+            : inj == "warn" ? "Search, fetch, code runs"
+            : "Set with Prompt injection"
+        return VStack(alignment: .leading, spacing: Space.xs) {
+            Button { selected = .injection } label: {
+                HStack(spacing: Space.xs + 2) {
+                    Image(systemName: "syringe").font(.km(.caption)).foregroundStyle(Theme.textSecondary).frame(width: 14)
+                    Text("Prompt injection").font(.km(.headline)).foregroundStyle(Theme.text)
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                    Spacer(minLength: 0)
+                    Circle().fill(tone).frame(width: 7, height: 7)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Text("Tools the provider ran").font(.km(.caption).weight(.medium)).foregroundStyle(Theme.text).lineLimit(1)
+            Text(status).font(.km(.caption).weight(.semibold)).foregroundStyle(tone).lineLimit(1)
+                .padding(.horizontal, Space.s).padding(.vertical, 2)
+                .background(Capsule().fill(inj == "off" && !s.paused ? Theme.fill : Theme.soft(Theme.warning)))
+            Text(detail).font(.km(.caption)).foregroundStyle(Theme.textSecondary).lineLimit(1).minimumScaleFactor(0.85)
+        }
+        .padding(Space.s)
+        .frame(width: rect.width, height: rect.height, alignment: .topLeading)
+        .background(cardBackground())
+        .overlay(ring(.injection))
+        .opacity(inj == "off" && !s.paused ? 0.8 : 1)
+        .modifier(selectable(.injection))
+        .offset(x: rect.minX, y: rect.minY)
+        .help("The results of tools \(layout.providersBack.first?.name ?? "the provider") ran itself (web search, web fetch, code runs, its MCP connector) come back inside the reply, so this is the first check a reply passes. It reads them as they arrive and logs a hit: the model has already read them and the agent has the reply. Block and Local act when the agent sends them back with its next request. Its mode is Prompt injection's: click to change it.")
     }
 
     private static let shortHandback = ["stay": "stay local", "answer": "answer, then cloud", "summary": "summary, then cloud",
