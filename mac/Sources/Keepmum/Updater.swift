@@ -6,7 +6,7 @@ import Sparkle
 /// release's notarized DMG with its EdDSA signature (SUPublicEDKey), checked before it is unpacked.
 ///
 /// Nothing is checked until the user says so. On the first launch keepmum asks, once, whether to
-/// check automatically (once a day); Settings › General › Updates changes it, and "Check now" always works.
+/// check automatically (once a day); Settings › Updates changes it, and "Check now" always works.
 /// Sparkle's own permission prompt is off, and it sends no system profile. A check is one request
 /// for the feed: Cloudflare, which serves keepmum.app, sees the IP address and keepmum's version,
 /// and keepmum.app counts checks per hour and version (worker/), keeping no addresses. An update's DMG
@@ -147,7 +147,7 @@ final class Updates: NSObject {
             Mac's first of the day, week or month, and the day's first says its macOS version and chip \
             (macOS 15, Apple silicon). Nothing else is sent: no identifier, no usage data.
 
-            You can change this, or check now, in Settings › General › Updates.
+            You can change this, or check now, in Settings › Updates.
             """
         alert.addButton(withTitle: "Check Automatically")
         alert.addButton(withTitle: "Don't Check")

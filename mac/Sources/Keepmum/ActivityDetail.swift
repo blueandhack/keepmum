@@ -85,9 +85,9 @@ struct ActivityPage: View {
         case .masked: "Requests whose new text had something to mask"
         case .clean: "Nothing new to mask (earlier turns may still hold masked values)"
         case .blocked: "Never sent: scanning failed, the endpoint is not scanned, or a check refused it"
-        case .flagged: "What the optional checks flagged: sent with a warning, or refused (Settings › Checks)"
+        case .flagged: "What the optional checks flagged: sent with a warning, or refused (Checks)"
         case .observed: "Observe mode: sent unmasked, only counted"
-        case .local: "Answered by your local model because a check flagged them: never sent (Settings › Checks)"
+        case .local: "Answered by your local model because a check flagged them: never sent (Checks)"
         case nil: "Kept across restarts in ~/.config/keepmum/history.jsonl"
         }
         return "\(what) · \(n.formatted()) shown"
@@ -380,10 +380,10 @@ struct ActivityDetail: View {
     private func advice(_ e: Snapshot.Event) -> String? {
         if e.kind == .observed { return "Observe mode lets values out. Turn it off to have them masked." }
         if e.kind == .blocked && !e.checks.contains(where: { $0.action == "blocked" }) && e.status == 500 {
-            return "Try again. If scanning keeps failing, Settings › Doctor shows what is wrong."
+            return "Try again. If scanning keeps failing, Settings › Check this Mac shows what is wrong."
         }
         if !e.keptTools.isEmpty {
-            return "A tool got placeholders where it may have needed real values. Settings › Tools sets what each tool may receive."
+            return "A tool got placeholders where it may have needed real values. Tools sets what each tool may receive."
         }
         if (e.unresolved ?? 0) > 0 { return "Placeholders the agent got stay placeholders: ask it to read the value again." }
         return nil
@@ -442,10 +442,10 @@ struct ActivityDetail: View {
         case "allowed": "its setting lets these types through"
         case "placeholders": "its setting is placeholders only"
         case "secret": "secrets never go to a network tool"
-        case "paused": "its tools changed since you trusted them, so it gets placeholders until you look again (Settings › Tools)"
-        case "not_allowed": "its setting does not include these types (Settings › Tools)"
+        case "paused": "its tools changed since you trusted them, so it gets placeholders until you look again (Tools)"
+        case "not_allowed": "its setting does not include these types (Tools)"
         case "too_many": "one call would have received more than 5 real values"
-        case "destination": "the command would have sent a token to a host its issuer does not use; if that host is yours, add it in Settings › Tools › Shell commands"
+        case "destination": "the command would have sent a token to a host its issuer does not use; if that host is yours, add it in Tools › Shell commands"
         default: t.action == "restore" ? "real values went in" : "placeholders stayed"
         }
         return "\(n)\(types): \(why)."

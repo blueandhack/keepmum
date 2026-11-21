@@ -283,7 +283,7 @@ struct AllRulesSheet: View {
     }
 }
 
-/// Settings › General › Updates: Sparkle's settings (Updater.swift). Development builds have no feed.
+/// Settings › Updates: Sparkle's settings (Updater.swift). Development builds have no feed.
 struct UpdatesSection: View {
     var updates = Updates.shared
 

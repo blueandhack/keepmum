@@ -8,7 +8,7 @@ import SwiftUI
 // turns protection down opens the pane where that setting, and what it asks first, live.
 
 struct PaletteCommand: Identifiable {
-    enum Group: String, CaseIterable { case needsYou = "Needs you", actions = "Actions", pages = "Go to", settings = "Settings" }
+    enum Group: String, CaseIterable { case needsYou = "Needs you", actions = "Actions", pages = "Go to" }
     var id: String
     var group: Group
     var title: String
@@ -57,11 +57,11 @@ enum PaletteCommands {
             out.append(.init(id: "restart", group: .actions, title: "Restart the background service", icon: "arrow.clockwise",
                              keywords: "service reload proxy") { Task { await engine.restartService() } })
         }
-        out.append(.init(id: "rule", group: .actions, title: "Always mask a pattern…", subtitle: "Your rules, on Detection",
-                         icon: "plus.circle", keywords: "add rule custom regex never mask exception allow") { engine.pageRequested = .detection })
-        out.append(.init(id: "allow", group: .actions, title: "Never mask a value…", subtitle: "Exceptions, on Detection",
-                         icon: "minus.circle", keywords: "exception allow false positive whitelist") { engine.pageRequested = .detection })
-        out.append(.init(id: "exclude", group: .actions, title: "Leave a project out…", subtitle: "Excluded projects, in Settings › Masking",
+        out.append(.init(id: "rule", group: .actions, title: "Always mask a pattern…", subtitle: "Your rules, on Masking",
+                         icon: "plus.circle", keywords: "add rule custom regex never mask exception allow") { engine.settingsRequested = .masking })
+        out.append(.init(id: "allow", group: .actions, title: "Never mask a value…", subtitle: "Exceptions, on Masking",
+                         icon: "minus.circle", keywords: "exception allow false positive whitelist") { engine.settingsRequested = .masking })
+        out.append(.init(id: "exclude", group: .actions, title: "Leave a project out…", subtitle: "Excluded projects, on Masking",
                          icon: "folder.badge.minus", keywords: "exclude exclusions folder skip directory") { engine.settingsRequested = .masking })
         out.append(.init(id: "updates", group: .actions, title: "Check for updates", icon: "arrow.down.circle",
                          keywords: "version upgrade sparkle") { Updates.shared.checkNow() })
@@ -72,13 +72,17 @@ enum PaletteCommands {
                              icon: a == .dark ? "moon" : a == .light ? "sun.max" : "circle.lefthalf.filled",
                              keywords: "theme mode dark light") { appearance.wrappedValue = a })
         }
-        for (i, page) in Page.shortcutOrder.enumerated() {
-            out.append(.init(id: "page-\(page.rawValue)", group: .pages, title: page.title, icon: page.icon,
-                             keywords: page.keywords, shortcut: "⌘\(i + 1)") { engine.pageRequested = page })
-        }
-        for pane in SettingsPane.allCases {
-            out.append(.init(id: "pane-\(pane.rawValue)", group: .settings, title: pane.title, subtitle: pane.subtitle,
-                             icon: pane.icon, keywords: "settings " + pane.keywords) { engine.settingsRequested = pane })
+        // Every place in the sidebar, in its order, and Check this Mac, a section of Settings.
+        for place in Place.all + [.pane(.doctor)] {
+            let shortcut = place.shortcut.map { "⌘\($0)" } ?? (place == .pane(.general) ? "⌘," : nil)
+            switch place {
+            case .page(let page):
+                out.append(.init(id: place.id, group: .pages, title: page.title, icon: page.icon,
+                                 keywords: page.keywords, shortcut: shortcut) { engine.pageRequested = page })
+            case .pane(let pane):
+                out.append(.init(id: place.id, group: .pages, title: pane.title, subtitle: pane.subtitle,
+                                 icon: pane.icon, keywords: pane.keywords, shortcut: shortcut) { engine.settingsRequested = pane })
+            }
         }
         return out
     }
@@ -92,9 +96,6 @@ enum PaletteCommands {
 }
 
 extension Page {
-    /// ⌘1 to ⌘8, in the sidebar's order.
-    static var shortcutOrder: [Page] { groups.flatMap(\.1) + [.settings] }
-
     /// What each page is for, in the words someone might search with.
     var keywords: String {
         switch self {
@@ -103,7 +104,6 @@ extension Page {
         case .logs: "findings values checks flagged search injection harm"
         case .performance: "latency speed scan time budget"
         case .map: "checks diagram modes route"
-        case .detection: "rules types exceptions patterns always never"
         case .audit: "changes log export verify integrity"
         case .settings: "preferences options"
         }
@@ -164,7 +164,7 @@ struct CommandPalette: View {
             HStack(spacing: Space.l) {
                 hint("↑↓", "to move")
                 hint("↩", "to open")
-                hint("⌘1–8", "for a page")
+                hint("⌘1–9", "for a page")
                 Spacer()
             }
             .padding(.horizontal, Space.l).padding(.vertical, Space.s)
@@ -222,12 +222,7 @@ private struct PaletteRow: View {
         HStack(spacing: Space.m) {
             Image(systemName: command.icon).font(.km(.body)).foregroundStyle(command.tint).frame(width: 20)
             VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: Space.s) {
-                    Text(command.title).font(.km(.body)).foregroundStyle(Theme.text).lineLimit(1)
-                    if command.group == .settings {
-                        Text("Settings").font(.km(.caption)).foregroundStyle(Theme.textTertiary)
-                    }
-                }
+                Text(command.title).font(.km(.body)).foregroundStyle(Theme.text).lineLimit(1)
                 if let subtitle = command.subtitle {
                     Text(subtitle).font(.km(.caption)).foregroundStyle(Theme.textSecondary).lineLimit(1).truncationMode(.tail)
                 }
@@ -250,14 +245,14 @@ extension SettingsPane {
     var keywords: String {
         switch self {
         case .setup: "agents model service start stop protect claude codex pi opencode"
-        case .masking: "observe pii personal data names detector rules exclusions exclude projects"
+        case .masking: "observe pii personal data names detector detection found types rules exceptions patterns always never exclusions exclude projects"
         case .tools: "mcp servers web search fetch gmail trust destinations shell gitlab"
         case .checks: "injection harm jailbreak risky commands guard warn block local sensitivity"
         case .extensions: "plugins hooks mcp skills marketplaces instructions added"
         case .localModels: "ollama lm studio llama mlx splash server speed"
         case .handback: "hand-back review summary rewrite turn"
         case .skills: "guidance instructions"
-        case .general: "appearance dark light dock colors color-blind updates login startup logs previews"
+        case .general: "preferences options general appearance dark light dock colors color-blind updates login startup logs previews"
         case .doctor: "doctor diagnose health connection version"
         }
     }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings › Tools: the MCP servers and web tools agents offered, and the real values each may
+/// Tools: the MCP servers and web tools agents offered, and the real values each may
 /// receive (`keepmum tools`). Secrets never go to them, whatever the setting.
 struct ToolsSection: View {
     var store: StatsStore

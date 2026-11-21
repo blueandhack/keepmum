@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Settings › Local turns: what the local model does with a turn a check keeps on this Mac. Both
+/// Local turns: what the local model does with a turn a check keeps on this Mac. Both
 /// checks get the same card: what follows the local turn, the local model, and each step that model
 /// takes (answer on this Mac, rewrite for the cloud) with what it reads there: an instruction and
 /// the skills picked for it. Then whether you look before something goes to the cloud.

@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum Page: String, CaseIterable, Identifiable {
-    case overview, activity, logs, performance, map, detection, audit, settings
+    case overview, activity, logs, performance, map, audit, settings
     var id: String { rawValue }
     var title: String { self == .map ? "Protection map" : rawValue.capitalized }
     var icon: String {
@@ -11,15 +11,51 @@ enum Page: String, CaseIterable, Identifiable {
         case .logs: "text.magnifyingglass"
         case .performance: "speedometer"
         case .map: "point.topleft.down.to.point.bottomright.curvepath"
-        case .detection: "line.3.horizontal.decrease.circle"
         case .audit: "checkmark.seal"
         case .settings: "gearshape"
         }
     }
+}
 
-    /// The sidebar's groups: what keepmum saw, and what it does about it.
-    static let groups: [(String, [Page])] = [("Monitor", [.overview, .activity, .logs, .performance]),
-                                             ("Protection", [.map, .detection, .audit])]
+/// A place in the sidebar: a page, or one of Settings' panes, which the sidebar lists as pages of
+/// their own (the dashboard shows them on its Settings page).
+enum Place: Hashable, Identifiable {
+    case page(Page), pane(SettingsPane)
+    var id: String {
+        switch self {
+        case .page(let p): "page-\(p.rawValue)"
+        case .pane(let p): "pane-\(p.rawValue)"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .page(let p): p.title
+        case .pane(let p): p.title
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .page(let p): p.icon
+        case .pane(let p): p.icon
+        }
+    }
+
+    /// The sidebar, by what you came to do: see where things stand and set keepmum up; see what it
+    /// did; change what it does; and Local mode, for checks that answer on this Mac.
+    static let groups: [(String?, [Place])] = [
+        (nil, [.page(.overview), .pane(.setup)]),
+        ("Monitor", [.page(.activity), .page(.logs), .page(.performance)]),
+        ("Protection", [.page(.map), .pane(.masking), .pane(.tools), .pane(.checks), .pane(.extensions)]),
+        ("Local mode", [.pane(.localModels), .pane(.handback), .pane(.skills)]),
+    ]
+    /// At the bottom: the record of changes, and the app's own settings.
+    static let footer: [Place] = [.page(.audit), .pane(.general)]
+    /// Every place, in the sidebar's order: ⌘1 to ⌘9 are the first nine.
+    static let all: [Place] = groups.flatMap(\.1) + footer
+
+    var shortcut: Int? { Place.all.firstIndex(of: self).flatMap { $0 < 9 ? $0 + 1 : nil } }
 }
 
 struct Dashboard: View {
@@ -45,7 +81,8 @@ struct Dashboard: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Sidebar(store: store, page: $page, needsYou: Attention.items(store: store, engine: engine).count) {
+            Sidebar(store: store, engine: engine, place: place, go: go,
+                    needsYou: Attention.items(store: store, engine: engine).count) {
                 paletteOpen = true
             }
             .frame(width: 208)
@@ -58,7 +95,6 @@ struct Dashboard: View {
                     case .activity: ActivityPage(store: store, engine: engine)
                     case .logs: LogsPage(store: store, engine: engine)
                     case .performance: PerformancePage(store: store)
-                    case .detection: DetectionPage(store: store, engine: engine)
                     case .map: ProtectionMapPage(store: store, engine: engine)
                     case .audit: AuditPage(engine: engine)
                     case .settings: SettingsPage(store: store, engine: engine, appearance: $appearance, pane: $settingsPane)
@@ -102,15 +138,25 @@ struct Dashboard: View {
         }
     }
 
-    /// ⌘K for the command palette, ⌘1 to ⌘8 for the pages in the sidebar's order: buttons no one
+    /// Where the sidebar stands: a page, or the Settings pane shown.
+    private var place: Place { page == .settings ? .pane(settingsPane.shown) : .page(page) }
+
+    private func go(_ place: Place) {
+        switch place {
+        case .page(let p): page = p
+        case .pane(let p): page = .settings; settingsPane = p
+        }
+    }
+
+    /// ⌘K for the command palette, ⌘1 to ⌘9 for the places in the sidebar's order: buttons no one
     /// sees, there for their keyboard shortcuts.
     private var shortcuts: some View {
         ZStack {
             Button("Search") { paletteOpen.toggle() }.keyboardShortcut("k")
-            ForEach(Array(Page.shortcutOrder.enumerated()), id: \.element) { i, p in
-                Button(p.title) { paletteOpen = false; page = p }.keyboardShortcut(KeyEquivalent(Character("\(i + 1)")))
+            ForEach(Place.all.filter { $0.shortcut != nil }) { p in
+                Button(p.title) { paletteOpen = false; go(p) }.keyboardShortcut(KeyEquivalent(Character("\(p.shortcut ?? 0)")))
             }
-            Button("Settings") { paletteOpen = false; page = .settings }.keyboardShortcut(",")
+            Button("Settings") { paletteOpen = false; go(.pane(.general)) }.keyboardShortcut(",")
         }
         .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
     }
@@ -120,10 +166,14 @@ struct Dashboard: View {
 
 struct Sidebar: View {
     var store: StatsStore
-    @Binding var page: Page
+    /// Nil in the tour, which shows no badges but the Overview's.
+    var engine: Engine? = nil
+    var place: Place
+    var go: (Place) -> Void = { _ in }
     /// How many things the Overview lists as needing you: a count beside it.
     var needsYou = 0
     var search: () -> Void = {}
+    @Environment(\.isSnapshot) private var isSnapshot
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xxs) {
@@ -136,12 +186,10 @@ struct Sidebar: View {
             }
             .padding(.horizontal, Space.s).padding(.top, 44).padding(.bottom, Space.m)
             SearchButton(action: search).padding(.bottom, Space.xs)
-            ForEach(Page.groups, id: \.0) { title, pages in
-                Text(title).eyebrow().padding(.horizontal, Space.s).padding(.top, Space.m).padding(.bottom, Space.xs)
-                ForEach(pages) { SidebarItem(page: $0, selection: $page, badge: $0 == .overview && needsYou > 0 ? needsYou : nil) }
-            }
-            Spacer()
-            SidebarItem(page: .settings, selection: $page)
+            // Scrolls in a window too short for every row; the status below stays put.
+            if isSnapshot { places } else { ScrollView { places }.scrollIndicators(.never) }
+            Spacer(minLength: 0)
+            ForEach(Place.footer) { item($0) }
             Hairline().padding(.vertical, Space.s)
             VStack(alignment: .leading, spacing: Space.xs) {
                 StatusDot(connection: store.connection, observing: store.snapshot.observe == true)
@@ -152,6 +200,29 @@ struct Sidebar: View {
         .padding(.horizontal, Space.s + Space.xxs).padding(.bottom, Space.m)
         .frame(maxHeight: .infinity)
         .background(SidebarBackground())
+    }
+
+    private var places: some View {
+        VStack(alignment: .leading, spacing: Space.xxs) {
+            ForEach(Place.groups, id: \.1) { title, places in
+                if let title {
+                    Text(title).eyebrow().padding(.horizontal, Space.s).padding(.top, Space.m).padding(.bottom, Space.xs)
+                }
+                ForEach(places) { item($0) }
+            }
+        }
+    }
+
+    private func item(_ p: Place) -> some View {
+        SidebarItem(place: p, on: p == place, badge: badge(p)) { go(p) }
+    }
+
+    private func badge(_ p: Place) -> SidebarItem.Badge? {
+        switch p {
+        case .page(.overview): needsYou > 0 ? .count(needsYou) : nil
+        case .pane(let pane): engine.flatMap { pane.badge(store: store, engine: $0) }.map { .label($0.0, $0.1) }
+        default: nil
+        }
     }
 
     private var sessionLine: String {
@@ -191,24 +262,34 @@ private struct SearchButton: View {
 }
 
 private struct SidebarItem: View {
-    var page: Page
-    @Binding var selection: Page
-    var badge: Int? = nil
+    /// What needs a look there: the Overview's count of things that need you, or a pane's word.
+    enum Badge { case count(Int), label(String, Color) }
+
+    var place: Place
+    var on: Bool
+    var badge: Badge?
+    var action: () -> Void
     @State private var hovering = false
 
     var body: some View {
-        let on = selection == page
-        Button { selection = page } label: {
+        Button(action: action) {
             HStack(spacing: Space.s) {
-                Image(systemName: page.icon).font(.km(.body)).frame(width: 18)
+                Image(systemName: place.icon).font(.km(.body)).frame(width: 18)
                     .foregroundStyle(on ? Theme.accent : Theme.textSecondary)
-                Text(page.title).font(.km(.body).weight(on ? .medium : .regular)).foregroundStyle(Theme.text)
+                Text(place.title).font(.km(.body).weight(on ? .medium : .regular)).foregroundStyle(Theme.text).lineLimit(1)
                 Spacer(minLength: 0)
-                if let badge {
-                    Text("\(badge)").font(.km(.caption).weight(.semibold)).foregroundStyle(Theme.onAccent)
+                switch badge {
+                case .count(let n):
+                    Text("\(n)").font(.km(.caption).weight(.semibold)).foregroundStyle(Theme.onAccent)
                         .padding(.horizontal, Space.xs + 1).frame(minWidth: 18, minHeight: 16)
                         .background(Capsule().fill(Theme.accentFill))
-                        .help(badge == 1 ? "One thing needs you" : "\(badge) things need you")
+                        .help(n == 1 ? "One thing needs you" : "\(n) things need you")
+                case .label(let text, let color):
+                    Text(text).font(.km(.caption).weight(.medium)).foregroundStyle(color)
+                        .padding(.horizontal, Space.xs + 1).padding(.vertical, 1)
+                        .background(Capsule().fill(color.opacity(0.14)))
+                case nil:
+                    EmptyView()
                 }
             }
             .padding(.horizontal, Space.s).padding(.vertical, Space.xs + 1)
@@ -218,8 +299,16 @@ private struct SidebarItem: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help(Page.shortcutOrder.firstIndex(of: page).map { "\(page.title) (⌘\($0 + 1))" } ?? page.title)
-        .accessibilityLabel(page.title + (badge.map { ", \($0) need you" } ?? ""))
+        .help(place.shortcut.map { "\(place.title) (⌘\($0))" } ?? (place == .pane(.general) ? "Settings (⌘,)" : place.title))
+        .accessibilityLabel(place.title + accessibilityBadge)
+    }
+
+    private var accessibilityBadge: String {
+        switch badge {
+        case .count(let n): ", \(n) need you"
+        case .label(let text, _): ", \(text)"
+        case nil: ""
+        }
     }
 }
 

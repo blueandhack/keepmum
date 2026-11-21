@@ -6,28 +6,8 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     case setup, masking, tools, checks, extensions, localModels, handback, skills, general, doctor
     var id: String { rawValue }
 
-    /// The rail's groups, in order; the first has no heading.
-    enum Group: CaseIterable {
-        case start, protection, local, app
-        var title: String? {
-            switch self {
-            case .start: nil
-            case .protection: "Protection"
-            case .local: "Local mode"
-            case .app: "This app"
-            }
-        }
-        var panes: [SettingsPane] { SettingsPane.allCases.filter { $0.group == self } }
-    }
-
-    var group: Group {
-        switch self {
-        case .setup: .start
-        case .masking, .tools, .checks, .extensions: .protection
-        case .localModels, .handback, .skills: .local
-        case .general, .doctor: .app
-        }
-    }
+    /// The page it is shown on: Check this Mac is a section of Settings, scrolled to.
+    var shown: SettingsPane { self == .doctor ? .general : self }
 
     var title: String {
         switch self {
@@ -39,7 +19,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .localModels: "Local models"
         case .handback: "Local turns"
         case .skills: "Skills"
-        case .general: "General"
+        case .general: "Settings"
         case .doctor: "Check this Mac"
         }
     }
@@ -54,7 +34,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .localModels: "cpu"
         case .handback: "arrow.triangle.branch"
         case .skills: "text.book.closed"
-        case .general: "slider.horizontal.3"
+        case .general: "gearshape"
         case .doctor: "stethoscope"
         }
     }
@@ -62,14 +42,14 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .setup: "The local model, the background service, and the coding agents keepmum protects"
-        case .masking: "What is masked before a request leaves this Mac, and the projects left out"
+        case .masking: "What is masked before a request leaves this Mac, what keepmum found, your own rules, and the projects left out"
         case .tools: "What each tool that reaches the network may receive, and where shell commands may send tokens"
         case .checks: "Optional checks on what tools return, what you type, and the commands in replies"
         case .extensions: "The plugins, hooks and MCP servers in your coding agents' settings, and what other apps added"
         case .localModels: "The models on this Mac that answer what a check keeps local, and how fast they answer"
         case .handback: "What the local model does with a turn a check keeps on this Mac, what it reads, and whether you look first"
         case .skills: "Your own guidance for the local model, written once and picked for each step in Local turns"
-        case .general: "Appearance, opening at login, updates, and what the Logs page shows"
+        case .general: "Appearance, opening at login, updates, what the Logs page shows, and checks of this Mac"
         case .doctor: "The same checks as keepmum doctor, and this app's connection to keepmum"
         }
     }
@@ -85,26 +65,31 @@ struct SettingsPage: View {
     @AppStorage(Palette.key) private var palette: Palette = .standard
     @Environment(\.isSnapshot) private var isSnapshot
 
-    /// The column's widest: rows past this get hard to read across.
-    private static let column: CGFloat = 780
+    /// The column's widest: rows past this get hard to read across. Masking is wider, for the
+    /// table of what keepmum found beside who found it.
+    private var column: CGFloat { pane == .masking ? 1180 : 780 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.l) {
-            PageHeader(title: pane.title, subtitle: pane.subtitle)
-            HStack(alignment: .top, spacing: Space.xl) {
-                SettingsRail(store: store, engine: engine, selection: $pane).frame(width: 200)
-                if isSnapshot {
-                    content
-                } else {
-                    ScrollView { content.padding(.bottom, Space.xl) }.scrollIndicators(.automatic)
+            PageHeader(title: pane.shown.title, subtitle: pane.shown.subtitle)
+            if isSnapshot {
+                content
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView { content.padding(.bottom, Space.xl) }
+                        .scrollIndicators(.automatic)
+                        .onChange(of: pane, initial: true) { _, pane in
+                            if pane == .doctor { DispatchQueue.main.async { proxy.scrollTo(SettingsPane.doctor, anchor: .top) } }
+                        }
                 }
+                .id(pane.shown)  // each pane opens at its top
             }
         }
     }
 
     private var content: some View {
         VStack(alignment: .leading, spacing: Space.xl) { sections }
-            .frame(maxWidth: Self.column, alignment: .topLeading)
+            .frame(maxWidth: column, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
@@ -122,6 +107,7 @@ struct SettingsPage: View {
             if engine.isBundled { SetupSection(engine: engine, part: .agents) }
         case .masking:
             MaskingSection(engine: engine, observing: s.observe == true, modelError: s.detection.modelError)
+            DetectionSections(store: store, engine: engine)
             ExclusionsSection(engine: engine)
         case .tools:
             ToolsSection(store: store, engine: engine)
@@ -144,19 +130,21 @@ struct SettingsPage: View {
         case .skills:
             localOff
             LocalSkillsSection(engine: engine)
-        case .general:
+        case .general, .doctor:
             display
             if engine.isBundled { StartupSection() }
             UpdatesSection()
             if engine.isBundled { LogsPageSection(engine: engine) }
-        case .doctor:
-            if engine.isBundled {
-                DoctorSection(engine: engine)
-            } else {
-                FormSection(title: "Check this Mac") {
-                    FormRow(title: "Not available", detail: "Needs the bundled engine") { EmptyView() }
+            Group {
+                if engine.isBundled {
+                    DoctorSection(engine: engine)
+                } else {
+                    FormSection(title: "Check this Mac") {
+                        FormRow(title: "Not available", detail: "Needs the bundled engine") { EmptyView() }
+                    }
                 }
             }
+            .id(SettingsPane.doctor)
             connection
         }
     }
@@ -230,28 +218,11 @@ struct SettingsPage: View {
     }
 }
 
-/// The panes, each with what needs a look in it: setup not finished, tools to review, checks on,
-/// an update, failed checks of this Mac.
-private struct SettingsRail: View {
-    var store: StatsStore
-    var engine: Engine
-    @Binding var selection: SettingsPane
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.xxs) {
-            ForEach(SettingsPane.Group.allCases, id: \.self) { group in
-                if let title = group.title {
-                    Text(title).eyebrow().padding(.horizontal, Space.s).padding(.top, Space.m).padding(.bottom, Space.xs)
-                }
-                ForEach(group.panes) { pane in
-                    RailItem(pane: pane, badge: badge(pane), selection: $selection)
-                }
-            }
-        }
-    }
-
-    private func badge(_ pane: SettingsPane) -> (String, Color)? {
-        switch pane {
+/// What needs a look in each pane, beside it in the sidebar: setup not finished, tools to review,
+/// checks on, an update, failed checks of this Mac.
+extension SettingsPane {
+    @MainActor func badge(store: StatsStore, engine: Engine) -> (String, Color)? {
+        switch self {
         case .setup:
             return engine.isBundled && !engine.setupDone ? ("To do", Theme.warning) : nil
         case .tools:
@@ -267,11 +238,11 @@ private struct SettingsRail: View {
         case .extensions:
             let new = engine.status?.extensions?.new.count ?? 0
             return new == 0 ? nil : ("\(new)", Theme.warning)
-        case .general:
-            return Updates.shared.available == nil ? nil : ("Update", Theme.accent)
-        case .doctor:
+        case .general, .doctor:
+            // Settings holds Check this Mac: a failed check there comes first.
             let failed = engine.doctor?.filter { $0.status == "fail" }.count ?? 0
-            return failed == 0 ? nil : ("\(failed)", Theme.blocked)
+            if failed > 0 { return ("\(failed)", Theme.blocked) }
+            return Updates.shared.available == nil ? nil : ("Update", Theme.accent)
         case .masking:
             return store.snapshot.observe == true ? ("Off", Theme.blocked) : nil
         case .localModels:
@@ -286,36 +257,5 @@ private struct SettingsRail: View {
         case .skills:
             return nil
         }
-    }
-}
-
-private struct RailItem: View {
-    var pane: SettingsPane
-    var badge: (String, Color)?
-    @Binding var selection: SettingsPane
-    @State private var hovering = false
-
-    var body: some View {
-        let on = selection == pane
-        Button { selection = pane } label: {
-            HStack(spacing: Space.s) {
-                Image(systemName: pane.icon).font(.km(.body)).frame(width: 18)
-                    .foregroundStyle(on ? Theme.accent : Theme.textSecondary)
-                Text(pane.title).font(.km(.body).weight(on ? .medium : .regular)).foregroundStyle(Theme.text).lineLimit(1)
-                Spacer(minLength: Space.xs)
-                if let (text, color) = badge {
-                    Text(text).font(.km(.caption).weight(.medium)).foregroundStyle(color)
-                        .padding(.horizontal, Space.xs + 1).padding(.vertical, 1)
-                        .background(Capsule().fill(color.opacity(0.14)))
-                }
-            }
-            .padding(.horizontal, Space.s).padding(.vertical, Space.xs + 2)
-            .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
-                .fill(on ? Theme.fillStrong : hovering ? Theme.fill : .clear))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .accessibilityLabel(pane.title + (badge.map { ", \($0.0)" } ?? ""))
-    }
+     }
 }

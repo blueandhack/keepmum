@@ -47,7 +47,7 @@ final class LoginItem {
     }
 }
 
-/// Settings › General › Startup.
+/// Settings › Startup.
 struct StartupSection: View {
     var login = LoginItem.shared
     @Environment(\.isSnapshot) private var isSnapshot

@@ -187,8 +187,8 @@ enum Tour {
     static func inReview(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: review.minX + x, y: review.minY + y) }
 
     /// Sidebar rows, in the window (Dashboard's layout).
-    static let logsRow = inWindow(66, 190)
-    static let mapRow = inWindow(90, 277)
+    static let logsRow = inWindow(66, 218)
+    static let mapRow = inWindow(90, 305)
     /// The menu panel's Open Dashboard button, and the menu bar icon.
     static let openDashboard = CGPoint(x: panel.x + 88, y: panel.y + 488)
     static let icon = CGPoint(x: iconX, y: menuBar / 2)
@@ -285,7 +285,7 @@ enum Tour {
         /// The dashboard as Dashboard draws it, on a given page's view.
         func dashboard(_ page: Page, _ content: some View) -> some View {
             HStack(spacing: 0) {
-                Sidebar(store: store, page: .constant(page)).frame(width: 208)
+                Sidebar(store: store, place: .page(page)).frame(width: 208)
                 Hairline(vertical: true)
                 content
                     .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)

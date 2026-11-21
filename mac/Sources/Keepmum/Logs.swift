@@ -424,7 +424,7 @@ extension Snapshot.GuardHit {
         case ("commands", "blocked"):
             return "If the command was what you wanted, run it yourself, or set Risky commands to Warn."
         case ("commands", _):
-            return "To have such commands replaced before the agent gets them, set Risky commands to Block (Settings › Checks)."
+            return "To have such commands replaced before the agent gets them, set Risky commands to Block (Checks)."
         case ("script", _):
             return "Check what the server received, and rotate any secret that went out. To keep secrets out, ask the agent to make the network call in a step of its own: what it sends then goes through keepmum."
         case ("harm", "blocked"):
@@ -432,7 +432,7 @@ extension Snapshot.GuardHit {
         case ("harm", "local"):
             return "Later requests that still carry this text go to the local model too, until you rewind or /clear."
         case ("harm", _):
-            return "To refuse such requests instead, set Harmful requests to Block (Settings › Checks)."
+            return "To refuse such requests instead, set Harmful requests to Block (Checks)."
         case (_, "blocked"):
             return "Every request that still carries this result is refused: rewind to before it, or /clear, to go on."
         case (_, "local"):
@@ -525,9 +525,9 @@ struct CheckDetail: View {
             } else {
                 VStack(alignment: .leading, spacing: Space.xs) {
                     Text(flaggedTitle(h)).eyebrow()
-                    Text(h.seq == nil ? "Not kept: this row is from before keepmum last started, and text is kept in memory only. The row itself is kept on disk (Settings › General › Logs page)."
+                    Text(h.seq == nil ? "Not kept: this row is from before keepmum last started, and text is kept in memory only. The row itself is kept on disk (Settings › Logs page)."
                          : contextOn ? "Not kept for this one: it was flagged before keepmum kept checks' text, or the text has since been dropped."
-                                     : "Not kept. Text around values is off (Settings › General › Logs page).")
+                                     : "Not kept. Text around values is off (Settings › Logs page).")
                         .font(.km(.callout)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -806,7 +806,7 @@ struct LogsPage: View {
 
     @ViewBuilder private func previewsNote(_ empty: Bool) -> some View {
         if !store.previewsOn && !empty {
-            Text("Previews are off (Settings › General › Logs page): types and rules only.")
+            Text("Previews are off (Settings › Logs page): types and rules only.")
                 .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, Space.s)
         }
@@ -1015,7 +1015,7 @@ struct FindingDetail: View {
                              + (others.isEmpty ? "" : " Also masked in this text: \(others)."))
                             .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Text("Not kept. Text around values is off (Settings › General › Logs page), this value was masked before it was turned on, or before keepmum last started: text is kept in memory only.")
+                        Text("Not kept. Text around values is off (Settings › Logs page), this value was masked before it was turned on, or before keepmum last started: text is kept in memory only.")
                             .font(.km(.callout)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -1038,7 +1038,7 @@ struct FindingDetail: View {
     private func next(_ f: Finding) -> String {
         if f.outcome == "observed" { return "Nothing was masked. Turn observe mode off to have values like this one masked." }
         return "Where the reply uses its placeholder, keepmum puts the real value back on this Mac before \(f.clientName) sees it. "
-            + "Tools that run on this Mac get the real value; network tools get it only as their setting allows (Settings › Tools)."
+            + "Tools that run on this Mac get the real value; network tools get it only as their setting allows (Tools)."
     }
 
     private func shapeNote(_ f: Finding) -> String {

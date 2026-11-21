@@ -1,29 +1,17 @@
 import SwiftUI
 
-/// The Detection page: what keepmum found, by type and by detector, and what gets masked.
-/// Counts and your own settings only: it never shows a masked value.
-struct DetectionPage: View {
+/// Masking's lower half: what keepmum found, by type and by detector, what gets masked, and your
+/// own rules. Counts and your own settings only: it never shows a masked value.
+struct DetectionSections: View {
     var store: StatsStore
     var engine: Engine
-    @Environment(\.isSnapshot) private var isSnapshot
     @State private var showAllRules = false
 
     var body: some View {
-        if isSnapshot {
-            content
-        } else {
-            // Taller than the window once a notice shows at the top.
-            ScrollView { content.padding(.bottom, Space.xl) }
-                .sheet(isPresented: $showAllRules) { AllRulesSheet(engine: engine) }
-        }
-    }
-
-    private var content: some View {
         let d = store.snapshot.detection
-        return VStack(spacing: Space.l) {
-            PageHeader(title: "Detection", subtitle: "What keepmum finds, and what you let through. Counts only.")
+        VStack(spacing: Space.xl) {
             HStack(alignment: .top, spacing: Space.m) {
-                Card(title: "By type", subtitle: "Found in new text, then allowed by an exception, passed by your settings, or masked") {
+                Card(title: "What keepmum found", subtitle: "By type: allowed by an exception, passed by your settings, or masked. Counts only.") {
                     TypeTable(detection: d, engine: engine)
                 }
                 VStack(spacing: Space.m) {
@@ -42,8 +30,9 @@ struct DetectionPage: View {
                 .frame(width: 330)
             }
             RulesCard(engine: engine)
-                .frame(minHeight: 280, maxHeight: .infinity)
+                .frame(minHeight: 280)
         }
+        .sheet(isPresented: $showAllRules) { AllRulesSheet(engine: engine) }
     }
 }
 
@@ -69,7 +58,7 @@ private struct TypeTable: View {
             }
             ForEach(Theme.typeOrder, id: \.self) { type in row(type) }
             if !piiOn {
-                Text("Personal data is off, so only secrets and your own rules are masked. Turn it on in Settings › Masking.")
+                Text("Personal data is off, so only secrets and your own rules are masked. Turn it on above.")
                     .font(.km(.caption)).foregroundStyle(Theme.textSecondary).padding(.top, Space.s + Space.xxs)
                     .fixedSize(horizontal: false, vertical: true)
             }

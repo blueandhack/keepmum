@@ -270,7 +270,7 @@ struct ServiceRow: View {
         case .enabled where !engine.serviceRunning: return "Not answering"
         default:
             if engine.serviceRunning { return "Running, port \(engine.status?.port ?? 7788)" }
-            return engine.canScan ? "Stopped" : "Needs the model: Settings › Setup"
+            return engine.canScan ? "Stopped" : "Needs the model: Setup"
         }
     }
 

@@ -720,7 +720,7 @@ final class Engine {
         pendingSettings = [:]
     }
 
-    /// The local servers and what each has, for Settings › Local models. Asks each (on this Mac) every time.
+    /// The local servers and what each has, for Local models. Asks each (on this Mac) every time.
     func loadLocalServers() async {
         guard let out = try? await run(["guard", "local", "--json"]), out.code == 0,
               let m = try? JSONDecoder().decode(LocalServers.self, from: Data(out.stdout.utf8)) else { return }
@@ -833,7 +833,7 @@ final class Engine {
         await loadLocalServers()
     }
 
-    /// The skills for local turns, for Settings › Skills: each SKILL.md is read every time.
+    /// The skills for local turns, for Skills: each SKILL.md is read every time.
     func loadLocalSkills() async {
         guard let out = try? await run(["guard", "local", "skill", "--json"]), out.code == 0,
               let m = try? JSONDecoder().decode(LocalSkills.self, from: Data(out.stdout.utf8)) else { return }

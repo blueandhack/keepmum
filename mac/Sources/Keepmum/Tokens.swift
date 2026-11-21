@@ -50,7 +50,7 @@ enum Theme {
     static let textSecondary = Color(light: 0x6E6E73, dark: 0x98989D)
     static let textTertiary = Color(light: 0x8E8E93, dark: 0x6C6C70)
 
-    // The colors below follow the palette chosen in Settings › General (`Palette`), so they are
+    // The colors below follow the palette chosen in Settings (`Palette`), so they are
     // read on each use rather than stored.
 
     /// The standard palette, or the color-blind safe one.

@@ -50,7 +50,7 @@ struct ValuesButton: View {
         .disabled(store.sampleMode || (!store.valuesOn && engine?.isBundled != true))
         .help(shown ? "Show each masked value as its shape again, like g**********w"
               : store.valuesOn ? "Show each masked value as it was, on this Mac only. Asks for Touch ID or your password."
-              : "Show each masked value as it was, on this Mac only: turns on Original values (Settings › General › Logs page) "
+              : "Show each masked value as it was, on this Mac only: turns on Original values (Settings › Logs page) "
                 + "and asks for Touch ID or your password. Values masked from then on; keepmum did not keep earlier ones.")
         .accessibilityLabel(shown ? "Hide values" : "Show values")
     }

@@ -475,7 +475,7 @@ final class StatsStore {
         valuesOn = page.values ?? false
     }
 
-    // MARK: Tools (Settings › Tools): the network tools agents offered, and what each may receive.
+    // MARK: Tools (Tools): the network tools agents offered, and what each may receive.
 
     private(set) var toolServers: [ToolServer] = []
     /// A server not reviewed yet, or paused because its tools changed: the menu bar shows a dot.

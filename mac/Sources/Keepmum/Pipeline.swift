@@ -32,7 +32,7 @@ enum FlowGeometry {
     private static let easing = 0.6
 }
 
-/// How a request is drawn on the live flow: a dot, or a dot with a tail. Settings › General › Display.
+/// How a request is drawn on the live flow: a dot, or a dot with a tail. Settings › Display.
 enum FlowPulseStyle: String, CaseIterable, Identifiable {
     case dot, comet
     static let key = "flowPulseStyle"

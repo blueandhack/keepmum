@@ -86,7 +86,7 @@ extension Brand {
     /// Rendered once per variant; the menu bar label updates every second.
     @MainActor static let menuBarActive = renderMenuBarImage(dimmed: false)
     @MainActor static let menuBarIdle = renderMenuBarImage(dimmed: true)
-    /// With a dot at the top right: something in Settings › Tools waits for a look.
+    /// With a dot at the top right: something in Tools waits for a look.
     @MainActor static let menuBarAttention = renderMenuBarImage(dimmed: false, dot: true)
 
     @MainActor private static func renderMenuBarImage(dimmed: Bool, dot: Bool = false) -> NSImage {

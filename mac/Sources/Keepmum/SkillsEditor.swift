@@ -521,7 +521,7 @@ enum Places {
     static let longChars = 8_000
 }
 
-/// The Skills window's root: it follows Settings › General › Appearance and the palette, as the
+/// The Skills window's root: it follows Settings › Appearance and the palette, as the
 /// main window does (a window scene does not inherit them).
 struct SkillsWindowRoot: View {
     var engine: Engine

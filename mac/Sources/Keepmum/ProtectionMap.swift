@@ -534,7 +534,7 @@ struct SampleRun {
         let back = Route(l.providerX, p.providerBackY).flow(l.arrivalCard.maxX, 444).line(l.restoreCard.minX, 444).flow(118, p.backY - 8)
         let skipped = personal && !s.pii
         let found = s.observe || skipped ? Theme.warning : Theme.masked
-        let story = skipped ? "Personal data is off (Settings › Masking), so the emails went to \(p.provider) as they were. Secrets in the log were still masked."
+        let story = skipped ? "Personal data is off (Masking), so the emails went to \(p.provider) as they were. Secrets in the log were still masked."
             : s.observe ? "Observe only: masking found \(what) and logged it, but the request went to \(p.provider) with the real value in it."
             : "Masking swapped \(what) for a placeholder before the request left"
                 + (fromTool ? ", though it came from a file, not from you" : "")
@@ -1220,7 +1220,7 @@ struct MapDiagram: View {
         .help("Settings for \(part.title), under the map")
     }
 
-    /// A check's card. A click shows at once, as on Settings › Checks (`Engine.setting`, by `key`).
+    /// A check's card. A click shows at once, as on Checks (`Engine.setting`, by `key`).
     private func gate(_ part: MapPart, key: String, icon: String, mode: String, options: [(String, String)], rect: CGRect,
                       caption: String, paused: Bool = false, set: @escaping (String) async -> Void) -> some View {
         let shown = engine.pendingSettings[key] ?? mode

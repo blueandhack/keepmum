@@ -256,7 +256,7 @@ private struct FitMenuBarWindow: NSViewRepresentable {
 
 /// The dashboard window, and keepmum's place in the Dock. keepmum lives in the menu bar; while the
 /// dashboard is open it is also an ordinary app, in the Dock and in Cmd-Tab, so the window can be
-/// found again behind other apps (unless Settings › General › Display turns that off).
+/// found again behind other apps (unless Settings › Display turns that off).
 @MainActor
 enum DashboardWindow {
     static let dockKey = "showInDock"
@@ -591,7 +591,7 @@ enum Snapshotter {
         render(Dashboard(store: store, engine: .preview(harmOnlyLocal: true), page: .settings, settingsPane: .handback).frame(width: 1200, height: 1500),
                to: "\(dir)/settings-handback-harm-local-light.png", dark: false)
         ReviewCenter.shared.inject([], mode: "off")
-        // The menu bar icon, plain and with the dot that points at Settings › Tools.
+        // The menu bar icon, plain and with the dot that points at Tools.
         for (name, image) in [("menubar", Brand.menuBarActive), ("menubar-attention", Brand.menuBarAttention)] {
             if let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                 try? png.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
