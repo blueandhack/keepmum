@@ -187,8 +187,8 @@ enum Tour {
     static func inReview(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: review.minX + x, y: review.minY + y) }
 
     /// Sidebar rows, in the window (Dashboard's layout).
-    static let logsRow = inWindow(66, 218)
-    static let mapRow = inWindow(90, 305)
+    static let logsRow = inWindow(66, 239)
+    static let mapRow = inWindow(90, 326)
     /// The menu panel's Open Dashboard button, and the menu bar icon.
     static let openDashboard = CGPoint(x: panel.x + 88, y: panel.y + 488)
     static let icon = CGPoint(x: iconX, y: menuBar / 2)
