@@ -388,12 +388,12 @@ final class StatsStore {
         guard let token = try? String(contentsOf: home.appending(path: ".config/keepmum/stats-token"), encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty
         else {
-            connection = .offline("keepmum has not run yet")
+            failed("keepmum has not run yet")
             return
         }
         port = discoverPort()
         guard let url = URL(string: "http://127.0.0.1:\(port)/_keepmum/stats") else {
-            connection = .offline("invalid proxy port")
+            failed("invalid proxy port")
             return
         }
         var request = URLRequest(url: url)
@@ -402,7 +402,7 @@ final class StatsStore {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                connection = .offline("keepmum refused the stats token")
+                failed("keepmum refused the stats token")
                 return
             }
             let decoder = JSONDecoder()
@@ -410,8 +410,21 @@ final class StatsStore {
             apply(try decoder.decode(Snapshot.self, from: data), connection: .live)
             ScriptWarnings.notifyNew(snapshot.guardHits)
         } catch {
-            connection = .offline("keepmum is not running")
+            failed("keepmum is not running")
         }
+    }
+
+    /// Polls in a row that got no stats, since the last that did.
+    private var failures = 0
+    /// How many failed polls (one a second) it takes to say keepmum is offline. One request that
+    /// times out while keepmum is busy, or the moment a restart takes, is not keepmum gone: saying
+    /// so put a banner up and took it down again a second later.
+    static let offlineAfter = 3
+
+    private func failed(_ reason: String) {
+        failures += 1
+        let offline: Bool = if case .offline = connection { true } else { false }
+        if offline || failures >= Self.offlineAfter { connection = .offline(reason) }
     }
 
     // MARK: Findings (the Logs page): what new text held, from keepmum's memory.
@@ -566,6 +579,7 @@ final class StatsStore {
             ingest(new.recent, inflight: nil, over: 1)
         }
         snapshot = new
+        failures = 0
         self.connection = connection
     }
 

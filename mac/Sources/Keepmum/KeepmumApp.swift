@@ -83,6 +83,7 @@ struct MenuPanel: View {
                 .foregroundStyle(Theme.onAccent)
                 .padding(.leading, Space.m).padding(.trailing, Space.s).padding(.vertical, Space.s)
                 .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.blockedFill))
+                .transition(Motion.notice)
             }
             // Status first: is every agent protected, and is the service running, on one surface.
             VStack(spacing: 0) {
@@ -99,6 +100,7 @@ struct MenuPanel: View {
             if engine.isBundled, let error = engine.error {
                 Text(error).font(.km(.caption)).foregroundStyle(Theme.blocked)
                     .fixedSize(horizontal: false, vertical: true)
+                    .transition(Motion.notice)
             }
             // Then what needs you, every kind in one list, each with its one action.
             let items = Attention.items(store: store, engine: engine)
@@ -115,6 +117,7 @@ struct MenuPanel: View {
                     }
                     .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Theme.fill))
                 }
+                .transition(Motion.notice)
             }
             // Then what keepmum did: the values it kept here, and the requests behind them.
             VStack(spacing: Space.s + Space.xxs) {
@@ -141,6 +144,7 @@ struct MenuPanel: View {
                 Text("\(reason.sentence).\(engine.isBundled ? "" : " Run keepmum claude to start.")")
                     .font(.km(.caption)).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity)
             }
             HStack(spacing: Space.s) {
                 PillButton(title: "Open dashboard", icon: "macwindow", prominent: true) {
@@ -151,18 +155,31 @@ struct MenuPanel: View {
             }
         }
         .padding(Space.l)
+        // A row that comes or goes slides in or out, and the rows under it move with it.
+        .animation(Motion.settle, value: changes)
         .followsPalette()
         .frame(width: 320)
         // Its full height, always: the menu bar window is sized from this, and without it a row
         // that appears while the panel is open is squeezed (text cut to one line) instead.
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+        // At the top of its window, which is a moment taller or shorter than the panel while it
+        // follows: centered, the whole panel jumped by half the difference.
+        .frame(maxHeight: .infinity, alignment: .top)
         .background { if !isSnapshot { FitMenuBarWindow(height: height) } }
         .task { await engine.refresh() }
         // Opaque: the menu bar window's material shows what is behind it, and the theme's colors,
         // unlike the system's, do not adapt to it (gray labels vanish over a light window).
         .background(Theme.canvas)
         .preferredColorScheme(appearance.scheme)
+    }
+
+    /// What makes a row come or go: the panel animates when it changes.
+    private var changes: [String] {
+        let offline: Bool = if case .offline = store.connection { true } else { false }
+        return [store.snapshot.observe == true && !offline ? "observing" : "", offline ? "offline" : "",
+                engine.error == nil ? "" : "error", engine.serviceRunning ? "running" : ""]
+            + Attention.items(store: store, engine: engine).map(\.id)
     }
 
     private func stat(_ title: String, _ value: String, color: Color = Theme.text) -> some View {
@@ -184,7 +201,7 @@ private struct FitMenuBarWindow: NSViewRepresentable {
 
     func updateNSView(_ view: Fitter, context: Context) {
         view.height = height
-        DispatchQueue.main.async { view.fit() }  // the view is in its window once this update has run
+        DispatchQueue.main.async { view.fit(animated: true) }  // the view is in its window once this update has run
     }
 
     /// Fits its window when the panel's height changes, and again whenever the window opens or is
@@ -192,6 +209,8 @@ private struct FitMenuBarWindow: NSViewRepresentable {
     final class Fitter: NSView {
         var height: CGFloat = 0
         private var observers: [NSObjectProtocol] = []
+        /// The height the window is animating to; its own resizes on the way are not SwiftUI's.
+        private var target: CGFloat?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -200,18 +219,37 @@ private struct FitMenuBarWindow: NSViewRepresentable {
             guard let window else { return }
             for name in [NSWindow.didResizeNotification, NSWindow.didBecomeKeyNotification] {
                 observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.fit() }
+                    MainActor.assumeIsolated { self?.fit(animated: false) }
                 })
             }
-            fit()
+            fit(animated: false)
         }
 
-        func fit() {
+        /// Animated while the panel is open, alongside its rows (Motion.settle); at once as it opens.
+        func fit(animated: Bool) {
             guard height > 0, let window else { return }
             let frame = window.frame
             let fitted = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: frame.width, height: height)).height
+            if let target, abs(target - fitted) < 0.5 { return }
             guard abs(frame.height - fitted) > 0.5 else { return }
-            window.setFrame(NSRect(x: frame.minX, y: frame.maxY - fitted, width: frame.width, height: fitted), display: true)
+            let next = NSRect(x: frame.minX, y: frame.maxY - fitted, width: frame.width, height: fitted)
+            guard animated, window.isVisible, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+                target = nil
+                window.setFrame(next, display: true)
+                return
+            }
+            target = fitted
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.3
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(next, display: true)
+            } completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.target == fitted else { return }
+                    self.target = nil
+                    self.fit(animated: false)  // should the panel have changed again on the way
+                }
+            }
         }
     }
 }

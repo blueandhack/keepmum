@@ -209,6 +209,8 @@ extension Text {
 enum Motion {
     static let quick = Animation.easeOut(duration: 0.15)
     static let settle = Animation.spring(duration: 0.4)
+    /// A banner or row that comes and goes: it slides down from where it will sit, fading in.
+    @MainActor static var notice: AnyTransition { .move(edge: .top).combined(with: .opacity) }
 }
 
 // MARK: - Sensitive types

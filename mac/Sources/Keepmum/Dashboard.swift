@@ -70,6 +70,8 @@ struct Dashboard: View {
                 .clipped()
             }
             .padding(Space.xl)
+            // A notice slides in and the page moves down with it, rather than both jumping.
+            .animation(Motion.settle, value: Notices.shown(store: store, engine: engine))
         }
         .overlay(alignment: .top) {
             if paletteOpen {
@@ -230,38 +232,55 @@ private struct Notices: View {
     var engine: Engine
     @Binding var page: Page
 
+    /// Which notices show. The dashboard animates the page down, or up, when one comes or goes
+    /// on its own; not when another page is chosen, which changes the page at once.
+    struct Shown: Hashable { var observing = false, offline = false, sample = false }
+
+    static func shown(store: StatsStore, engine: Engine) -> Shown {
+        let offline: Bool = if case .offline = store.connection { true } else { false }
+        // While the service starts or restarts, Setup says so: not answering is what it is doing.
+        return Shown(observing: store.snapshot.observe == true && !offline,
+                     offline: offline && !engine.serviceComingUp,
+                     sample: store.sampleMode)
+    }
+
+    /// What shows on this page. The Overview's status header says the first two itself, with the
+    /// same button.
+    private var shown: Shown {
+        var shown = Self.shown(store: store, engine: engine)
+        if page == .overview { shown.observing = false; shown.offline = false }
+        return shown
+    }
+
     var body: some View {
-        // The Overview's status header says both of these itself, with the same button.
-        let onOverview = page == .overview
-        let observing = store.snapshot.observe == true && !isOffline && !onOverview
-        if observing || (isOffline && !onOverview) || store.sampleMode {
+        let shown = shown
+        if shown != Shown() {
             VStack(spacing: Space.s) {
-                if observing {
+                if shown.observing {
                     Banner(tone: .danger, icon: "eye.trianglebadge.exclamationmark", title: "Observe only.",
                            message: "Requests leave this Mac unmasked; keepmum only counts what it would mask.") {
                         PillButton(title: "Mask again", icon: "eye.slash", onSolid: true) { Task { await engine.setObserve(false) } }
                             .disabled(!engine.isBundled || engine.busy)
                     }
+                    .transition(Motion.notice)
                 }
-                if case .offline(let reason) = store.connection, !onOverview {
+                if shown.offline, case .offline(let reason) = store.connection {
                     Banner(tone: .warning, icon: "bolt.horizontal.circle", title: "Not connected.",
                            message: "\(reason.sentence). Start the background service in Settings, or run keepmum claude.") {
                         if page != .settings { PillButton(title: "Open Settings") { engine.settingsRequested = .setup } }
                     }
+                    .transition(Motion.notice)
                 }
-                if store.sampleMode {
+                if shown.sample {
                     Banner(tone: .info, icon: "sparkles", title: "Preview data.",
                            message: "Synthetic numbers that show every page; nothing here happened on this Mac.") {
                         PillButton(title: "Exit preview") { store.sampleMode = false }
                     }
+                    .transition(Motion.notice)
                 }
             }
+            .transition(Motion.notice)
         }
-    }
-
-    private var isOffline: Bool {
-        if case .offline = store.connection { return true }
-        return false
     }
 }
 
