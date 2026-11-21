@@ -357,3 +357,62 @@ def test_an_unreadable_antigravity_file_is_reported_and_the_rest_still_read(home
     assert {p.split(": ")[0].rsplit("/", 1)[-1] for p in result["problems"]} == {"hooks.json", "plugin.json"}
     rows = by_name(result)
     assert ("Antigravity CLI", "MCP server", "vendor") in rows and ("Antigravity CLI", "plugin", "vendor") in rows
+
+
+def test_each_item_says_what_it_is_from_its_own_manifest(home):
+    """A plugin's plugin.json, a Codex plugin's newest cached version, a marketplace's
+    marketplace.json, a skill's front matter and a Gemini extension's manifest."""
+    plugin = home / ".claude" / "plugins" / "cache" / "frontend-design" / "1.1.1"
+    (plugin / ".claude-plugin").mkdir(parents=True)
+    (plugin / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "frontend-design", "description": "Frontend   design\nskill"}))
+    (home / ".claude" / "plugins" / "installed_plugins.json").write_text(json.dumps(
+        {"version": 2, "plugins": {"frontend-design@claude-plugins-official": [{"installPath": str(plugin)}]}}))
+    market = home / "markets" / "impeccable"
+    (market / ".claude-plugin").mkdir(parents=True)
+    (market / ".claude-plugin" / "marketplace.json").write_text(json.dumps({"metadata": {"description": "Design fluency"}}))
+    (home / ".claude" / "plugins" / "known_marketplaces.json").write_text(json.dumps(
+        {"impeccable": {"source": {"repo": "pbakaus/impeccable"}, "installLocation": str(market)}}))
+    for version, text in (("1.0", "old"), ("2.0", "")):
+        d = home / ".codex" / "plugins" / "cache" / "openai-curated" / "github" / version / ".codex-plugin"
+        d.mkdir(parents=True)
+        (d / "plugin.json").write_text(json.dumps({"description": text, "interface": {"shortDescription": "Triage pull requests"}}))
+    skills = home / ".claude" / "skills"
+    (skills / "brandkit").mkdir(parents=True)
+    (skills / "brandkit" / "SKILL.md").write_text('---\nname: brandkit\ndescription: "Brand boards: logos and decks"\n---\n# Brandkit\n')
+    (skills / "folded").mkdir()
+    (skills / "folded" / "SKILL.md").write_text("---\nname: folded\ndescription: >\n  Two lines\n  folded into one\nlicense: MIT\n---\n")
+    (skills / "plain").mkdir()
+    (skills / "plain" / "SKILL.md").write_text("# No front matter\ndescription: not this\n")
+    gem = home / ".gemini" / "extensions" / "code-review"
+    gem.mkdir(parents=True)
+    (gem / "gemini-extension.json").write_text(json.dumps({"name": "code-review", "description": ["not", "text"]}))
+
+    got = {(i.agent, i.kind, i.name): i.description for i in ext.scan()[0]}
+    assert got["Claude Code", "plugin", "frontend-design@claude-plugins-official"] == "Frontend design skill"
+    assert got["Claude Code", "marketplace", "impeccable"] == "Design fluency"
+    # The newest version's manifest, and its interface's short description where the top one is empty.
+    assert got["Codex", "plugin", "github@openai-curated"] == "Triage pull requests"
+    assert got["Claude Code", "skill", "brandkit"] == "Brand boards: logos and decks"
+    assert got["Claude Code", "skill", "folded"] == "Two lines folded into one"
+    assert got["Claude Code", "skill", "plain"] == ""  # only the front matter counts
+    assert got["Gemini CLI", "extension", "code-review"] == ""  # anything but text is no description
+    assert got["Claude Code", "hook", "Stop"] == ""  # a hook has no manifest: the app says when it runs
+
+    from typer.testing import CliRunner
+
+    from keepmum.cli import app
+
+    listed = CliRunner().invoke(app, ["extensions"]).output
+    assert "skill: brandkit\n              \u201cBrand boards: logos and decks\u201d" in listed
+
+
+def test_a_changed_description_is_not_something_new(home):
+    ext.check()
+    skill = home / ".claude" / "skills" / "notes"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\ndescription: first\n---\n")
+    first = {i["name"]: i for i in ext.check()["items"]}["notes"]
+    ext.keep([first["id"]])
+    (skill / "SKILL.md").write_text("---\ndescription: second\n---\n")
+    again = {i["name"]: i for i in ext.check()["items"]}["notes"]
+    assert again["id"] == first["id"] and again["description"] == "second" and not again["new"]

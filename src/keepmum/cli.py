@@ -2817,7 +2817,9 @@ app.add_typer(extensions_app, name="extensions")
 def _extension_line(r: dict) -> str:
     flags = [f for f, on in (("new", r["new"]), ("adds instructions to every session", r["adds_context"])) if on]
     detail = f"  {r['detail']}" if r["detail"] else ""
-    return f"  {r['id']}  {r['kind']}: {r['name']}{detail}" + (f"  [{'; '.join(flags)}]" if flags else "")
+    line = f"  {r['id']}  {r['kind']}: {r['name']}{detail}" + (f"  [{'; '.join(flags)}]" if flags else "")
+    # Its author's words, from its manifest: quoted, under it.
+    return line + (f"\n              \u201c{r['description']}\u201d" if r.get("description") else "")
 
 
 @extensions_app.callback(invoke_without_command=True)

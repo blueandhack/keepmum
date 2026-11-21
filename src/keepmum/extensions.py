@@ -59,6 +59,9 @@ class Item:
     # How keepmum takes it out: (format, key path); None: with the agent itself (`how`).
     loc: list | None = None
     how: str = ""
+    # What it says it is, from its own manifest (a plugin's plugin.json, a skill's SKILL.md): its
+    # author's words, shown as written, never trusted. Not part of its id, so an edit to it is not new.
+    description: str = ""
     id: str = field(default="")
 
     def __post_init__(self):
@@ -129,6 +132,74 @@ def _server_detail(spec) -> str:
     return _short(" ".join([str(cmd or "")] + [str(a) for a in spec.get("args", [])]))
 
 
+def _described(value) -> str:
+    """A manifest's description, on one line and capped; anything but text is no description."""
+    return _short(value, 240) if isinstance(value, str) and value.strip() else ""
+
+
+def _manifest_description(path: Path) -> str:
+    """`description` in a plugin, marketplace or extension manifest; Codex's plugins also put a
+    short one under `interface`, a marketplace under `metadata`."""
+    with contextlib.suppress(OSError, ValueError, AttributeError):
+        data = _read_json(path) or {}
+        if isinstance(data, dict):
+            for value in (data.get("description"), (data.get("interface") or {}).get("shortDescription"),
+                          (data.get("metadata") or {}).get("description")):
+                if text := _described(value):
+                    return text
+    return ""
+
+
+def _skill_description(skill: Path) -> str:
+    """The `description:` in a SKILL.md's front matter: the line every session reads to pick it."""
+    with contextlib.suppress(OSError, UnicodeDecodeError):
+        lines = (skill / "SKILL.md").read_text().splitlines()
+        if not lines or lines[0].strip() != "---":
+            return ""
+        for i, line in enumerate(lines[1:], 1):
+            if line.strip() == "---":
+                break
+            if line.startswith("description:"):
+                value = line.split(":", 1)[1].strip()
+                if value in ("|", ">", "|-", ">-"):  # a block: the indented lines after it
+                    block = []
+                    for more in lines[i + 1:]:
+                        if more.strip() == "---" or (more and not more[0].isspace()):
+                            break
+                        block.append(more.strip())
+                    value = " ".join(block)
+                return _described(value.strip("'\""))
+    return ""
+
+
+def _codex_plugin_description(name: str) -> str:
+    """A Codex plugin ("github@openai-curated") is cached per version under plugins/cache/<marketplace>/<plugin>:
+    the newest version's manifest."""
+    plugin, _, market = name.partition("@")
+    with contextlib.suppress(OSError):
+        versions = sorted((_codex_dir() / "plugins" / "cache" / market / plugin).iterdir(),
+                          key=lambda d: d.stat().st_mtime, reverse=True)
+        for d in versions:
+            if text := _manifest_description(d / ".codex-plugin" / "plugin.json"):
+                return text
+    return ""
+
+
+def _claude_marketplaces() -> dict:
+    """Claude Code's registry of marketplaces: name -> its entry, with where it is installed."""
+    with contextlib.suppress(OSError, ValueError, AttributeError):
+        known = _read_json(_claude_dir() / "plugins" / "known_marketplaces.json") or {}
+        if isinstance(known, dict):
+            return known
+    return {}
+
+
+def _claude_marketplace_description(name: str, known: dict) -> str:
+    spec = known.get(name)
+    where = spec.get("installLocation") if isinstance(spec, dict) else None
+    return _manifest_description(Path(where) / ".claude-plugin" / "marketplace.json") if isinstance(where, str) else ""
+
+
 def _hook_commands(hooks: dict):
     """(event, index of matcher group, index of hook, command) for Claude Code-style hooks."""
     for event, groups in (hooks or {}).items():
@@ -160,7 +231,8 @@ def _skills(out: list[Item], agent: str, root: Path) -> None:
     with contextlib.suppress(OSError):
         for d in sorted(root.iterdir()):
             if (d / "SKILL.md").is_file():
-                out.append(Item(agent, "skill", d.name, "", str(d), how=f"delete the folder {d}"))
+                out.append(Item(agent, "skill", d.name, "", str(d), how=f"delete the folder {d}",
+                                description=_skill_description(d)))
 
 
 def _instructions(out: list[Item], agent: str, path: Path) -> None:
@@ -185,17 +257,22 @@ def _claude(out: list[Item], problems: list[str]) -> None:
     installed = {}
     with contextlib.suppress(OSError, ValueError, AttributeError):
         installed = (_read_json(_claude_dir() / "plugins" / "installed_plugins.json") or {}).get("plugins", {})
+    markets = _claude_marketplaces()
     for name, on in (s.get("enabledPlugins") or {}).items():
         if on is not True:
             continue
         entries = installed.get(name) or [{}]
-        parts = _plugin_parts(entries[0].get("installPath") if isinstance(entries, list) and entries else None)
+        root = entries[0].get("installPath") if isinstance(entries, list) and entries and isinstance(entries[0], dict) else None
+        parts = _plugin_parts(root)
         out.append(Item(agent, "plugin", name, parts, str(settings), adds_context="SessionStart" in parts
-                        or "UserPromptSubmit" in parts, loc=["json", "enabledPlugins", name]))
+                        or "UserPromptSubmit" in parts, loc=["json", "enabledPlugins", name],
+                        description=_manifest_description(Path(root) / ".claude-plugin" / "plugin.json")
+                        if isinstance(root, str) else ""))
     for name, spec in (s.get("extraKnownMarketplaces") or {}).items():
         src = (spec or {}).get("source", {}) if isinstance(spec, dict) else {}
         where = (src.get("repo") or src.get("url") or src.get("path") or "") if isinstance(src, dict) else str(src)
-        out.append(Item(agent, "marketplace", name, str(where), str(settings), loc=["json", "extraKnownMarketplaces", name]))
+        out.append(Item(agent, "marketplace", name, str(where), str(settings), loc=["json", "extraKnownMarketplaces", name],
+                        description=_claude_marketplace_description(name, markets)))
     for event, gi, hi, cmd in _hook_commands(s.get("hooks")):
         out.append(Item(agent, "hook", event, _short(cmd), str(settings), adds_context=event in CONTEXT_EVENTS,
                         loc=["claude-hook", event, gi, hi]))
@@ -204,13 +281,14 @@ def _claude(out: list[Item], problems: list[str]) -> None:
         out.append(Item(agent, "status line", "statusLine", _short(line["command"]), str(settings), loc=["json", "statusLine"]))
     known = _claude_dir() / "plugins" / "known_marketplaces.json"
     with contextlib.suppress(OSError, ValueError, AttributeError):
-        for name, spec in (_read_json(known) or {}).items():
+        for name, spec in markets.items():
             if name in (s.get("extraKnownMarketplaces") or {}) or name == "claude-plugins-official":
                 continue
             src = (spec or {}).get("source", {}) if isinstance(spec, dict) else {}
             where = (src.get("repo") or src.get("url") or "") if isinstance(src, dict) else ""
             out.append(Item(agent, "marketplace", name, str(where), str(known),
-                            how=f"in Claude Code: /plugin marketplace remove {name}"))
+                            how=f"in Claude Code: /plugin marketplace remove {name}",
+                            description=_claude_marketplace_description(name, markets)))
     _skills(out, agent, _claude_dir() / "skills")
     _instructions(out, agent, _claude_dir() / "CLAUDE.md")
     cj = _claude_json()
@@ -237,7 +315,8 @@ def _codex(out: list[Item], problems: list[str]) -> None:
         return
     for name, spec in (cfg.get("plugins") or {}).items():
         if isinstance(spec, dict) and spec.get("enabled", True) is not False:
-            out.append(Item(agent, "plugin", name, "", str(path), loc=["toml", "plugins", name]))
+            out.append(Item(agent, "plugin", name, "", str(path), loc=["toml", "plugins", name],
+                            description=_codex_plugin_description(name)))
     for name, spec in (cfg.get("marketplaces") or {}).items():
         where = spec.get("source", "") if isinstance(spec, dict) else ""
         out.append(Item(agent, "marketplace", name, str(where), str(path), loc=["toml", "marketplaces", name]))
@@ -345,7 +424,8 @@ def _antigravity(out: list[Item], problems: list[str], gemini: Path) -> None:
                 continue
             name = spec.get("name") if isinstance(spec.get("name"), str) and spec.get("name") else d.name
             parts, context = _agy_plugin(d)
-            out.append(Item(agent, "plugin", name, parts, str(d), adds_context=context, how=f"agy plugin uninstall {name}"))
+            out.append(Item(agent, "plugin", name, parts, str(d), adds_context=context, how=f"agy plugin uninstall {name}",
+                            description=_described(spec.get("description"))))
     for path in (gemini / "AGENTS.md", gemini / "GEMINI.md", config / "AGENTS.md", config / "GEMINI.md"):
         _instructions(out, agent, path)
     with contextlib.suppress(OSError):
@@ -373,7 +453,8 @@ def _others(out: list[Item], problems: list[str]) -> None:
         for d in sorted((gemini / "extensions").iterdir()):
             if d.is_dir() and (d / "gemini-extension.json").is_file():
                 out.append(Item("Gemini CLI", "extension", d.name, "", str(d),
-                                how=f"gemini extensions uninstall {d.name}"))
+                                how=f"gemini extensions uninstall {d.name}",
+                                description=_manifest_description(d / "gemini-extension.json")))
     _antigravity(out, problems, gemini)
     _mcp_json(out, problems, "Copilot CLI", home / ".copilot" / "mcp-config.json")
     oc = home / ".config" / "opencode"

@@ -64,6 +64,9 @@ final class Engine {
         /// How to remove it with the agent itself, when keepmum does not edit that file.
         var how: String
         var new: Bool?
+        /// What it says it is, from its own manifest (plugin.json, SKILL.md): its author's words; nil
+        /// from older engines, empty where it has none (a hook).
+        var description: String? = nil
     }
 
     /// In `keepmum status`: what is new, for the menu bar.
@@ -1085,18 +1088,35 @@ final class Engine {
               detail: "postman@postman:hooks/codex-hooks.json:session_start:0:0", file: "~/.codex/config.toml",
               addsContext: true, removable: true, how: "", new: true),
         .init(id: "a2", agent: "Codex", kind: "plugin", name: "postman@postman", detail: "", file: "~/.codex/config.toml",
-              addsContext: false, removable: true, how: "", new: true),
+              addsContext: false, removable: true, how: "", new: true,
+              description: "Build, test and document APIs with Postman collections from your coding agent."),
         .init(id: "a3", agent: "Codex", kind: "MCP server", name: "postman", detail: "https://mcp.postman.com/mcp",
               file: "~/.codex/config.toml", addsContext: false, removable: true, how: "", new: true),
         .init(id: "a4", agent: "Claude Code", kind: "plugin", name: "postman@claude-plugins-official",
               detail: "hooks: SessionStart; MCP: postman", file: "~/.claude/settings.json",
-              addsContext: true, removable: true, how: "", new: true),
+              addsContext: true, removable: true, how: "", new: true,
+              description: "Build, test and document APIs with Postman collections from your coding agent."),
         .init(id: "b1", agent: "Claude Code", kind: "plugin", name: "frontend-design@claude-plugins-official", detail: "",
-              file: "~/.claude/settings.json", addsContext: false, removable: true, how: "", new: false),
+              file: "~/.claude/settings.json", addsContext: false, removable: true, how: "", new: false,
+              description: "Frontend design skill for UI/UX implementation"),
+        .init(id: "b6", agent: "Claude Code", kind: "skill", name: "release-notes", detail: "", file: "~/.claude/skills/release-notes",
+              addsContext: false, removable: false, how: "delete the folder ~/.claude/skills/release-notes", new: false,
+              description: "Write release notes from the commits since the last tag, grouped by feature and fix."),
+        .init(id: "b7", agent: "Claude Code", kind: "MCP server", name: "linear", detail: "https://mcp.linear.app/sse",
+              file: "~/.claude.json", addsContext: false, removable: true, how: "", new: false),
+        .init(id: "b8", agent: "Claude Code", kind: "instructions", name: "CLAUDE.md", detail: "42 lines, sha256 3f9a0c21b7e4",
+              file: "~/.claude/CLAUDE.md", addsContext: true, removable: false, how: "edit ~/.claude/CLAUDE.md", new: false),
+        .init(id: "b9", agent: "Claude Code", kind: "marketplace", name: "impeccable", detail: "pbakaus/impeccable",
+              file: "~/.claude/plugins/known_marketplaces.json", addsContext: false, removable: false,
+              how: "in Claude Code: /plugin marketplace remove impeccable", new: false,
+              description: "Design fluency for AI harnesses: a skill, commands and curated anti-patterns."),
         .init(id: "b2", agent: "Claude Code", kind: "hook", name: "Stop", detail: "afplay /System/Library/Sounds/Glass.aiff",
               file: "~/.claude/settings.json", addsContext: false, removable: true, how: "", new: false),
         .init(id: "b3", agent: "Codex", kind: "plugin", name: "github@openai-curated", detail: "", file: "~/.codex/config.toml",
-              addsContext: false, removable: true, how: "", new: false),
+              addsContext: false, removable: true, how: "", new: false,
+              description: "Inspect repositories, triage pull requests and issues, debug CI, and publish changes."),
+        .init(id: "b10", agent: "Codex", kind: "hook", name: "notify", detail: "terminal-notifier -title Codex", file: "~/.codex/config.toml",
+              addsContext: false, removable: false, how: "edit notify in ~/.codex/config.toml", new: false),
         .init(id: "b4", agent: "Gemini CLI", kind: "extension", name: "code-review", detail: "", file: "~/.gemini/extensions/code-review",
               addsContext: false, removable: false, how: "gemini extensions uninstall code-review", new: false),
         .init(id: "b5", agent: "Antigravity CLI", kind: "plugin", name: "code-review",

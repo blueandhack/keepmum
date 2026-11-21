@@ -467,6 +467,11 @@ enum Snapshotter {
             render(Dashboard(store: store, engine: .preview(), page: .map).frame(width: 1900, height: 1100),
                    to: "\(dir)/map-wide-\(dark ? "dark" : "light").png", dark: dark)
         }
+        // Extensions narrowed: hooks only, and a search.
+        render(ExtensionsSection(engine: .preview(), initialKinds: [.hook]).padding(Space.xl).frame(width: 900).fixedSize(horizontal: false, vertical: true).background(Theme.canvas),
+               to: "\(dir)/extensions-hooks-light.png", dark: false)
+        render(ExtensionsSection(engine: .preview(), initialQuery: "postman").padding(Space.xl).frame(width: 900).fixedSize(horizontal: false, vertical: true).background(Theme.canvas),
+               to: "\(dir)/extensions-search-light.png", dark: false)
         // The Overview's status header in its other states, and the command palette.
         render(Dashboard(store: store, engine: .preview(agentsOff: true)).frame(width: 1200, height: 780),
                to: "\(dir)/overview-setup-light.png", dark: false)
