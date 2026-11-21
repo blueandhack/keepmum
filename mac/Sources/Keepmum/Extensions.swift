@@ -36,11 +36,14 @@ struct ExtensionsSection: View {
         let items = list?.items ?? []
         let new = items.filter { $0.new == true }
         let shown = items.filter(matches)
-        VStack(alignment: .leading, spacing: Space.xl) {
+        // An agent's section each, side by side on a large window; the notices, the filters and the
+        // notes across them.
+        SectionColumns {
             if let error = engine.error, working != nil || lastFailed {
                 Banner(tone: .danger, icon: "xmark.octagon", title: "Not done", message: error) {
                     PillButton(title: "Dismiss", onSolid: true) { lastFailed = false; engine.error = nil }
                 }
+                .spansColumns()
             }
             if !new.isEmpty {
                 Banner(tone: .warning, icon: "puzzlepiece.extension",
@@ -52,6 +55,7 @@ struct ExtensionsSection: View {
                             .disabled(busy)
                     }
                 }
+                .spansColumns()
             }
             if list == nil {
                 FormSection(title: "Extensions") {
@@ -64,7 +68,7 @@ struct ExtensionsSection: View {
                                                            : "keepmum starts watching when it first runs") { EmptyView() }
                 }
             } else {
-                filters(items, new: new.count)
+                filters(items, new: new.count).spansColumns()
                 if shown.isEmpty {
                     VStack(alignment: .leading, spacing: Space.s) {
                         Text("Nothing matches").font(.km(.headline)).foregroundStyle(Theme.text)
@@ -72,6 +76,7 @@ struct ExtensionsSection: View {
                             .buttonStyle(.plain).font(.km(.callout).weight(.medium)).foregroundStyle(Theme.accent)
                     }
                     .padding(.horizontal, Space.xs)
+                    .spansColumns()
                 }
                 ForEach(Self.order.filter { agent in shown.contains { $0.agent == agent } }, id: \.self) { agent in
                     agentSection(agent, rows: shown.filter { $0.agent == agent }, total: items.filter { $0.agent == agent }.count)
@@ -81,6 +86,7 @@ struct ExtensionsSection: View {
                     if !none.isEmpty {
                         Text("Nothing in \(Attention.list(none)).").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
                             .padding(.horizontal, Space.xs).padding(.top, -Space.m)
+                            .spansColumns()
                     }
                 }
             }
@@ -99,6 +105,7 @@ struct ExtensionsSection: View {
             Text("Any app you run can change these settings. keepmum notices, and takes an entry out only when you click Remove: it edits that one entry, after a copy of the file in ~/.config/keepmum/backups, and the agent picks it up when it restarts. A description in quotes is its author's own, from its manifest.")
                 .font(.km(.caption)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, Space.xs)
+                .spansColumns()
         }
         .task { await engine.loadExtensions() }
         .onAppear {

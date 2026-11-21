@@ -413,6 +413,9 @@ enum Snapshotter {
             for dark in [false, true] {
                 render(window(store, page), to: "\(dir)/\(page.rawValue)-\(dark ? "dark" : "light").png", dark: dark)
             }
+            // On a large display: what fills the width, and what does not.
+            render(Dashboard(store: store, engine: .preview(), page: page).frame(width: 1900, height: 1100),
+                   to: "\(dir)/page-wide-\(page.rawValue)-light.png", dark: false)
         }
         for dark in [false, true] {
             render(MenuPanel(store: store, engine: .preview()), to: "\(dir)/menu-\(dark ? "dark" : "light").png", dark: dark)

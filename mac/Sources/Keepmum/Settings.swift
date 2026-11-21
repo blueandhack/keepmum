@@ -65,10 +65,6 @@ struct SettingsPage: View {
     @AppStorage(Palette.key) private var palette: Palette = .standard
     @Environment(\.isSnapshot) private var isSnapshot
 
-    /// The column's widest: rows past this get hard to read across. Masking is wider, for the
-    /// table of what keepmum found beside who found it.
-    private var column: CGFloat { pane == .masking ? 1180 : 780 }
-
     var body: some View {
         VStack(alignment: .leading, spacing: Space.l) {
             PageHeader(title: pane.shown.title, subtitle: pane.shown.subtitle)
@@ -87,9 +83,10 @@ struct SettingsPage: View {
         }
     }
 
+    /// In columns on a large window (SectionColumns); Masking's table of what keepmum found, beside
+    /// who found it, may be wider than one.
     private var content: some View {
-        VStack(alignment: .leading, spacing: Space.xl) { sections }
-            .frame(maxWidth: column, alignment: .topLeading)
+        SectionColumns(spanWidth: pane == .masking ? 1180 : 0) { sections }
             .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
@@ -107,26 +104,29 @@ struct SettingsPage: View {
             if engine.isBundled { SetupSection(engine: engine, part: .agents) }
         case .masking:
             MaskingSection(engine: engine, observing: s.observe == true, modelError: s.detection.modelError)
-            DetectionSections(store: store, engine: engine)
             ExclusionsSection(engine: engine)
+            DetectionSections(store: store, engine: engine).spansColumns()
         case .tools:
             ToolsSection(store: store, engine: engine)
             if engine.isBundled { ShellDestinationsSection(engine: engine) }
         case .checks:
             MapLink(engine: engine, text: "See where each check acts on a request, and where a hit goes, on the Protection map.")
-            ChecksSection(engine: engine)
+                .spansColumns()
+            ChecksSection(engine: engine).spansColumns()
             if localUsed { LocalModeSummary(engine: engine) { pane = $0 } }
         case .extensions:
-            ExtensionsSection(engine: engine)
+            ExtensionsSection(engine: engine).spansColumns()
         case .localModels:
             localOff
             MapLink(engine: engine, text: "See where Local mode sends a hit, and what goes back to the cloud, on the Protection map.")
+                .spansColumns()
             LocalServersSection(engine: engine)
             LocalSpeedSection(engine: engine)
         case .handback:
             localOff
             MapLink(engine: engine, text: "See a hand-back's route back to the cloud on the Protection map.")
-            LocalHandbackSection(engine: engine) { pane = $0 }
+                .spansColumns()
+            LocalHandbackSection(engine: engine) { pane = $0 }.spansColumns()
         case .skills:
             localOff
             LocalSkillsSection(engine: engine)
@@ -156,6 +156,7 @@ struct SettingsPage: View {
                    message: "These apply once Prompt injection or Harmful requests is set to Local.") {
                 PillButton(title: "Open Checks") { pane = .checks }
             }
+            .spansColumns()
         }
     }
 

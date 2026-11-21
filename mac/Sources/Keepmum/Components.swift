@@ -559,3 +559,68 @@ struct VisualEffect: NSViewRepresentable {
 
     func updateNSView(_ v: NSVisualEffectView, context: Context) { v.material = material }
 }
+
+// MARK: - Section columns
+
+/// A page of settings sections, in as many columns as the width holds: one up to `column` wide, and
+/// a second once each can be at least `minColumn`, so a large window is not half empty. Sections
+/// keep their order, each going under the shorter column; one marked `spansColumns()` (a banner,
+/// a table, a section with columns of its own) goes across all of them, below everything before it.
+struct SectionColumns: Layout {
+    var spacing: CGFloat = Space.xl
+    /// The widest a column gets: rows past this get hard to read across.
+    var column: CGFloat = 780
+    var minColumn: CGFloat = 620
+    var maxColumns = 2
+    /// How wide a spanning section may get past the columns (Masking's table of what was found).
+    var spanWidth: CGFloat = 0
+
+    struct Frame { var x: CGFloat; var y: CGFloat; var width: CGFloat }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (_, height, width) = arrange(proposal.width, subviews)
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (frames, _, _) = arrange(bounds.width, subviews)
+        for (subview, f) in zip(subviews, frames) {
+            subview.place(at: CGPoint(x: bounds.minX + f.x, y: bounds.minY + f.y), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: f.width, height: nil))
+        }
+    }
+
+    /// Where each section goes, the height of them all, and the width they take.
+    private func arrange(_ offered: CGFloat?, _ subviews: Subviews) -> ([Frame], CGFloat, CGFloat) {
+        let available = offered ?? column
+        var count = max(1, maxColumns)
+        while count > 1 && (available - spacing * CGFloat(count - 1)) / CGFloat(count) < minColumn { count -= 1 }
+        let width = min(column, (available - spacing * CGFloat(count - 1)) / CGFloat(count))
+        let columns = width * CGFloat(count) + spacing * CGFloat(count - 1)
+        let span = min(available, max(columns, spanWidth))
+        var heights = Array(repeating: CGFloat(0), count: count)
+        var frames: [Frame] = []
+        for subview in subviews {
+            if subview[SpansColumns.self] {
+                let y = heights.max() ?? 0
+                let h = subview.sizeThatFits(ProposedViewSize(width: span, height: nil)).height
+                frames.append(Frame(x: 0, y: y, width: span))
+                heights = Array(repeating: y + h + spacing, count: count)
+            } else {
+                let i = heights.indices.min { heights[$0] < heights[$1] } ?? 0
+                let h = subview.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+                frames.append(Frame(x: CGFloat(i) * (width + spacing), y: heights[i], width: width))
+                heights[i] += h + spacing
+            }
+        }
+        let used = frames.contains { $0.width == span } ? max(columns, span) : columns
+        return (frames, max(0, (heights.max() ?? 0) - spacing), used)
+    }
+}
+
+/// A section that goes across every column of a `SectionColumns`.
+struct SpansColumns: LayoutValueKey { static let defaultValue = false }
+
+extension View {
+    func spansColumns(_ spans: Bool = true) -> some View { layoutValue(key: SpansColumns.self, value: spans) }
+}

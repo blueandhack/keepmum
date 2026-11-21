@@ -20,9 +20,10 @@ struct ChecksSection: View {
     private var memoryGB: Double { Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.xl) {
+        // Each check a section of its own: side by side on a large window, the legend across them.
+        SectionColumns {
             if let checks {
-                if only == nil { legend }
+                if only == nil { legend.spansColumns() }
                 if only == nil || only == "injection" { injection(checks.injection) }
                 if only == nil || only == "harm" { harm(checks.harm) }
                 if only == nil || only == "commands", let commands = checks.commands { self.commands(commands) }

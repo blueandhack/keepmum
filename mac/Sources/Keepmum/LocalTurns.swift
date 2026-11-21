@@ -44,7 +44,8 @@ struct LocalHandbackSection: View {
     private var skills: [Engine.LocalSkills.Skill] { engine.localSkills?.skills ?? [] }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.xl) {
+        // Each check's card side by side on a large window, review under the shorter.
+        SectionColumns {
             checkSection("harm")
             checkSection("injection")
             if let review = engine.localHandback?.review {
