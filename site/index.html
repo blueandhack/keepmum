@@ -25,6 +25,7 @@
 <script src="tour-data.js" defer></script>
 <script src="tour.js" defer></script>
 <script src="video.js" defer></script>
+<script src="nav.js" defer></script>
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="keepmum">
 <meta property="og:locale" content="en_US">
@@ -187,7 +188,25 @@
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<header class="hero">
+<!-- Slides in once the hero's own nav has scrolled away (nav.js), with the section you are in marked. -->
+<div class="bar" id="bar">
+  <div class="wrap bar-in">
+    <a class="brand" href="#top" aria-label="keepmum, back to the top">
+      <svg width="26" height="26" viewBox="0 0 100 100" aria-hidden="true"><path d="M21.6 69.8 L21.6 46.3 C21.6 37 27.8 30.9 35.8 30.9 C43.8 30.9 50 37 50 46.3 L50 69.8 M50 69.8 L50 46.3 C50 37 56.2 30.9 64.2 30.9 C72.2 30.9 78.4 37 78.4 46.3 L78.4 69.8 M12.9 69.8 L87.1 69.8" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>keepmum</span>
+    </a>
+    <nav aria-label="Sections">
+      <a href="#how" data-for="how">How it works</a>
+      <a href="#checks" data-for="checks map extensions">Checks</a>
+      <a href="#app" data-for="app">Mac app</a>
+      <a href="#limits" data-for="limits">Limitations</a>
+      <a href="#faq" data-for="faq">Questions</a>
+    </nav>
+    <a class="btn small" href="#install" data-for="install">Download</a>
+  </div>
+</div>
+
+<header class="hero" id="top">
   <div class="wrap top">
     <a class="brand" href="/">
       <svg width="30" height="30" viewBox="0 0 100 100" aria-hidden="true"><path d="M21.6 69.8 L21.6 46.3 C21.6 37 27.8 30.9 35.8 30.9 C43.8 30.9 50 37 50 46.3 L50 69.8 M50 69.8 L50 46.3 C50 37 56.2 30.9 64.2 30.9 C72.2 30.9 78.4 37 78.4 46.3 L78.4 69.8 M12.9 69.8 L87.1 69.8" fill="none" stroke="#1A0F0B" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -218,8 +237,20 @@
       <p class="release">Version <span data-release="version">0.1.0a6</span> · built <time data-release="date" datetime="2026-11-09T09:14:26Z">Nov 9, 2026, 09:14 UTC</time></p>
       <p class="fine">For Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi and opencode · Free and open source</p>
     </div>
-    <div class="hero-mark">
-      <svg viewBox="0 0 100 100" role="img" aria-label="The keepmum mark: a lowercase m closed off by a line, like a shut mouth"><path d="M21.6 69.8 L21.6 46.3 C21.6 37 27.8 30.9 35.8 30.9 C43.8 30.9 50 37 50 46.3 L50 69.8 M50 69.8 L50 46.3 C50 37 56.2 30.9 64.2 30.9 C72.2 30.9 78.4 37 78.4 46.3 L78.4 69.8 M12.9 69.8 L87.1 69.8" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <!-- What keepmum does, in one card: the same .env on your Mac, then as it leaves. It turns over
+         by itself (style.css); with reduced motion it shows what leaves. -->
+    <div class="hero-demo" role="img" aria-label="An .env file your agent read. On your Mac it holds a Stripe key, a database password and a session secret; sent to the provider, each one is a keepmum placeholder.">
+      <div class="demo" aria-hidden="true">
+        <div class="demo-head">
+          <span class="demo-file">.env</span>
+          <span class="demo-state"><span class="on-mac">On your Mac</span><span class="on-wire">Sent to the provider</span></span>
+        </div>
+        <pre class="demo-body"><span class="k">STRIPE_KEY</span>=<span class="sw"><span class="real">sk_live_51Hx8fQ2eZvKYlo2C7a9Rb</span><span class="ph">KEEPMUM_SECRET_7f3a9c2e</span></span>
+<span class="k">DB_PASSWORD</span>=<span class="sw"><span class="real">Zq8vX2mN4pL7kR9t</span><span class="ph">KEEPMUM_SECRET_3b91d0aa</span></span>
+<span class="k">SESSION_SECRET</span>=<span class="sw"><span class="real">9f4e1c7a2b8d6e3f0a5c</span><span class="ph">KEEPMUM_SECRET_c4d82e19</span></span>
+<span class="k">APP_ENV</span>=production</pre>
+        <p class="demo-foot"><span class="on-mac">Your agent reads the real values</span><span class="on-wire">The provider gets placeholders; they turn back into real values on your Mac</span></p>
+      </div>
     </div>
   </div>
 </header>
@@ -298,7 +329,7 @@
         <p>Checks the shell commands a reply asks your agent to run: a download piped into a shell, deleting your home folder, erasing a disk, credentials sent over the network. Seven rules, no download.</p>
       </div>
     </div>
-    <figure class="shot"><img src="img/checks.webp" width="2880" height="1560" alt="keepmum’s Local turns settings: for what you typed and for tool results, what follows a local turn, the local model, and each step it takes with its instruction and skills" loading="lazy"></figure>
+    <figure class="shot"><img src="img/checks.webp" width="2360" height="1440" alt="keepmum’s Local turns settings: for what you typed and for tool results, what follows a local turn, the local model, and each step it takes with its instruction and skills" loading="lazy"></figure>
     <div class="checks-head">
       <h2 id="review-title">You look before it goes.</h2>
       <p class="intro">Turn on review, and nothing a check flagged goes to the cloud until you say so. A panel shows what the local model wrote beside the original: send it, edit it, ask the local model to change it, or keep the turn on your Mac. Or review the whole turn in one window, every flagged piece side by side, each rewritten, sent as it was (after a warning) or removed. The clock pauses while the local model writes, and never runs past what your agent waits. A demo in the app shows how it works before one comes up.</p>
@@ -424,7 +455,7 @@
         <div class="way cli">
           <h3>The command line</h3>
           <p>With Python 3.12, uv and the Xcode command line tools.</p>
-          <pre><code>git clone https://github.com/blueandhack/keepmum.git
+          <pre id="cli-steps"><code>git clone https://github.com/blueandhack/keepmum.git
 cd keepmum &amp;&amp; uv tool install --editable .
 native/pf-serve/build.sh
 keepmum setup

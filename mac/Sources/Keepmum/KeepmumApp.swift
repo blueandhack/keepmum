@@ -567,8 +567,9 @@ enum Snapshotter {
         paused.agentLimit = 360
         render(TurnReviewView(center: .shared, turn: paused, previewPause: 12).frame(width: 1040, height: 720).background(Theme.canvas),
                to: "\(dir)/review-turn-paused-light.png", dark: false)
-        // For keepmum.app: Local turns at the size of the site's figure (1440x780), with both checks local.
-        render(Dashboard(store: store, engine: .preview(bothLocal: true), page: .settings, settingsPane: .handback).frame(width: 1440, height: 780),
+        // For keepmum.app: Local turns at the size of the site's figure (1180x720), with both checks local.
+        // Narrow enough that the pane's column (Settings' widest, 780) fills it.
+        render(Dashboard(store: store, engine: .preview(bothLocal: true), page: .settings, settingsPane: .handback).frame(width: 1180, height: 720),
                to: "\(dir)/site-turns-light.png", dark: false)
         // For keepmum.app: the Protection map with both checks local, a jailbreak sample on its way.
         render(mapPage(store, .preview(bothLocal: true), sample: .jailbreak, width: 1440, height: 1080),

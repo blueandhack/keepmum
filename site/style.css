@@ -82,13 +82,73 @@ a { color: var(--ink); }
 .fine { font-size: 16px; font-weight: 600; }
 .release { font-size: 15px; font-variant-numeric: tabular-nums; }
 .hero .release { margin-top: -16px; }
-.hero-mark { flex: 2 1 300px; display: flex; justify-content: center; }
-.hero-mark svg { width: 100%; max-width: 420px; height: auto; }
 @media (max-width: 600px) {
   .hero-body { padding-top: 32px; }
-  .hero-mark { display: none; }
   .lede { font-size: 20px; }
 }
+
+/* The hero's card: one .env, on your Mac and then as it leaves, turning over every 7 seconds. Each
+   value and its placeholder share a cell, so nothing moves when they swap. */
+.hero-demo { flex: 2 1 420px; min-width: 0; display: flex; justify-content: center; }
+.demo {
+  width: 100%; max-width: 520px; padding: 22px 24px 20px; border-radius: 22px;
+  background: var(--sand); color: var(--ink);
+  box-shadow: 0 40px 80px -36px rgba(26, 15, 11, 0.55);
+  animation: demo-card 7s ease-in-out infinite;
+}
+.demo-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.demo-file { font-family: var(--mono); font-size: 14px; font-weight: 500; }
+.demo-state, .demo-foot { display: inline-grid; }
+.demo-state > *, .demo-foot > * { grid-area: 1 / 1; }
+.demo-state > * { justify-self: end; padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.demo-state .on-mac { background: rgba(26, 15, 11, 0.08); }
+.demo-state .on-wire { background: var(--coral); color: var(--ink); }
+.demo-body { font-family: var(--mono); font-size: 14.5px; line-height: 2; white-space: pre; overflow: hidden; }
+.demo-body .k { opacity: 0.6; }
+.sw { display: inline-grid; vertical-align: top; }
+.sw > * { grid-area: 1 / 1; }
+.sw .real { font-weight: 500; }
+.sw .ph { justify-self: start; padding: 0 5px; border-radius: 6px; background: var(--coral); color: var(--ink); }
+.demo-foot { margin-top: 14px; font-size: 14px; line-height: 1.45; opacity: 0.75; }
+.demo .on-mac, .demo .real { animation: demo-mac 7s ease-in-out infinite; }
+.demo .on-wire, .demo .ph { animation: demo-wire 7s ease-in-out infinite; }
+@keyframes demo-card { 0%, 40% { background: var(--sand); color: var(--ink); } 50%, 90% { background: var(--ink); color: #fff; } 100% { background: var(--sand); color: var(--ink); } }
+@keyframes demo-mac { 0%, 40% { opacity: 1; } 50%, 90% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes demo-wire { 0%, 40% { opacity: 0; } 50%, 90% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .demo, .demo .on-mac, .demo .real, .demo .on-wire, .demo .ph { animation: none; }
+  .demo { background: var(--ink); color: #fff; }
+  .demo .on-mac, .demo .real { opacity: 0; }
+}
+@media (max-width: 1080px) { .hero-demo { justify-content: flex-start; } }
+@media (max-width: 600px) { .hero-demo { display: none; } }
+
+/* The section bar: in once the hero's nav is gone (nav.js adds .show), the section in view marked. */
+.bar {
+  position: fixed; left: 0; right: 0; top: 0; z-index: 20;
+  background: rgba(255, 255, 255, 0.9); -webkit-backdrop-filter: saturate(1.6) blur(14px); backdrop-filter: saturate(1.6) blur(14px);
+  border-bottom: 1px solid var(--line);
+  transform: translateY(-100%); visibility: hidden;
+  transition: transform 0.25s ease, visibility 0s linear 0.25s;
+}
+.bar.show { transform: none; visibility: visible; transition: transform 0.25s ease; }
+@media (prefers-reduced-motion: reduce) { .bar, .bar.show { transition: none; } }
+.bar-in { display: flex; align-items: center; gap: 24px; height: 64px; }
+.bar .brand { font-size: 19px; }
+.bar nav { flex: 1; min-width: 0; display: flex; justify-content: flex-end; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.bar nav::-webkit-scrollbar { display: none; }
+.bar nav a { flex: none; padding: 8px 12px; border-radius: 999px; font-size: 15px; font-weight: 600; color: var(--body); text-decoration: none; white-space: nowrap; }
+.bar nav a:hover { color: var(--ink); background: var(--sand); }
+.bar nav a[aria-current="true"] { color: var(--ink); background: var(--sand); }
+.bar .btn.small { min-height: 40px; padding: 0 18px; font-size: 15px; flex: none; }
+@media (max-width: 760px) {
+  .bar-in { gap: 8px; }
+  .bar .brand span { display: none; }
+  .bar nav { justify-content: flex-start; mask-image: linear-gradient(to right, #000 85%, transparent); }
+  .bar nav a { padding: 8px 10px; font-size: 14px; }
+}
+/* A link to a section lands below the bar, not under it. */
+section[id], figure[id] { scroll-margin-top: 80px; }
 
 /* Sections */
 .section { padding-top: 112px; padding-bottom: 112px; }
@@ -97,6 +157,8 @@ a { color: var(--ink); }
 .split { display: flex; flex-wrap: wrap; gap: 48px 64px; }
 .split > .side { flex: 1 1 320px; display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
 .split > .main { flex: 2 1 560px; min-width: 0; }
+/* On a wide screen a split section's heading stays in view while its longer column scrolls by. */
+@media (min-width: 1000px) { .split > .side { position: sticky; top: 96px; align-self: flex-start; } }
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 32px; }
 @media (max-width: 600px) { .section { padding-top: 80px; padding-bottom: 80px; } }
 
@@ -214,14 +276,14 @@ a { color: var(--ink); }
 
 /* Checks */
 .checks { display: flex; flex-direction: column; gap: 48px; padding-top: 32px; }
-.checks-head { display: flex; flex-wrap: wrap; gap: 24px 64px; align-items: flex-end; }
+.checks-head { display: flex; flex-wrap: wrap; gap: 24px 64px; align-items: flex-start; }
 .checks-head > * { flex: 1 1 420px; }
 @media (max-width: 600px) { .checks .shot { display: none; } }
 
 /* The Mac app */
 .app { background: var(--sand); }
 .app .wrap { display: flex; flex-direction: column; gap: 56px; }
-.app-head { display: flex; flex-wrap: wrap; gap: 24px 64px; align-items: flex-end; }
+.app-head { display: flex; flex-wrap: wrap; gap: 24px 64px; align-items: flex-start; }
 .app-head > * { flex: 1 1 420px; }
 .shots { position: relative; padding-bottom: 120px; }
 .shot { border-radius: 20px; overflow: hidden; background: #fff; border: 1px solid rgba(26, 15, 11, 0.08); box-shadow: 0 40px 80px -40px rgba(26, 15, 11, 0.35); }
@@ -266,6 +328,9 @@ a { color: var(--ink); }
 .way.cli { background: var(--ink); color: #fff; align-items: stretch; }
 .way.cli p { color: var(--on-ink); }
 .way pre { padding: 20px; border-radius: 14px; background: var(--code); overflow-x: auto; font-family: var(--mono); font-size: 14px; line-height: 1.8; color: #fff; }
+.code { position: relative; min-width: 0; }
+.copy { position: absolute; top: 10px; right: 10px; padding: 6px 12px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.12); color: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.copy:hover { background: rgba(255, 255, 255, 0.2); }
 @media (max-width: 600px) { .way { padding: 24px; } .way pre { font-size: 13px; } }
 
 /* Questions */
