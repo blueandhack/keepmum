@@ -30,30 +30,40 @@ def homes(tmp_path, monkeypatch):
 
 # --- Codex -------------------------------------------------------------------------------------
 
-def test_codex_run_provider_refuses_bad_toml_local_models_and_providers_without_a_url(homes):
+def test_codex_run_args_refuse_bad_toml_local_models_and_providers_without_a_url(homes):
     cfg = homes / "codex" / "config.toml"
     cfg.write_text("model_provider = \n")
     with pytest.raises(ProtectError, match="is not valid TOML"):
-        clients.codex_run_provider(PORT, {})
+        clients.codex_run_args(PORT, {})
     cfg.write_text('model_provider = "ollama"\n')
     with pytest.raises(ProtectError, match="model on this Mac"):
-        clients.codex_run_provider(PORT, {})
+        clients.codex_run_args(PORT, {})
     cfg.write_text('model_provider = "corp"\n[model_providers.corp]\nname = "corp"\nbase_url = 5\n')
     with pytest.raises(ProtectError, match="has no base_url"):
-        clients.codex_run_provider(PORT, {})
+        clients.codex_run_args(PORT, {})
+    cfg.write_text('model_provider = "a.b"\n[model_providers."a.b"]\nbase_url = "https://gw.corp.example/v1"\n')
+    with pytest.raises(ProtectError, match="cannot name"):
+        clients.codex_run_args(PORT, {})
 
 
-def test_codex_run_provider_with_no_config_is_keepmums_own(homes):
-    provider, extra = clients.codex_run_provider(PORT, {})
-    assert provider == clients.codex_provider(PORT) and extra == {}
+def test_codex_run_args_point_codexs_own_provider_at_keepmum(homes):
+    want = ["-c", f'openai_base_url="{BASE}/openai/v1"']
+    assert clients.codex_run_args(PORT, {}) == (want, {})  # no config
+    cfg = homes / "codex" / "config.toml"
+    for text in (f'openai_base_url = "{BASE}/openai/v1"  # keepmum protect\n',  # protection on
+                 'model_provider = "keepmum"  # keepmum protect\n[model_providers.keepmum]\nbase_url = "x"\n'):  # as before
+        cfg.write_text(text)
+        assert clients.codex_run_args(PORT, {}) == (want, {})
+    cfg.write_text('openai_base_url = "https://llm.corp.example/v1"\n')  # its own: keepmum in front
+    args, extra = clients.codex_run_args(PORT, {"corp": "https://llm.corp.example"})
+    assert args == ["-c", f'openai_base_url="{BASE}/gateway/corp/v1"'] and extra == {}
 
 
-def test_codex_run_provider_routes_through_a_known_gateway(homes):
+def test_codex_run_args_route_through_a_known_gateway(homes):
     (homes / "codex" / "config.toml").write_text(
         'model_provider = "corp"\n[model_providers.corp]\nname = "Corp"\nbase_url = "https://gw.corp.example/v1/"\nenv_key = "CORP_KEY"\n')
-    provider, extra = clients.codex_run_provider(PORT, {"corp": "https://gw.corp.example"})
-    assert extra == {} and provider["base_url"] == f"{BASE}/gateway/corp/v1"
-    assert provider["env_key"] == "CORP_KEY" and provider["name"] == "keepmum"
+    args, extra = clients.codex_run_args(PORT, {"corp": "https://gw.corp.example"})
+    assert extra == {} and args == ["-c", f'model_providers.corp.base_url="{BASE}/gateway/corp/v1"']
 
 
 def test_codex_enable_refuses_a_provider_without_a_url_or_without_adopt(homes):
@@ -62,9 +72,13 @@ def test_codex_enable_refuses_a_provider_without_a_url_or_without_adopt(homes):
     with pytest.raises(ProtectError, match="has no base_url"):
         clients.codex_enable(PORT, adopt=lambda url, who: url)
     cfg.write_text('model_provider = "corp"\n[model_providers.corp]\nbase_url = "https://gw.corp.example/v1"\n')
-    with pytest.raises(ProtectError, match="already selects model_provider 'corp'"):
+    with pytest.raises(ProtectError, match="sets base_url of model_provider 'corp' to https://gw.corp.example/v1"):
         clients.codex_enable(PORT)
     assert "keepmum" not in cfg.read_text()
+    # A base_url in an inline table: not one keepmum edits in place, and it says how to write it.
+    cfg.write_text('model_provider = "corp"\nmodel_providers = { corp = { base_url = "https://gw.corp.example/v1" } }\n')
+    with pytest.raises(ProtectError, match=r"only in a \[model_providers.corp\] table"):
+        clients.codex_enable(PORT, adopt=lambda url, who: f"{BASE}/gateway/corp/v1")
 
 
 def test_codex_enable_and_status_reject_invalid_toml(homes):
@@ -94,18 +108,27 @@ def test_codex_disable_without_a_config_or_without_keepmum_changes_nothing(homes
     assert not (homes / "codex" / "config.toml.keepmum-backup").exists()
 
 
-def test_codex_through_a_gateway_reports_via_and_off_selects_the_old_provider(homes):
+def test_codex_through_a_gateway_reports_via_and_off_puts_its_url_back(homes, monkeypatch):
     cfg = homes / "codex" / "config.toml"
     original = 'model_provider = "corp"\n\n[model_providers.corp]\nname = "Corp"\nbase_url = "https://gw.corp.example/v1"\n'
     cfg.write_text(original)
+    monkeypatch.setattr(clients, "_gateways", lambda: {"corp": "https://gw.corp.example"})
     st = clients.codex_enable(PORT, adopt=lambda url, who: f"{BASE}/gateway/corp/v1")
     assert st["on"] and st["via"] == "https://gw.corp.example/v1"
-    assert '(was "corp")' in cfg.read_text()
-    assert tomllib.loads(cfg.read_text())["model_providers"]["keepmum"]["base_url"] == f"{BASE}/gateway/corp/v1"
-    provider, extra = clients.codex_run_provider(PORT, {"corp": "https://gw.corp.example"})
-    assert provider["base_url"] == f"{BASE}/gateway/corp/v1" and extra == {}
-    clients.codex_disable(PORT)
-    assert tomllib.loads(cfg.read_text()) == tomllib.loads(original)
+    assert '# keepmum protect (was "https://gw.corp.example/v1")' in cfg.read_text()
+    assert tomllib.loads(cfg.read_text())["model_providers"]["corp"]["base_url"] == f"{BASE}/gateway/corp/v1"
+    args, extra = clients.codex_run_args(PORT, {"corp": "https://gw.corp.example"})
+    assert args == ["-c", f'model_providers.corp.base_url="{BASE}/gateway/corp/v1"'] and extra == {}
+    # On again on another port: the route moves with it, in front of the URL the line notes.
+    clients.codex_enable(8899, adopt=lambda url, who: f"http://127.0.0.1:8899/gateway/corp/v1")
+    assert tomllib.loads(cfg.read_text())["model_providers"]["corp"]["base_url"] == "http://127.0.0.1:8899/gateway/corp/v1"
+    with pytest.raises(ProtectError, match="out of date"):
+        clients.codex_enable(9911)  # a route for a port it is not on, and no gateway to put it in front of
+    # Its gateway gone from keepmum's config: still on, and status says to point it again.
+    monkeypatch.setattr(clients, "_gateways", lambda: {})
+    assert "no longer in keepmum's config" in clients.codex_status(8899)["warning"]
+    clients.codex_disable(8899)
+    assert cfg.read_text() == original
 
 
 def test_set_top_key_replaces_every_copy_with_one_line():
@@ -121,7 +144,40 @@ def test_toml_values():
     assert clients._toml("x") == '"x"'
 
 
+def test_codex_auth_mode_reads_codexs_own_login(homes):
+    auth = homes / "codex" / "auth.json"
+    assert clients.codex_auth_mode() == "chatgpt"  # no login file: Codex's default
+    for data, mode in (({"auth_mode": "apikey"}, "apikey"), ({"OPENAI_API_KEY": "sk-x"}, "apikey"),
+                       ({"tokens": {"id_token": "x"}, "OPENAI_API_KEY": "sk-x"}, "chatgpt")):
+        auth.write_text(json.dumps(data))
+        assert clients.codex_auth_mode() == mode
+    auth.write_text("not json")
+    assert clients.codex_auth_mode() == "chatgpt"
+
+
+def test_codex_pointed_at_keepmum_by_hand_becomes_keepmums(homes):
+    cfg = homes / "codex" / "config.toml"
+    cfg.write_text(f'openai_base_url = "{BASE}/openai/v1"\nmodel = "gpt-5"\n')
+    assert clients.codex_enable(PORT)["on"]
+    assert cfg.read_text().startswith(f'openai_base_url = "{BASE}/openai/v1"  # keepmum protect\n')
+    clients.codex_disable(PORT)
+    assert cfg.read_text() == 'model = "gpt-5"\n'
+
+
+def test_codex_from_a_still_earlier_version_loses_its_stray_table(homes):
+    """A [model_providers.keepmum] table outside keepmum's block (before it had one) goes too, and
+    the provider is kept, in the block, for the conversations that started with it."""
+    cfg = homes / "codex" / "config.toml"
+    cfg.write_text('model_provider = "keepmum"\n[model_providers.keepmum]\nname = "keepmum"\n'
+                   f'base_url = "{BASE}/openai/v1"\n\n[mcp_servers.docs]\ncommand = "docs"\n')
+    clients.codex_upgrade(PORT)
+    text = cfg.read_text()
+    assert text.count("[model_providers.keepmum]") == 1 and text.index(clients.CODEX_BEGIN) < text.index("[model_providers.keepmum]")
+    assert tomllib.loads(text)["mcp_servers"]["docs"]["command"] == "docs"
+
+
 def test_codex_args_override_each_provider_key(homes):
+    assert clients.codex_args(PORT) == ["-c", f'openai_base_url="{BASE}/openai/v1"']
     args = clients.codex_args(PORT, {"base_url": "http://x", "supports_websockets": False})
     assert args == ["-c", 'model_provider="keepmum"', "-c", 'model_providers.keepmum.base_url="http://x"',
                     "-c", "model_providers.keepmum.supports_websockets=false"]

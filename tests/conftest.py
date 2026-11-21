@@ -19,7 +19,17 @@ os.environ["HOME"] = tempfile.mkdtemp(prefix="keepmum-tests-")
 
 @pytest.fixture(autouse=True)
 def _no_codex_processes(monkeypatch):
-    """Codex already running on this Mac must not turn up in a test's Codex status as a warning."""
+    """Codex conversations open on this Mac must not turn up in a test's Codex status as a warning."""
     from keepmum import clients
 
-    monkeypatch.setattr(clients, "_codex_processes", lambda: [])
+    monkeypatch.setattr(clients, "_codex_pids", lambda: [])
+
+
+@pytest.fixture(autouse=True)
+def _no_claude_sessions(monkeypatch, tmp_path):
+    """Claude Code sessions running on this Mac must not keep a test's `off` line (protect.tidy), and
+    each test notes `off` in a place of its own."""
+    from keepmum import protect
+
+    monkeypatch.setattr(protect, "claude_sessions_since", lambda when: 0)
+    monkeypatch.setattr(protect, "_off_file", lambda: tmp_path / "keepmum-claude-off.json")

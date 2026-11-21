@@ -50,6 +50,9 @@ DEFAULT_POLICY = {
     # to OpenAI's image service. A path it names keeps its placeholder too, so an image whose name
     # was masked cannot be edited that way: what a provider's tool gets matters more.
     "image_gen__*": "keep",
+    # Codex 0.169's web tool (`tools.web__run`, or `run` in its `web` group): searches and opens pages
+    # at OpenAI (/alpha/search, scanned too), like web search.
+    "web__*": "keep",
     "list_resources": "keep",
     "read_resource": "keep",
     "mcp__*": "own",

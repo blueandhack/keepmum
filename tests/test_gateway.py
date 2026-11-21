@@ -149,36 +149,60 @@ http_headers = {{ "x-magpie-agent" = "codex" }}
 
 
 def test_codex_keeps_its_provider_with_keepmum_in_front(home):
+    """Codex keeps the provider it selects, pointed at keepmum's route to the gateway: every conversation
+    it starts or reopens with that provider goes through keepmum, the ones from before too."""
     cfg = home / "codex" / "config.toml"
     cfg.write_text(CODEX)
     st = clients.codex_enable(PORT, adopter(home))
     data = tomllib.loads(cfg.read_text())
-    prov = data["model_providers"]["keepmum"]
+    prov = data["model_providers"]["magpie"]
     assert st["on"] and st["via"] == f"{MAGPIE}/v1"
-    assert data["model_provider"] == "keepmum" and data["model_providers"]["magpie"]["base_url"] == f"{MAGPIE}/v1"
-    assert prov["base_url"] == f"{ROUTE}/v1" and prov["env_key"] == "MAGPIE_KEY" and prov["supports_websockets"] is False
-    assert prov["http_headers"] == {"x-magpie-agent": "codex", "x-keepmum-client": "codex"}
-    assert "requires_openai_auth" not in prov  # the gateway's key, not an OpenAI login
-    clients.codex_enable(PORT, adopter(home))  # again: still in front of magpie, one block
-    assert cfg.read_text().count("[model_providers.keepmum]") == 1 and '(was "magpie")' in cfg.read_text()
+    assert data["model_provider"] == "magpie" and "keepmum" not in data["model_providers"]
+    assert prov["base_url"] == f"{ROUTE}/v1" and prov["env_key"] == "MAGPIE_KEY"
+    assert prov["http_headers"] == {"x-magpie-agent": "codex"}
+    assert f'base_url = "{ROUTE}/v1"  # keepmum protect (was "{MAGPIE}/v1")' in cfg.read_text()
+    clients.codex_enable(PORT, adopter(home))  # again: still in front of magpie, one line
+    assert cfg.read_text().count("# keepmum protect") == 1
     assert not clients.codex_disable(PORT)["on"]
     assert cfg.read_text() == CODEX
 
 
-def test_codex_selection_stays_on_its_own_line(home):
-    """keepmum's model_provider line takes the place of the user's, so `off` gives back the same file."""
+def test_codex_with_its_own_openai_url_gets_keepmum_in_front(home):
+    """Codex's own provider sent elsewhere by openai_base_url: keepmum goes in front of that address."""
     cfg = home / "codex" / "config.toml"
-    for text in ('model = "gpt-5.5"\n' + CODEX.replace('model = "deepseek/deepseek-v4-pro"\n', ""),
-                 '# my settings\nmodel = "gpt-5.5"\napproval_policy = "never"\n'):
-        cfg.write_text(text)
-        clients.codex_enable(PORT, adopter(home))
-        lines = cfg.read_text().splitlines()
-        want = 1 if "magpie" in text else 0
-        assert lines[want].startswith('model_provider = "keepmum"'), lines
-        clients.codex_enable(PORT, adopter(home))
-        assert cfg.read_text().splitlines()[want] == lines[want]
-        clients.codex_disable(PORT)
-        assert cfg.read_text() == text
+    text = '# mine\nopenai_base_url = "https://llm.corp.example/v1"\nmodel = "gpt-5.5"\n'
+    cfg.write_text(text)
+    with pytest.raises(ProtectError, match="puts keepmum in front"):
+        clients.codex_enable(PORT)  # without adopt: left alone, and said why
+    st = clients.codex_enable(PORT, adopter(home))
+    lines = cfg.read_text().splitlines()
+    assert st["on"] and st["via"] == "https://llm.corp.example/v1"
+    assert lines[1].startswith(f'openai_base_url = "http://127.0.0.1:{PORT}/gateway/') and lines[1].endswith(
+        '# keepmum protect (was "https://llm.corp.example/v1")')  # in the place of the user's line
+    clients.codex_disable(PORT)
+    assert cfg.read_text() == text
+
+
+def test_codex_from_an_earlier_version_in_front_of_a_gateway_moves_over(home):
+    """Up to 0.1.0a12 keepmum selected a provider of its own in front of the gateway; it moves to
+    pointing the gateway's provider at keepmum, and keeps its own for the conversations it started."""
+    cfg = home / "codex" / "config.toml"
+    old = CODEX.replace('model_provider = "magpie"', 'model_provider = "keepmum"  # keepmum protect (was "magpie")') + (
+        "\n# >>> keepmum protect: routes Codex through keepmum; `keepmum protect off` removes this block\n"
+        "# keepmum protect: on since 2026-11-15T10:00:00-08:00\n[model_providers.keepmum]\nname = \"keepmum\"\n"
+        f'base_url = "{ROUTE}/v1"\nenv_key = "MAGPIE_KEY"\nwire_api = "responses"\nsupports_websockets = false\n'
+        "# <<< keepmum protect\n")
+    cfg.write_text(old)
+    assert clients.codex_status(PORT, {"local-3425": MAGPIE})["on"]
+    st = clients.codex_upgrade(PORT, adopter(home))
+    data = tomllib.loads(cfg.read_text())
+    assert st["on"] and data["model_provider"] == "magpie" and data["model_providers"]["magpie"]["base_url"] == f"{ROUTE}/v1"
+    legacy = data["model_providers"]["keepmum"]  # the gateway's settings, through keepmum
+    assert legacy["base_url"] == f"{ROUTE}/v1" and legacy["env_key"] == "MAGPIE_KEY" and legacy["supports_websockets"] is False
+    clients.codex_disable(PORT)
+    data = tomllib.loads(cfg.read_text())  # off: both straight to magpie
+    assert data["model_providers"]["magpie"]["base_url"] == data["model_providers"]["keepmum"]["base_url"] == f"{MAGPIE}/v1"
+    assert cfg.read_text().startswith(CODEX)
 
 
 def test_codex_chat_completions_and_local_models_are_refused(home):
@@ -194,10 +218,10 @@ def test_codex_chat_completions_and_local_models_are_refused(home):
 
 def test_one_codex_run_goes_in_front_of_its_provider(home):
     (home / "codex" / "config.toml").write_text(CODEX)
-    provider, extra = clients.codex_run_provider(9999, {})
-    assert extra == {"local-3425": MAGPIE} and provider["base_url"] == "http://127.0.0.1:9999/gateway/local-3425/v1"
-    provider, extra = clients.codex_run_provider(9999, {"magpie": MAGPIE})
-    assert extra == {} and provider["base_url"] == "http://127.0.0.1:9999/gateway/magpie/v1"
+    args, extra = clients.codex_run_args(9999, {})
+    assert extra == {"local-3425": MAGPIE} and args == ["-c", 'model_providers.magpie.base_url="http://127.0.0.1:9999/gateway/local-3425/v1"']
+    args, extra = clients.codex_run_args(9999, {"magpie": MAGPIE})
+    assert extra == {} and args == ["-c", 'model_providers.magpie.base_url="http://127.0.0.1:9999/gateway/magpie/v1"']
 
 
 def test_pi_and_opencode_go_through_keepmum_to_their_gateways(home):

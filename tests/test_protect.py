@@ -248,3 +248,87 @@ def test_wrapper_runs_claude_directly_in_an_excluded_project(tmp_path):
     r = subprocess.run([wrapper, sys.executable, "-c", "import os; print(os.environ.get('ANTHROPIC_BASE_URL'))"],
                        env=env, cwd=proj, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0 and r.stdout == "None\n" and r.stderr == ""  # no proxy started, nothing injected
+
+
+def test_off_switches_running_sessions_at_once_then_takes_its_line_out(claude_dir, monkeypatch):
+    """A running Claude Code takes a new value at once but keeps the last one when the key is removed
+    (Claude Code 2.1.310 and 2.1.330). So `off` sets where keepmum forwarded, which reads as plain off,
+    and takes the line out once the sessions that read keepmum's value have ended."""
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text(json.dumps({"model": "opus"}))
+    protect.enable(7788)
+    running = {"n": 2}
+    monkeypatch.setattr(protect, "claude_sessions_since", lambda when: running["n"])
+    st = protect.disable(7788, upstream="https://api.anthropic.com")
+    assert settings(claude_dir) == {"model": "opus", "env": {"ANTHROPIC_BASE_URL": "https://api.anthropic.com"}}
+    assert not st.on and st.value is None and st.as_dict()["base_url"] is None  # off, not "another gateway"
+    assert protect.status(7788).value is None  # still running: the line stays
+    running["n"] = 0
+    assert protect.status(7788).value is None and settings(claude_dir) == {"model": "opus"}  # gone: so is the line
+    assert not protect._off_file().exists()
+
+
+def test_on_after_off_is_not_taken_for_another_gateway(claude_dir, monkeypatch):
+    monkeypatch.setattr(protect, "claude_sessions_since", lambda when: 1)
+    protect.enable(7788)
+    protect.disable(7788, upstream="https://api.anthropic.com")
+    st = protect.enable(7788)  # no adopt: Anthropic is not a gateway to put keepmum in front of
+    assert st.on and settings(claude_dir) == {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:7788"}}
+    assert not protect._off_file().exists()
+
+
+def test_off_uses_keepmums_upstream_and_leaves_a_changed_value_alone(claude_dir, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".config" / "keepmum").mkdir(parents=True)
+    (tmp_path / ".config" / "keepmum" / "config.toml").write_text('[server]\nupstream = "https://llm.example"\n')
+    monkeypatch.setattr(protect, "claude_sessions_since", lambda when: None)  # ps cannot say: kept
+    protect.enable(7788)
+    protect.disable(7788)
+    assert settings(claude_dir)["env"]["ANTHROPIC_BASE_URL"] == "https://llm.example"
+    assert not protect.tidy()
+    (claude_dir / "settings.json").write_text(json.dumps({"env": {"ANTHROPIC_BASE_URL": "https://mine.example"}}))
+    assert not protect.tidy() and not protect._off_file().exists()  # someone else's now: left, and forgotten
+    assert protect.status(7788).value == "https://mine.example"
+    (tmp_path / ".config" / "keepmum" / "config.toml").write_text("[server\n")  # unreadable: Anthropic's default
+    assert protect._upstream() == "https://api.anthropic.com"
+
+
+def test_tidy_with_a_broken_settings_file_or_no_note_does_nothing(claude_dir):
+    assert not protect.tidy()
+    protect._note_off("https://api.anthropic.com")
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text("{broken")
+    assert not protect.tidy() and protect._off_file().exists()
+    protect._off_file().write_text("[1]")
+    assert protect._switched_off() is None
+
+
+def test_claude_sessions_are_counted_from_ps(monkeypatch):
+    monkeypatch.undo()  # conftest stubs the counter for every test; this one checks the real one
+    out = ("Sat Nov 21 12:58:50 2026     /Users/me/.vscode/extensions/anthropic.claude-code-2.1.330/resources/native-binary/claude --output-format stream-json\n"
+           "Sat Nov 21 13:00:00 2026     claude\n"
+           "Sat Nov 21 13:00:01 2026     /Users/me/.local/share/claude/versions/2.1.310 -p hi\n"
+           "Sat Nov 21 14:00:00 2026     claude --resume\n"  # started after: never read keepmum's value
+           "Sat Nov 21 12:00:00 2026     /Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/x\n"
+           "Sat Nov 21 12:00:00 2026     /usr/bin/python3 claude.py\n"
+           "Xxx Nov 99 12:00:00 2026     claude\nnot a ps line\n")
+    from datetime import datetime
+
+    when = datetime(2026, 11, 21, 13, 30).timestamp()
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, out, ""))
+    assert protect.claude_sessions_since(when) == 3
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "no"))
+    assert protect.claude_sessions_since(when) is None
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError("no ps")))
+    assert protect.claude_sessions_since(when) is None
+
+
+def test_a_note_that_cannot_be_written_or_removed_is_no_error(monkeypatch, tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    monkeypatch.setattr(protect, "_off_file", lambda: blocker / "sub" / "claude-off.json")  # under a file
+    protect._note_off("https://api.anthropic.com")
+    protect._forget_off()
+    monkeypatch.setattr(protect, "_off_file", lambda: tmp_path)  # a folder: unlink fails
+    protect._forget_off()
+    assert protect._switched_off() is None

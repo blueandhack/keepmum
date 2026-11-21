@@ -911,7 +911,9 @@ def tool_note(name: str | None) -> str:
 
 def _call_name(item: dict) -> str | None:
     """A call's tool: its name, or what a built-in call does (a local_shell_call's action: exec)."""
-    name = item.get("name")
+    from .tools import item_name
+
+    name = item_name(item) or None
     if not name and isinstance(item.get("action"), dict):
         name = item["action"].get("type")
     return name if isinstance(name, str) else None

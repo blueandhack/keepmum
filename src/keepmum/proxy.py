@@ -3,7 +3,7 @@
 Fail closed everywhere. A request is forwarded only after it was scanned; if scanning fails,
 the body is malformed or compressed in a way keepmum cannot read, or the endpoint is one keepmum
 does not scan, the request goes nowhere and the client gets an API-style error. WebSocket
-upgrades are refused (Codex then falls back to HTTPS). Logs carry paths, statuses and counts,
+upgrades are refused with 426 Upgrade Required, on which Codex goes on over HTTPS at once. Logs carry paths, statuses and counts,
 never bodies, values or headers.
 
 Observe mode (`detect.observe`) is the exception, chosen by the user: every request is scanned
@@ -25,9 +25,10 @@ text, so they pass through unscanned; so do Antigravity's own (`ANTIGRAVITY_META
 agy 1.5.3: a project id or a trajectory id). Any other Code Assist method is blocked. Vertex AI is not
 scanned: `keepmum gemini` points it at /vertex, which refuses every request.
 
-opencode keeps one OpenAI base URL for both logins, so an /openai/v1 request that carries a
-ChatGPT account (`chatgpt-account-id`) goes to chatgpt.com/backend-api/codex instead: a ChatGPT
-token is only good there. Scanned bodies bound for chatgpt.com are sent zstd-compressed, as
+Codex (its built-in provider, pointed at keepmum by `openai_base_url`) and opencode keep one OpenAI
+base URL for both logins, so an /openai/v1 request that carries a ChatGPT account
+(`chatgpt-account-id`), or a ChatGPT token (a JWT, where an API key is `sk-…`), goes to
+chatgpt.com/backend-api/codex instead: a ChatGPT token is only good there. Scanned bodies bound for chatgpt.com are sent zstd-compressed, as
 Codex sends them; that backend refuses large uncompressed ones.
 """
 
@@ -192,6 +193,12 @@ class Target:
     api: str | None
 
 
+def _chatgpt_token(request: Request) -> bool:
+    """A ChatGPT login's access token (a JWT, three base64url parts), where an API key is `sk-…`."""
+    auth = request.headers.get("authorization", "")
+    return auth[:7].lower() == "bearer " and auth[7:].startswith("eyJ") and auth.count(".") == 2
+
+
 def api_of(path: str, prefix: str = "") -> str | None:
     """The API whose body keepmum scans at `path` behind `prefix`, "metadata" for Code Assist
     calls that pass through, or None: not an endpoint keepmum knows."""
@@ -213,6 +220,8 @@ def api_of(path: str, prefix: str = "") -> str | None:
         return "messages"
     if path.endswith("/responses") or path.endswith("/responses/compact"):
         return "responses"
+    if path.endswith("/alpha/search"):
+        return "search"  # Codex's web tool (redact_search_request)
     return None
 
 
@@ -372,22 +381,25 @@ class Proxy:
         if path.startswith("/_keepmum/"):
             return self._local(request, path)
         if request.headers.get("upgrade"):
-            # Without a WebSocket library uvicorn hands an upgrade over as a plain GET: refuse it
-            # here too, so it is never forwarded. Clients fall back to HTTPS.
-            return api_error(403, "permission_error", "keepmum does not scan WebSockets; use HTTPS")
+            # uvicorn hands an upgrade over as a plain GET (launch.py: ws="none"): refuse it here, so
+            # it is never forwarded. 426 is the answer on which Codex switches the session to HTTPS
+            # at once (core/src/client.rs, 0.169), with no retry; other clients fall back too.
+            return api_error(426, "invalid_request_error", "keepmum does not scan WebSockets; use HTTPS")
         if path.startswith("/vertex/"):
             self._record(path, "blocked", 403, origin=self._origin(request, Target("google", "", path, None)))
             return api_error(403, "permission_error", "keepmum does not scan Vertex AI, so nothing was sent; "
                              "sign in to Gemini CLI with an API key or with Google")
         if path.startswith(ROUTE):
             self._observe()  # re-reads the config file if it changed: `protect on` may have just added this gateway
-        t = self.target(path, "chatgpt-account-id" in request.headers)
+        t = self.target(path, "chatgpt-account-id" in request.headers or _chatgpt_token(request))
         if path.startswith(ROUTE) and not t.base:
             self._record(path, "blocked", 404, origin=self._origin(request, t))
             return api_error(404, "not_found_error", f"no gateway named {path[len(ROUTE):].split('/')[0]!r} "
                              "([gateways] in ~/.config/keepmum/config.toml), so nothing was sent")
         if t.api == "metadata" and request.method == "POST":
             return await self._forward_raw(request, t, await request.body(), note="Code Assist setup, no content")
+        if t.api == "search" and request.method == "POST":
+            return await self._search(request, t)
         if t.api and request.method == "POST":
             return await self._scanned(request, t)
         body = await request.body()
@@ -636,6 +648,46 @@ class Proxy:
         log.info("%s -> %d redacted=%s restored=%s scan=%.0fms", path, resp.status_code, dict(counts), dict(restored), scan_ms)
         return Response(content, status_code=resp.status_code, headers=self._response_headers(resp))
 
+    async def _search(self, request: Request, t: Target) -> Response:
+        """Codex's web tool: its request masked (redact_search_request), and its results back as they
+        came, to go to the model as the tool's output, which the next request scans like any. The
+        checks look at the conversation in the requests to the model, not here."""
+        path, origin = request.url.path, self._origin(request, t)
+        raw = await request.body()
+        if self._observe():
+            return await self._observed(request, t, raw)
+        try:
+            body = json.loads(decode_body(raw, request.headers.get("content-encoding", "")))
+            if not isinstance(body, dict):
+                raise ValueError("not an object")
+        except Exception:
+            self._record(path, "rejected", 400, origin=origin)
+            return api_error(400, "invalid_request_error", "request body is not a JSON object keepmum can read; nothing was sent")
+        started = time.perf_counter()
+        try:
+            masked, counts, new, found, _ = await anyio.to_thread.run_sync(self._redact, body, t.api, origin)
+        except Exception as e:  # any detector or redaction failure: block, never send raw
+            log.error("blocked %s: scan failed (%s)", path, failure(e))
+            self._record(path, "blocked", 500, origin=origin)
+            return api_error(500, "api_error", "could not scan this request, so it was not sent")
+        scan_ms = (time.perf_counter() - started) * 1000
+        payload = json.dumps(masked, ensure_ascii=False).encode("utf-8", "replace")
+        headers = self._headers(request)
+        if t.base == self.prefixed["/chatgpt"]:
+            import zstandard
+
+            payload = zstandard.ZstdCompressor().compress(payload)
+            headers.append(("content-encoding", "zstd"))
+        try:
+            resp = await self.client.post(self._url(request, t), headers=headers, content=payload)
+        except httpx.HTTPError as e:
+            log.error("upstream error on %s: %s", path, type(e).__name__)
+            self._record(path, "upstream_error", 502, scan_ms, counts, new=new, origin=origin, found=found)
+            return api_error(502, "api_error", f"upstream request failed ({type(e).__name__})")
+        self._record(path, "forwarded", resp.status_code, scan_ms, counts, new=new, origin=origin, found=found)
+        log.info("%s -> %d (web search) redacted=%s scan=%.0fms", path, resp.status_code, dict(counts), scan_ms)
+        return Response(resp.content, status_code=resp.status_code, headers=self._response_headers(resp))
+
     async def _observed(self, request: Request, t: Target, raw: bytes) -> Response:
         """Observe mode: count what masking would have done, then send the request unchanged."""
         path, origin = request.url.path, self._origin(request, t)
@@ -721,6 +773,8 @@ class Proxy:
             self.redactor.values = self._values()
             if api == "responses":
                 masked = self.redactor.redact_responses_request(body)
+            elif api == "search":
+                masked = self.redactor.redact_search_request(body)
             elif api in ("gemini", "gemini-plain"):
                 masked = self.redactor.redact_gemini_request(body, hint=api == "gemini")
             else:

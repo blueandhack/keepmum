@@ -12,7 +12,7 @@ from .detect import Span
 from .detect.merge import narrow
 from .detect.merge import merge
 from .encode import json_strings
-from .tools import call_name, server_of
+from .tools import call_name, item_name, server_of
 from .vault import PLACEHOLDER, Vault
 
 # Signed or binary blocks are resent exactly as the API produced them.
@@ -153,7 +153,7 @@ def _caller(item: dict) -> str:
             value = json.loads(item["arguments"])
         except ValueError:
             value = None
-    return script_caller(item["name"], value)
+    return script_caller(item_name(item), value)
 
 
 def script_caller(name: str, value) -> str:
@@ -640,6 +640,22 @@ class Redactor:
                            and i.get("type") in ("function_call", "custom_tool_call")
                            and isinstance(i.get("call_id"), str) and isinstance(i.get("name"), str)}
             out["input"] = [RESPONSES_HINT, *(self._responses_item(i) for i in items)]
+        return out
+
+    def redact_search_request(self, body: dict) -> dict:
+        """A copy of Codex's web search request (/alpha/search, Codex 0.169) masked: `input`, the
+        conversation's last messages, as a /responses body's; `commands` (queries, pages to open,
+        patterns to find) and `settings` (a location, allowed domains) value by value. Its id,
+        model and limits pass."""
+        out = dict(body)
+        items = out.get("input")
+        if isinstance(items, str):
+            out["input"] = self.redact_text(items)
+        elif isinstance(items, list):
+            out["input"] = [self._responses_item(i) for i in items]
+        for key in ("commands", "settings"):
+            if key in out:
+                out[key] = self._values(out[key])
         return out
 
     def _responses_item(self, item):

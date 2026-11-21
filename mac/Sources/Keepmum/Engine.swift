@@ -368,7 +368,7 @@ final class Engine {
         var on: Bool?
         var error: String?
         /// On, but some of its traffic still goes around keepmum (opencode 1.x with a ChatGPT login,
-        /// or Codex processes started before it was switched on, which need a restart).
+        /// or a Codex conversation open since before it was switched on, until that one is closed).
         var warning: String?
         /// Another gateway the user set for this tool: turning protection on puts keepmum in front of it.
         var other: OtherValue?

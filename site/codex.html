@@ -74,7 +74,7 @@
      "name": "Does keepmum change my Codex config?",
      "acceptedAnswer": {
       "@type": "Answer",
-      "text": "keepmum codex does not: its settings apply to that run only. keepmum protect on does: it adds a keepmum model provider to ~/.codex/config.toml and selects it, after backing the file up, and keepmum protect off removes only what it added."
+      "text": "keepmum codex does not: its settings apply to that run only. keepmum protect on does: it points Codex’s own OpenAI provider at keepmum with one marked line in ~/.codex/config.toml (openai_base_url), after backing the file up, and keepmum protect off removes only what it added. Nothing needs restarting: every Codex conversation that starts or reopens after that goes through keepmum."
      }
     },
     {
@@ -135,15 +135,15 @@ REDIS_URL=redis://default:KEEPMUM_SECRET_51d8f3b0@cache.internal:6379</code></pr
     <h3>The terminal: one session</h3>
     <p>With the <a href="https://github.com/blueandhack/keepmum#install" target="_blank" rel="noopener">command line installed</a>, start Codex through keepmum. It works with a ChatGPT login or an API key, and arguments pass through to <code>codex</code>.</p>
     <pre><code>keepmum codex</code></pre>
-    <p>For that run only, keepmum adds a model provider pointed at itself, with your existing login and WebSockets off (keepmum can’t scan them, so it refuses them, and Codex uses HTTPS). Your Codex config file is not changed.</p>
+    <p>For that run only, keepmum points Codex’s own OpenAI provider at itself, with your existing login. Codex tries a WebSocket first; keepmum can’t scan those, so it refuses it, and Codex goes on over HTTPS at once. Your Codex config file is not changed.</p>
 
     <h3>The command line: every session</h3>
     <pre><code>keepmum serve                       <span class="cmt"># the proxy, on http://127.0.0.1:7788</span>
 keepmum protect on --client codex   <span class="cmt"># Codex now sends every session to it</span></code></pre>
-    <p><code>keepmum protect on</code> adds a marked <code>[model_providers.keepmum]</code> block to <code>~/.codex/config.toml</code> and sets <code>model_provider = "keepmum"</code>, after backing the file up. <code>keepmum protect off</code> removes only what it added. Codex picks the change up when it next starts. Without <code>--client</code>, it protects the other agents you have installed too (Claude Code, pi, opencode). <code>keepmum serve</code> must keep running while protection is on; the Mac app runs it at login.</p>
+    <p><code>keepmum protect on</code> adds one marked line to <code>~/.codex/config.toml</code>, <code>openai_base_url</code>, after backing the file up, and <code>keepmum protect off</code> removes only what it added. Nothing needs restarting: Codex reads its config as each conversation starts or reopens, so every new conversation goes through keepmum, in a terminal, an editor or the Codex app already running, and an older one does when it is reopened. A conversation open at the moment you switch keeps its route until it is closed, and keepmum says how many still are. Without <code>--client</code>, it protects the other agents you have installed too (Claude Code, pi, opencode). <code>keepmum serve</code> must keep running while protection is on; the Mac app runs it at login.</p>
 
     <h3>With a gateway you already use</h3>
-    <p>If Codex already goes through a gateway (LiteLLM, OpenRouter, a company proxy), <code>keepmum protect on</code> puts keepmum in front of it. keepmum’s provider copies yours, its key variable, headers and auth, with only the address changed, so the gateway still picks models and accounts and only ever receives placeholders. A provider with <code>wire_api = "chat"</code> is refused, because keepmum doesn’t scan Chat Completions.</p>
+    <p>If Codex already goes through a gateway (LiteLLM, OpenRouter, a company proxy), <code>keepmum protect on</code> puts keepmum in front of it. Your provider keeps its key variable, headers and auth, with only its address pointed at keepmum’s route to the gateway (<code>off</code> puts it back), so the gateway still picks models and accounts and only ever receives placeholders. A provider with <code>wire_api = "chat"</code> is refused, because keepmum doesn’t scan Chat Completions.</p>
 
     <h3>Check that it works</h3>
     <pre><code>keepmum doctor          <span class="cmt"># every line should be ✓</span>
@@ -181,7 +181,7 @@ keepmum selftest        <span class="cmt"># fails if a test secret gets past kee
     <h3>Does it work with a ChatGPT login?</h3>
     <p>Yes. <code>keepmum codex</code> works with a ChatGPT login or an API key, and keeps the login you already have.</p>
     <h3>Does keepmum change my Codex config?</h3>
-    <p><code>keepmum codex</code> does not: its settings apply to that run only. <code>keepmum protect on</code> does: it adds a keepmum model provider to <code>~/.codex/config.toml</code> and selects it, after backing the file up, and <code>keepmum protect off</code> removes only what it added.</p>
+    <p><code>keepmum codex</code> does not: its settings apply to that run only. <code>keepmum protect on</code> does: it points Codex’s own OpenAI provider at keepmum with one marked line in <code>~/.codex/config.toml</code> (<code>openai_base_url</code>), after backing the file up, and <code>keepmum protect off</code> removes only what it added. Nothing needs restarting: every Codex conversation that starts or reopens after that goes through keepmum.</p>
     <h3>How much slower is Codex with keepmum?</h3>
     <p>About 100 to 145 ms a request at the 95th percentile for 4K tokens of new text; earlier turns are cached. With the rules alone (<code>keepmum model off</code>), 8 to 9 ms.</p>
 

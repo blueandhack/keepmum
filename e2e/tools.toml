@@ -13,7 +13,8 @@
 # connectors, claude.ai's) are not in CI and not listed.
 #
 # MCP tools are not listed: an agent names them `mcp__<server>__<tool>`, and keepmum holds every one
-# to the server's [restore] setting ("own" by default). Codex's code mode does not even declare them
+# to the server's [restore] setting ("own" by default). Codex 0.169 sends one as a group and a name
+# (`namespace: "mcp__cua_repl", name: "js"`), which keepmum reads as mcp__cua_repl__js. Codex's code mode does not even declare them
 # to the model (they are "deferred": on the `tools` object, and in `ALL_TOOLS`).
 
 [codex]
@@ -31,6 +32,7 @@
 "exec:get_goal" = "reads that goal (0.167): no values"
 "exec:update_goal" = "sets the goal's status (0.167): restored as text"
 "exec:image_gen__imagegen" = "makes or edits an image (0.169, API keys too; not offered in 0.170): its prompt and the images it names go to OpenAI's image service, so placeholders are kept (restore.DEFAULT_POLICY image_gen__*); a path that names a masked file keeps its placeholder, so that image cannot be edited this way"
+"exec:web__run" = "Codex's web tool (0.169 with its own OpenAI provider, which `keepmum protect` now points at keepmum): searches and opens pages at OpenAI (/alpha/search, which keepmum scans: the conversation's last messages and the queries go masked); placeholders kept in what the model writes for it (restore.DEFAULT_POLICY web__*)"
 "exec:request_plugin_install" = "asks the user to install a plugin from Codex's recommended list (0.169; not offered in 0.170): installs nothing itself, its reason is shown to the user, restored as text; a plugin the user accepts is in ~/.codex/config.toml, which keepmum's extension watch reads"
 "wait" = "waits on a running exec script: no values"
 "request_user_input" = "asks the user a question: restored"

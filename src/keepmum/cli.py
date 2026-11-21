@@ -164,35 +164,33 @@ def codex(ctx: typer.Context) -> None:
     import os
     import shutil
 
-    from .clients import codex_args
+    from .clients import codex_run_args
     from .launch import BackgroundServer, _run_child, log_to_file, shared_serve_port
+    from .protect import ProtectError
 
     binary = shutil.which("codex")
     if binary is None:
         typer.echo("keepmum codex: `codex` is not on PATH", err=True)
         raise typer.Exit(2)
-    from .clients import codex_run_provider
-    from .protect import ProtectError
-
     cfg = _config()
     _extension_news()
     try:
-        # In front of the provider Codex's config selects, when that is another gateway.
-        provider, extra = codex_run_provider(cfg.port, cfg.gateways)
+        # In front of the gateway Codex's config points at, if it points at one.
+        args, extra = codex_run_args(cfg.port, cfg.gateways)
     except ProtectError as e:
         typer.echo(f"keepmum codex: {e}", err=True)
         raise typer.Exit(2)
     # The service knows the gateways in the config; one it does not know needs a proxy of its own.
     port = None if extra else shared_serve_port(cfg, need="responses")
     if port is not None:
-        raise typer.Exit(_run_child([binary, *codex_args(port, provider), *ctx.args], dict(os.environ)))
+        raise typer.Exit(_run_child([binary, *args, *ctx.args], dict(os.environ)))
     cfg, proxy = _proxy_or_exit(None, False, None, "codex", gateways=extra)
     log_to_file(cfg.log_level)
     server = BackgroundServer(proxy)
     server.start()
     try:
-        provider, _ = codex_run_provider(server.port, {**cfg.gateways, **extra})
-        code = _run_child([binary, *codex_args(server.port, provider), *ctx.args], dict(os.environ))
+        args, _ = codex_run_args(server.port, {**cfg.gateways, **extra})
+        code = _run_child([binary, *args, *ctx.args], dict(os.environ))
     finally:
         server.stop()
     raise typer.Exit(code)
@@ -303,6 +301,7 @@ def serve(
         pass
     if log_file:
         log_to_file(cfg.log_level)
+        _upgrade_codex(cfg)
     else:
         logging.basicConfig(level=cfg.log_level.upper(), format="keepmum: %(message)s")
         # Only keepmum decides what is logged: libraries would print URLs and request details.
@@ -319,6 +318,29 @@ def serve(
         pass
     finally:
         server.stop()
+
+
+def _upgrade_codex(cfg) -> None:
+    """The background service, starting: a Codex config an earlier keepmum pointed at itself moves
+    to this version's way, protection unchanged (clients.codex_upgrade), so updating keepmum is
+    enough. A failure is logged, never fatal: the old way still goes through keepmum."""
+    import logging
+
+    from .clients import codex_upgrade
+    from .config import config_file
+    from .gateway import Adopter
+
+    log = logging.getLogger("keepmum")
+    adopt = Adopter(cfg.port, cfg.gateways, lambda name, url: _update_config(
+        cfg.path or config_file(), "gateways", name, url, "keepmum serve: Codex's gateway"))
+    try:
+        st = codex_upgrade(cfg.port, adopt)
+    except Exception as e:  # noqa: BLE001 - the service starts whatever happens here
+        log.warning("Codex's config was not updated to this version's way: %s", e)
+        return
+    if st is not None:
+        log.info("Codex's config now points its own provider at keepmum: every conversation it starts or "
+                 "reopens goes through keepmum (%s)", "on" if st.get("on") else "off")
 
 
 @app.command()
@@ -417,9 +439,11 @@ def protect(
         if st.get("warning"):
             typer.echo(f"{'':12} warning: {st['warning']}", err=True)
     if action == "on":
-        typer.echo("Claude Code sessions switch now; Codex, pi and opencode pick it up when they next start.", err=True)
+        typer.echo("Claude Code sessions switch now, and every Codex conversation that starts or reopens; "
+                   "pi and opencode pick it up when they next start.", err=True)
     elif action == "off":
-        typer.echo("Sessions already running keep using keepmum until they restart.", err=True)
+        typer.echo("Claude Code sessions switch at once, running ones too; Codex conversations already open keep "
+                   "using keepmum until they end.", err=True)
     if any(st.get("error") for st in result.values()):
         raise typer.Exit(1)
 

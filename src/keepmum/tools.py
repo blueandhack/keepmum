@@ -74,6 +74,17 @@ def call_name(name: str, args) -> str:
     return name
 
 
+def item_name(item: dict) -> str:
+    """A Responses call's tool, as code mode names it: Codex 0.169 sends a tool of a group as
+    `namespace: "mcp__cua_repl", name: "js"`, which is `mcp__cua_repl__js` (its web tool:
+    `web__run`); the default group, `functions`, adds nothing."""
+    name = item.get("name") if isinstance(item.get("name"), str) else ""
+    namespace = item.get("namespace")
+    if isinstance(namespace, str) and namespace and namespace != "functions" and name:
+        return f"{namespace}__{name}"
+    return name
+
+
 def rule_key(server: str) -> str:
     """The `[restore]` key that covers every tool of a server."""
     return f"{server}__*" if server.startswith("mcp__") else server
@@ -120,6 +131,10 @@ def definitions(body: dict, api: str | None) -> list[tuple[str, str, object]]:
             t = t["function"]
         if api == "responses" and t.get("type") == "mcp" and t.get("server_label"):
             out.append((f"mcp__{t['server_label']}__*", t.get("server_description") or "", t.get("server_url")))
+        elif t.get("type") == "namespace" and isinstance(t.get("tools"), list):  # Codex's tool groups
+            out += [(item_name({**d, "namespace": t.get("name")}), d.get("description") or "",
+                     d.get("parameters", d.get("format"))) for d in t["tools"]
+                    if isinstance(d, dict) and isinstance(d.get("name"), str)]
         elif isinstance(t.get("name"), str):
             out.append((t["name"], t.get("description") or "",
                         t.get("input_schema", t.get("parameters", t.get("format")))))

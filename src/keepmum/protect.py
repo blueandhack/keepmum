@@ -2,9 +2,13 @@
 
 Sets `env.ANTHROPIC_BASE_URL` in Claude Code's user settings file. Claude Code reads that file in
 the terminal, VS Code, JetBrains and the desktop app, and a value there replaces the same
-variable exported in the shell. A running session picks up the change when the file is saved;
-removing it reaches only sessions started afterwards. Project settings can still override it,
-which `bypass_risks` reports.
+variable exported in the shell. A running session takes a new value as soon as the file is saved,
+but keeps the last one it read when the key is removed (seen Nov 21, 2026 with Claude Code 2.1.310
+and 2.1.330: a session switched A -> B at once, and stayed on B after the key went). So `off` does
+not remove keepmum's value while sessions that read it run: it sets the address keepmum forwarded
+to (Anthropic, or the gateway keepmum was in front of), which every running session takes at once,
+and the line goes once no session from before is left (`tidy`). Project settings can still
+override it, which `bypass_risks` reports.
 
 When it already sends Claude Code to another gateway (Magpie, LiteLLM), keepmum goes in front of it
 (gateway.py): the value becomes keepmum's route for that gateway, and `off` puts the gateway back.
@@ -94,7 +98,10 @@ def status(port: int, gateways: dict[str, str] | None = None) -> Status:
     from .gateway import is_ours, unroute
 
     path = settings_path()
+    tidy()
     value = _read(path).get("env", {}).get(KEY)
+    if value is not None and value == _switched_off():
+        value = None  # keepmum's own, from `off`: Claude Code goes where it would without keepmum
     via = unroute(value, port, _gateways() if gateways is None else gateways) if isinstance(value, str) else None
     return Status(path, is_ours(value, port), value, via)
 
@@ -108,6 +115,9 @@ def enable(port: int, adopt=None) -> Status:
     data = _read(path)
     env = data.setdefault("env", {})
     current = env.get(KEY)
+    if current is not None and current == _switched_off():
+        current = None  # what `off` set, not a gateway of the user's
+    _forget_off()
     want = keepmum_url(port)
     if current is not None and not is_ours(current, port):
         if adopt is None or not isinstance(current, str):
@@ -115,14 +125,16 @@ def enable(port: int, adopt=None) -> Status:
         want = adopt(current, "Claude Code")
     elif current is not None:
         want = current  # already keepmum's, straight or in front of a gateway
-    if current != want:
+    if env.get(KEY) != want:
         env[KEY] = want
         _write(path, data)
     return status(port, getattr(adopt, "gateways", None))
 
 
-def disable(port: int) -> Status:
-    """Take keepmum out: Claude Code goes back to the gateway keepmum was in front of, or to Anthropic."""
+def disable(port: int, upstream: str | None = None) -> Status:
+    """Take keepmum out: Claude Code goes back to the gateway keepmum was in front of, or to
+    `upstream` (Anthropic), running sessions too, at once. A value, not a removed key, is what a
+    running session takes; the line is keepmum's, and goes once the sessions from before are gone."""
     from .gateway import is_ours, unroute
 
     path = settings_path()
@@ -134,11 +146,114 @@ def disable(port: int) -> Status:
         if back:
             env[KEY] = back
         else:
-            del env[KEY]
-            if not env:
-                data.pop("env")
+            env[KEY] = upstream or _upstream()
+            _note_off(env[KEY])
         _write(path, data)
+        tidy()  # no session running from before: nothing to switch, and the line goes now
     return status(port)
+
+
+# --- After `off` ------------------------------------------------------------------------------
+
+def _off_file() -> Path:
+    return Path.home() / ".config" / "keepmum" / "claude-off.json"
+
+
+def _upstream() -> str:
+    try:
+        from .config import load
+
+        return load().upstream
+    except Exception:  # an unreadable config: where keepmum forwards by default
+        return "https://api.anthropic.com"
+
+
+def _note_off(value: str) -> None:
+    import time
+
+    f = _off_file()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        f.write_text(json.dumps({"value": value, "since": time.time()}))
+    except OSError:
+        pass
+
+
+def _off_note() -> dict | None:
+    try:
+        note = json.loads(_off_file().read_text())
+        return note if isinstance(note, dict) and isinstance(note.get("value"), str) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _switched_off() -> str | None:
+    """The value `off` set in place of keepmum's, while it is there to switch running sessions."""
+    note = _off_note()
+    return note["value"] if note else None
+
+
+def _forget_off() -> None:
+    try:
+        _off_file().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def claude_sessions_since(when: float) -> int | None:
+    """How many Claude Code processes started before `when` still run (the CLI, an editor's, the
+    desktop app's); None if `ps` cannot say."""
+    import re
+    import subprocess
+    from datetime import datetime
+
+    try:
+        res = subprocess.run(["ps", "-A", "-o", "lstart=,args="], capture_output=True, text=True, timeout=5,
+                             env={**os.environ, "LC_ALL": "C"})
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if res.returncode != 0:
+        return None
+    n = 0
+    for line in res.stdout.splitlines():
+        parts = line.split(None, 5)  # lstart is "Sat Nov 21 14:36:36 2026"
+        if len(parts) < 6:
+            continue
+        program = parts[5].split(" -", 1)[0].strip()
+        if not (re.search(r"(?:^|/)claude$", program) or "/claude/versions/" in program):
+            continue
+        try:
+            started = datetime.strptime(" ".join(parts[:5]), "%a %b %d %H:%M:%S %Y").timestamp()
+        except ValueError:
+            continue
+        n += started <= when
+    return n
+
+
+def tidy() -> bool:
+    """Take out the line `off` set once no Claude Code session from before it runs: one started
+    since never read keepmum's value, and the key gone, it goes wherever it would anyway. True if
+    taken out. Left as it is if it changed since (someone else's now), and while `ps` cannot tell."""
+    note = _off_note()
+    if note is None:
+        return False
+    path = settings_path()
+    try:
+        data = _read(path)
+    except ProtectError:
+        return False
+    env = data.get("env") if isinstance(data.get("env"), dict) else {}
+    if env.get(KEY) != note["value"]:
+        _forget_off()
+        return False
+    if claude_sessions_since(float(note.get("since") or 0)) != 0:
+        return False
+    del env[KEY]
+    if not env:
+        data.pop("env", None)
+    _write(path, data)
+    _forget_off()
+    return True
 
 
 # --- Excluded projects -----------------------------------------------------------------------

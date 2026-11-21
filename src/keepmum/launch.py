@@ -303,6 +303,14 @@ def _quiet_server(config):
     return Quiet(config) if hasattr(uvicorn.Server, "on_tick") else uvicorn.Server(config)
 
 
+class _RefusedUpgrades(logging.Filter):
+    """uvicorn's two warnings for an upgrade it hands to the proxy, which refuses it on purpose
+    (426): Codex asks for one at the start of every conversation."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not record.getMessage().startswith(("Unsupported upgrade request", "No supported WebSocket library"))
+
+
 class BackgroundServer:
     """uvicorn in a thread, on a socket bound before it starts (port 0 picks a free one)."""
 
@@ -314,7 +322,12 @@ class BackgroundServer:
         self.sock.bind(("127.0.0.1", port))
         self.port = self.sock.getsockname()[1]
         self.proxy = proxy
-        config = uvicorn.Config(proxy.app, log_level="warning", access_log=False, lifespan="off")
+        # ws="none": a WebSocket upgrade reaches the proxy as a plain request, which answers 426
+        # (proxy.py), whatever WebSocket library some other package installs.
+        config = uvicorn.Config(proxy.app, log_level="warning", access_log=False, lifespan="off", ws="none")
+        errors = logging.getLogger("uvicorn.error")
+        if not any(isinstance(f, _RefusedUpgrades) for f in errors.filters):
+            errors.addFilter(_RefusedUpgrades())
         self.server = _quiet_server(config)
         self.thread = threading.Thread(target=self.server.run, kwargs={"sockets": [self.sock]}, daemon=True)
 

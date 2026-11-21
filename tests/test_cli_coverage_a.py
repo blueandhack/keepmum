@@ -338,7 +338,7 @@ def test_codex_refuses_a_provider_it_cannot_put_keepmum_in_front_of(home, monkey
     def refuse(port, gateways):
         raise ProtectError("its provider is not one keepmum knows")
 
-    monkeypatch.setattr(clients, "codex_run_provider", refuse)
+    monkeypatch.setattr(clients, "codex_run_args", refuse)
     r = cli.invoke(app, ["codex"])
     assert r.exit_code == 2 and "keepmum codex: its provider is not one keepmum knows" in r.output
 
@@ -350,12 +350,11 @@ def test_codex_runs_its_own_proxy_for_a_gateway_the_config_does_not_know(home, m
     monkeypatch.setattr("shutil.which", lambda name: "/bin/" + name)
     calls = []
 
-    def provider(port, gateways):
+    def run_args(port, gateways):
         calls.append((port, dict(gateways)))
-        return {"base_url": f"http://127.0.0.1:{port}/corp"}, {"corp": "https://corp.example"}
+        return ["-c", f"http://127.0.0.1:{port}/corp"], {"corp": "https://corp.example"}
 
-    monkeypatch.setattr(clients, "codex_run_provider", provider)
-    monkeypatch.setattr(clients, "codex_args", lambda port, provider: ["-c", provider["base_url"]])
+    monkeypatch.setattr(clients, "codex_run_args", run_args)
     runs = []
     built = fake_launch(monkeypatch, runs=runs, code=3)
     r = cli.invoke(app, ["codex", "exec", "hi"])
@@ -414,6 +413,34 @@ def test_serve_starts_logs_to_a_file_and_stops_on_ctrl_c(home, monkeypatch):
     assert built[0]["rules_only"] is True and built[0]["upstream"] == "https://u.example" and built[0]["mode"] == "serve"
     handlers[signal.SIGTERM]()
     assert Server.last.server.should_exit is True
+
+
+def test_the_service_moves_an_earlier_codex_config_over_as_it_starts(home, monkeypatch, tmp_path, caplog):
+    """Updating keepmum is enough: the background service, starting, moves a Codex config an earlier
+    version pointed at keepmum to this version's way. A failure is logged and the service starts."""
+    from keepmum import cli as cli_module, clients
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    (tmp_path / "codex").mkdir()
+    cfg = tmp_path / "codex" / "config.toml"
+    cfg.write_text('model_provider = "keepmum"  # keepmum protect\n[model_providers.keepmum]\n'
+                   'base_url = "http://127.0.0.1:7788/openai/v1"\n')
+    with caplog.at_level("INFO", logger="keepmum"):
+        cli_module._upgrade_codex(cli_module._config())
+    assert cfg.read_text().startswith('openai_base_url = "http://127.0.0.1:7788/openai/v1"  # keepmum protect')
+    assert "now points its own provider at keepmum" in caplog.text
+    caplog.clear()
+    with caplog.at_level("INFO", logger="keepmum"):
+        cli_module._upgrade_codex(cli_module._config())  # nothing more to move: nothing said
+    assert caplog.text == ""
+
+    def broken(port, adopt):
+        raise RuntimeError("config.toml is busy")
+
+    monkeypatch.setattr(clients, "codex_upgrade", broken)
+    with caplog.at_level("WARNING", logger="keepmum"):
+        cli_module._upgrade_codex(cli_module._config())
+    assert "was not updated to this version's way: config.toml is busy" in caplog.text
 
 
 def test_serve_logs_to_stderr_and_quietens_the_http_libraries(home, monkeypatch):
@@ -485,7 +512,7 @@ def test_protect_off_and_json(home, monkeypatch):
     seen = []
     monkeypatch.setattr(clients, "protect_clients", lambda action, port, only, adopt=None: seen.append((only, adopt)) or result)
     r = cli.invoke(app, ["protect", "off", "--client", "claude"])
-    assert r.exit_code == 0 and "Claude Code  off\n" in r.output and "keep using keepmum until they restart" in r.output
+    assert r.exit_code == 0 and "Claude Code  off\n" in r.output and "Claude Code sessions switch at once" in r.output
     assert seen[0] == (["claude"], None)  # nothing is adopted when turning off
     assert [e["action"] for e in audit.read() if e.get("event") == "protect"] == ["off"]
     r = cli.invoke(app, ["protect", "--json"])

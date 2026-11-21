@@ -23,6 +23,7 @@ import secrets
 from collections import Counter
 
 from .restore import DEFAULT_POLICY, StreamRestorer, _hold_from, next_run, restore_reply, restore_tool
+from .tools import item_name
 from .vault import Vault
 
 
@@ -41,9 +42,9 @@ def restore_item(item, vault: Vault, policy: dict = DEFAULT_POLICY, counts: Coun
                                     if isinstance(c, dict) and isinstance(c.get("text"), str) else c
                                     for c in item["content"]]}
     if kind == "function_call" and isinstance(item.get("arguments"), str):
-        return {**item, "arguments": _restore_args(item["arguments"], item.get("name", ""), vault, policy, counts)}
+        return {**item, "arguments": _restore_args(item["arguments"], item_name(item), vault, policy, counts)}
     if kind == "custom_tool_call" and isinstance(item.get("input"), str):
-        return {**item, "input": restore_tool(item.get("name", ""), item["input"], vault, policy, counts)}
+        return {**item, "input": restore_tool(item_name(item), item["input"], vault, policy, counts)}
     if kind in ("local_shell_call", "shell_call"):
         return {**item, "action": restore_tool(kind.removesuffix("_call"), item.get("action"), vault, policy, counts)}
     if kind == "mcp_call" and isinstance(item.get("arguments"), str):
@@ -161,7 +162,7 @@ class ResponsesStreamRestorer(StreamRestorer):
             if item.get("type") in ("function_call", "custom_tool_call", "mcp_call"):
                 label = item.get("server_label") or ""
                 fn = item.get("name", "")
-                tool_name = (f"mcp__{label}__{fn}" if label else f"mcp__{fn}") if item.get("type") == "mcp_call" else fn
+                tool_name = (f"mcp__{label}__{fn}" if label else f"mcp__{fn}") if item.get("type") == "mcp_call" else item_name(item)
                 self._calls[item.get("id")] = {"name": tool_name, "parts": [], "last": None}
             return self._emit(name, {**data, "item": restore_item(item, v, p, again)})
         if kind in ("response.function_call_arguments.delta", "response.custom_tool_call_input.delta",

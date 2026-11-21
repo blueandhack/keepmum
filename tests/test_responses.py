@@ -1,6 +1,7 @@
 """The OpenAI Responses API path (Codex, pi): redaction, restore, streams, and the proxy routes."""
 
 import json
+import logging
 import secrets
 from collections import Counter
 
@@ -140,6 +141,102 @@ def test_network_tools_keep_placeholders():
     assert out["output"][9]["content"][0]["text"] == canary
     tools = {t["tool"]: t["action"] for t in take_tools(counts)}
     assert tools["mcp__docs__search"] == "keep" and tools["shell"] == "restore" and tools["webfetch"] == "keep"
+
+
+def test_codexs_grouped_tools_are_decided_by_their_whole_name():
+    """Codex 0.169 sends a tool of a group as namespace + name: `mcp__cua_repl` + `js` is an MCP
+    server's tool, which gets back only what it returned, and `web` + `run` its web tool, which keeps
+    placeholders. The default group, `functions`, is the tool's own name (exec still restores)."""
+    from keepmum.restore import take_tools
+
+    canary = selftest.make_canary()
+    r = redactor()
+    ph = PLACEHOLDER.search(r.redact_text(f"token {canary}")).group(0)
+    args = json.dumps({"code": f"type('{ph}')"})
+    counts = Counter()
+    body = {"output": [
+        {"type": "function_call", "namespace": "mcp__cua_repl", "name": "js", "arguments": args},
+        {"type": "function_call", "namespace": "web", "name": "run", "arguments": json.dumps({"search_query": [{"q": ph}]})},
+        {"type": "custom_tool_call", "namespace": "functions", "name": "exec", "input": f"text('{ph}')"},
+    ]}
+    out = restore_responses(body, r.vault, counts=counts)["output"]
+    assert ph in out[0]["arguments"] and ph in out[1]["arguments"] and canary in out[2]["input"]
+    tools = {t["tool"]: t["action"] for t in take_tools(counts)}
+    assert tools == {"mcp__cua_repl__js": "keep", "web__run": "keep", "exec": "restore"}  # not a value it returned
+
+    # Streamed, the same: the name comes with the item, before its arguments.
+    restorer = ResponsesStreamRestorer(r.vault)
+    chunk = sse({"type": "response.output_item.added", "item": {"type": "function_call", "id": "f", "namespace": "mcp__cua_repl", "name": "js"}},
+                {"type": "response.function_call_arguments.done", "item_id": "f", "arguments": args})
+    streamed = restorer.feed(chunk).decode()
+    assert ph in streamed and canary not in streamed
+
+
+def test_codexs_tool_groups_are_listed_tool_by_tool():
+    from keepmum.tools import definitions, item_name
+
+    body = {"tools": [{"type": "namespace", "name": "functions", "tools": [{"type": "custom", "name": "exec"}]},
+                      {"type": "namespace", "name": "mcp__cua_repl", "tools": [{"type": "function", "name": "js", "description": "d"}, 5]},
+                      {"type": "function", "name": "wait"}]}
+    assert [d[0] for d in definitions(body, "responses")] == ["exec", "mcp__cua_repl__js", "wait"]
+    assert item_name({"name": 5, "namespace": "x"}) == "" and item_name({"name": "js", "namespace": ""}) == "js"
+
+
+def test_codexs_web_search_is_masked_and_its_results_come_back_as_they_were():
+    """Codex's web tool (/alpha/search) carries the conversation's last messages and the queries:
+    masked on either login, then sent; what it finds goes back to Codex as it came."""
+    canary = selftest.make_canary()
+    mock = ResponsesMock()
+    jwt = "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln"
+    body = {"id": "s1", "model": "m", "max_output_tokens": 900,
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": f"GITHUB_TOKEN={canary}"}]}],
+            "commands": {"search_query": [{"q": f"is {canary} valid"}], "open": [{"ref_id": "https://keepmum.app"}]},
+            "settings": {"search_context_size": "low"}}
+
+    async def go():
+        _, client = make(mock)
+        ua = {"user-agent": "codex_vscode/0.169.0"}
+        chatgpt = await client.post("/openai/v1/alpha/search", json=body, headers={**ua, "authorization": jwt})
+        key = await client.post("/openai/v1/alpha/search", json=body, headers={**ua, "authorization": "Bearer sk-x"})
+        bad = await client.post("/openai/v1/alpha/search", content=b"[1]", headers=ua)
+        return chatgpt, key, bad
+
+    chatgpt, key, bad = anyio.run(go)
+    assert chatgpt.status_code == key.status_code == 200 and bad.status_code == 400
+    assert mock.paths == ["/backend-api/codex/alpha/search", "/v1/alpha/search"]
+    assert not any(canary.encode() in b for b in mock.received)
+    sent = json.loads(mock.received[1])
+    assert sent["id"] == "s1" and sent["model"] == "m" and sent["max_output_tokens"] == 900
+    assert sent["commands"]["open"] == [{"ref_id": "https://keepmum.app"}] and sent["settings"] == {"search_context_size": "low"}
+    assert PLACEHOLDER.search(sent["commands"]["search_query"][0]["q"]) and RESPONSES_HINT not in sent["input"]
+    assert "saw KEEPMUM_" in chatgpt.text  # the results, placeholders and all, as they came
+
+
+def test_codexs_web_search_fails_closed_and_is_only_counted_when_observing(monkeypatch):
+    from keepmum import proxy as proxy_mod
+
+    canary = selftest.make_canary()
+    mock = ResponsesMock()
+    body = {"id": "s", "model": "m", "input": f"look up {canary}"}
+
+    async def go(setup):
+        p, client = make(mock)
+        setup(p)
+        return await client.post("/openai/v1/alpha/search", json=body)
+
+    def broken(p):
+        p.redactor.detector.detect = lambda text: (_ for _ in ()).throw(RuntimeError("no model"))
+
+    def down(p):
+        async def fail(*a, **k):
+            raise httpx.ConnectError("down")
+        p.client.post = fail
+
+    assert anyio.run(go, broken).status_code == 500
+    assert anyio.run(go, down).status_code == 502
+    assert mock.received == []
+    observed = anyio.run(go, lambda p: setattr(p, "_observe", lambda: True))
+    assert observed.status_code == 200 and canary.encode() in mock.received[-1]  # observe sends it unchanged, as chosen
 
 
 def test_stream_mcp_call_keeps_placeholder_and_records_tool():
@@ -331,4 +428,82 @@ def test_an_upgrade_that_arrives_as_plain_http_is_not_forwarded():
         return await client.get("/openai/v1/responses", headers={"upgrade": "websocket", "connection": "Upgrade"})
 
     r = anyio.run(go)
-    assert r.status_code == 403 and mock.received == []
+    assert r.status_code == 426 and mock.received == []  # 426: Codex goes on over HTTPS at once
+
+
+def test_an_upgrade_through_the_real_server_gets_426():
+    """uvicorn hands an upgrade to the proxy (ws="none"), whatever WebSocket library is installed,
+    and says nothing about it: Codex asks for one at the start of every conversation."""
+    import socket
+
+    from keepmum import launch
+
+    mock = ResponsesMock()
+    proxy, _ = make(mock)
+    server = launch.BackgroundServer(proxy)
+    seen: list[str] = []
+    catch = logging.Handler()
+    catch.emit = lambda record: seen.append(record.getMessage())
+    errors = logging.getLogger("uvicorn.error")
+    errors.addHandler(catch)
+    server.start()
+    try:
+        with socket.create_connection(("127.0.0.1", server.port), timeout=5) as sock:
+            sock.sendall(b"GET /openai/v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
+                         b"Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                         b"Sec-WebSocket-Version: 13\r\n\r\n")
+            head = sock.recv(4096).split(b"\r\n", 1)[0]
+    finally:
+        server.stop()
+        errors.removeHandler(catch)
+    assert head.startswith(b"HTTP/1.1 426") and mock.received == []
+    assert not [m for m in seen if "upgrade" in m.lower() or "WebSocket library" in m], seen
+    errors.warning("Unsupported upgrade request.")  # the filter drops exactly these, at the logger
+    assert not launch._RefusedUpgrades().filter(logging.makeLogRecord({"msg": "Unsupported upgrade request."}))
+    assert launch._RefusedUpgrades().filter(logging.makeLogRecord({"msg": "Invalid HTTP request received."}))
+    launch.BackgroundServer(proxy).sock.close()  # a second server: the filter is not added twice
+    assert sum(isinstance(f, launch._RefusedUpgrades) for f in logging.getLogger("uvicorn.error").filters) == 1
+
+
+def test_codexs_own_provider_on_the_openai_route_goes_where_its_login_is_good():
+    """Codex's built-in provider pointed at keepmum (openai_base_url) sends both logins to /openai/v1:
+    a ChatGPT login, by its account header or its token (a JWT), goes on to chatgpt.com; an API key to
+    api.openai.com. Codex is told apart by its user agent, with no header of keepmum's."""
+    canary = selftest.make_canary()
+    mock = ResponsesMock()
+    jwt = "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln"
+
+    async def go():
+        _, client = make(mock)
+        ua = {"user-agent": "codex_vscode/0.169.0 (Mac OS 15.4; arm64)"}
+        account = await client.post("/openai/v1/responses", json=codex_body(canary),
+                                    headers={**ua, "chatgpt-account-id": "acct", "authorization": jwt})
+        token = await client.post("/openai/v1/responses", json=codex_body(canary), headers={**ua, "authorization": jwt})
+        key = await client.post("/openai/v1/responses", json=codex_body(canary),
+                                headers={**ua, "authorization": "Bearer sk-proj-abc"})
+        stats = (await client.get("/_keepmum/stats", headers={"authorization": "Bearer t"})).json()
+        return account, token, key, stats
+
+    account, token, key, stats = anyio.run(go)
+    assert account.status_code == token.status_code == key.status_code == 200
+    assert mock.paths == ["/backend-api/codex/responses", "/backend-api/codex/responses", "/v1/responses"]
+    assert not any(canary.encode() in b for b in mock.received)
+    assert {e["client"] for e in stats["recent"]} == {"codex"}
+
+
+def test_codexs_grouped_mcp_tool_gets_back_what_it_returned():
+    """A result of `mcp__cua_repl` + `js` is credited to mcp__cua_repl__js, so a value it returned (an
+    email: never a secret) goes back to it, and only to it."""
+    email = "dana.whitfield@acme-corp.io"
+    r = Redactor(Pipeline(RulesDetector(), None, pii=True), Vault(SALT))
+    masked = r.redact_responses_request({"input": [
+        {"type": "function_call", "namespace": "mcp__cua_repl", "name": "js", "call_id": "c1", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": f"signed in as {email}"},
+    ]})
+    ph = PLACEHOLDER.search(json.dumps(masked)).group(0)
+    args = json.dumps({"code": f"type('{ph}')"})
+    out = restore_responses({"output": [
+        {"type": "function_call", "namespace": "mcp__cua_repl", "name": "js", "arguments": args},
+        {"type": "function_call", "namespace": "mcp__other", "name": "js", "arguments": args},
+    ]}, r.vault)["output"]
+    assert email in out[0]["arguments"] and ph in out[1]["arguments"] and email not in out[1]["arguments"]
