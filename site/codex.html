@@ -101,7 +101,7 @@
       keepmum
     </a>
     <nav aria-label="Main">
-      <a class="hide-phone" href="https://github.com/blueandhack/keepmum">GitHub</a>
+      <a class="hide-phone" href="https://github.com/blueandhack/keepmum" target="_blank" rel="noopener">GitHub</a>
       <a class="btn small" href="/download">Download</a>
     </nav>
   </div>
@@ -133,7 +133,7 @@ REDIS_URL=redis://default:KEEPMUM_SECRET_51d8f3b0@cache.internal:6379</code></pr
     <p><a href="/download">Download the app</a>, drag it into Applications, open it and follow <strong>Settings › Setup</strong>: download the model, start the background service, and switch on protection for Codex.</p>
 
     <h3>The terminal: one session</h3>
-    <p>With the <a href="https://github.com/blueandhack/keepmum#install">command line installed</a>, start Codex through keepmum. It works with a ChatGPT login or an API key, and arguments pass through to <code>codex</code>.</p>
+    <p>With the <a href="https://github.com/blueandhack/keepmum#install" target="_blank" rel="noopener">command line installed</a>, start Codex through keepmum. It works with a ChatGPT login or an API key, and arguments pass through to <code>codex</code>.</p>
     <pre><code>keepmum codex</code></pre>
     <p>For that run only, keepmum adds a model provider pointed at itself, with your existing login and WebSockets off (keepmum can’t scan them, so it refuses them, and Codex uses HTTPS). Your Codex config file is not changed.</p>
 
@@ -172,7 +172,7 @@ keepmum selftest        <span class="cmt"># fails if a test secret gets past kee
       <li><strong>The Responses API only.</strong> Codex’s WebSocket transport is refused (it falls back to HTTPS), and Chat Completions requests are blocked, not sent unscanned.</li>
       <li><strong>Your local history keeps real values.</strong> Codex’s session files on your disk hold the restored conversation. keepmum protects what leaves your Mac, not what is stored on it.</li>
       <li><strong>Images and PDFs pass unscanned</strong>, and the local model is strongest on English.</li>
-      <li><strong>keepmum is alpha</strong> and not yet independently audited. <a href="https://github.com/blueandhack/keepmum#limitations">Every limitation, in full</a>.</li>
+      <li><strong>keepmum is alpha</strong> and not yet independently audited. <a href="https://github.com/blueandhack/keepmum#limitations" target="_blank" rel="noopener">Every limitation, in full</a>.</li>
     </ul>
 
     <h2>Questions</h2>
@@ -198,8 +198,8 @@ keepmum selftest        <span class="cmt"># fails if a test secret gets past kee
         <a href="/">Home</a>
         <a href="/claude-code">keepmum for Claude Code</a>
         <a href="/privacy">Privacy</a>
-        <a href="https://github.com/blueandhack/keepmum">GitHub</a>
-        <a href="https://github.com/blueandhack/keepmum/blob/main/LICENSE">License</a>
+        <a href="https://github.com/blueandhack/keepmum" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/blueandhack/keepmum/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
       </nav>
     </footer>
   </div>
