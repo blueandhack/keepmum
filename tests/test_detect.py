@@ -632,11 +632,31 @@ def test_a_key_in_a_sed_expression_is_masked_alone(rules):
     ("北京市朝阳区建国路88号\\n王芳,+86 139", "北京市朝阳区建国路88号\\n王芳", "PERSON", "王芳"),
     ("Ship to 10 Downing St, London SW1A 2AA", "10 Downing St, London SW1A 2AA", "ADDRESS", "10 Downing St, London SW1A 2AA"),
     ("Customers: Beijing (3), Shanghai (2), Shenzhen (1)", "Beijing (3), Shanghai", "ADDRESS", None),
+    # An email run over the domain written after it (data-01 on Claude Code, Nov 21).
+    ("- margaret.thornbury@gmail.com gmail.com: 6 tickets", "margaret.thornbury@gmail.com gmail.com", "EMAIL", "margaret.thornbury@gmail.com"),
+    ("Top: Margaret (margaret.thornbury@gmail.com) gmail.com", "(margaret.thornbury@gmail.com) gmail.com", "EMAIL", "margaret.thornbury@gmail.com"),
+    # City counts after a colon, in an agent's notes (i18n-01 on agy, Nov 21).
+    ("The city counts are: 北京: 3, 上海: 2, 深圳: 1, for a total of 6.", "北京: 3, 上海: 2, 深圳", "ADDRESS", None),
+    ("城市分布：北京：3，上海：2，深圳：1", "北京：3，上海：2，深圳", "ADDRESS", None),
 ])
 def test_personal_data_guesses_are_cut_or_dropped(rules, text, piece, kind, kept):
     pf = _FakePF([Span(text.index(piece), text.index(piece) + len(piece), kind, 0.9, "pf-serve")])
     got = values(text, Pipeline(rules, pf, pii=True).detect(text))
     assert (kept in got and piece not in [g for g in got if g != kept]) if kept else not any(piece in g for g in got)
+
+
+@pytest.mark.parametrize("text, guess", [
+    # A Slack channel the model called a secret (doc-01 on pi, Nov 21).
+    ("The rollout alerts will go to **#search-rollout**.", "#search-rollout"),
+    ("See #release-notes_2026 in the docs.", "#release-notes_2026"),
+])
+def test_a_channel_or_anchor_is_not_a_secret(rules, text, guess):
+    assert values(text, Pipeline(rules, _FakePF(_guess(text, guess)), pii=False).detect(text)) == []
+
+
+def test_a_secret_with_a_hash_in_front_is_still_one(rules):
+    text = "the admin password is #Tr0ub4dor&3x"
+    assert values(text, Pipeline(rules, _FakePF(_guess(text, "#Tr0ub4dor&3x")), pii=False).detect(text)) == ["#Tr0ub4dor&3x"]
 
 
 def test_a_token_followed_by_an_at_sign_is_masked_alone(rules):
@@ -757,6 +777,9 @@ def test_a_value_ends_at_an_escaped_new_line():
     "mkdir -p config && grep '^GITHUB_TOKEN=' .env > config/github.env && echo 'REGION=eu' >> config/github.env",
     'grep "^API_KEY=" .env | cut -d= -f2 > "out file"',
     '{"command": "grep \\"^DB_PASSWORD=\\" .env > x && echo \\"done\\""}',
+    # The quote after `:` closes a label a space-led string opened; code follows (cloud-01 on opencode).
+    "print('  ACCESS_KEY_USER:',a.get('user'))",
+    "line = 'API_TOKEN=' + token.strip() + '\\n'",
 ])
 def test_assignment_text_that_is_not_a_secret(rules, text):
     assert _assigned(rules, text) == []

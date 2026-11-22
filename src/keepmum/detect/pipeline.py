@@ -57,6 +57,8 @@ _DIGEST = re.compile(r"(?i)(?:[\w.-]+@)?sha(?:1|256|384|512):")
 _URL = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^\s:/@]*:([^\s@/]+)@)?[^\s/]*(\S*)")
 _URL_SEGMENT = re.compile(r"[A-Za-z0-9_-]{16,}")
 # Identifier shapes: UUIDs, hex (hashes, request and trace ids), digits.
+# A chat channel or a page anchor (`#search-rollout`): lowercase words, no secret (doc-01 on pi, Nov 21).
+_CHANNEL = re.compile(r"#[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*")
 _IDENTIFIER = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{7,}|[\d.:_-]+")
 _HEX_RUN = frozenset("0123456789abcdefABCDEF-")
 _KEYWORD_BEFORE = re.compile(r"(?i)\b(?:api[ _-]?key|key|token|secret|passw(?:or)?d|pwd|passphrase|auth|credentials?|bearer)\b")
@@ -97,9 +99,9 @@ _MONTH_OR_DIGITS = re.compile(r"(?i)\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sep
 def _plausible_address(value: str) -> bool:
     """A model ADDRESS that is one: not a number or a listing's date (`128 Nov 18`: i18n-01 on Codex),
     and not a city's name alone (北京, Paris), which a street, a number or more words would make one."""
-    words = [w for w in re.split(r"[\s,;/()0-9]+", value) if w]
+    words = [w for w in re.split(r"[\s,;:/()0-9，、；：（）]+", value) if w]
     if words and all(w.rstrip("市") in _PLACES for w in words):
-        return False  # a list of cities with their counts: `Beijing (3), Shanghai` (i18n-01)
+        return False  # a list of cities with their counts: `Beijing (3), Shanghai`, `北京: 3, 上海: 2` (i18n-01)
     letters = _MONTH_OR_DIGITS.sub("", value)
     if len(letters) < 2 or not any(c.isdigit() for c in value) and len(value.strip()) <= 6 and " " not in value.strip():
         return False
@@ -324,7 +326,7 @@ class Pipeline:
                 elif not any(shannon_entropy(seg) > 3.5 for seg in _URL_SEGMENT.findall(url.group(2))):
                     continue
             value = text[a:b]
-            if len(value) < 8:
+            if len(value) < 8 or _CHANNEL.fullmatch(value):
                 continue
             # A reference is not the value (os.environ["STRIPE_SECRET_KEY"], a header's name: rotate-01,
             # debug-01, Nov 18): every filter the rules apply to an assigned value, for the model too.
@@ -375,6 +377,16 @@ class Pipeline:
             a += 1
         while b > a and text[b - 1] in _PII_EDGE:
             b -= 1
+        if span.type == "EMAIL":
+            # An address has no space: the model ran one over the domain written after it,
+            # `margaret.thornbury@gmail.com gmail.com` (data-01 on Claude Code, Nov 21).
+            at = next((m for m in re.finditer(r"\S+", text[a:b]) if "@" in m.group()), None)
+            if at:
+                a, b = a + at.start(), a + at.end()
+                while a < b and text[a] in _PII_EDGE:
+                    a += 1
+                while b > a and text[b - 1] in _PII_EDGE:
+                    b -= 1
         if span.type == "PHONE":  # a number starts at a digit, +, or (: not at the name before it (i18n-01)
             while a < b and not (text[a].isdigit() or text[a] in "+("):
                 a += 1

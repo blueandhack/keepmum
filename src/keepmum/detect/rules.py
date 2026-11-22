@@ -74,6 +74,10 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
         value = text[start:close]
         if value != value.strip():
             return None  # a secret has no space at its edge: "…`:` will securely use the variable. The `" (rotate-01 on agy)
+        if value[:1] in ",+)]};":
+            # The quote closed a label and code follows: `print('  ACCESS_KEY_USER:',a.get('user'))`
+            # (cloud-01 on opencode, Nov 21). A secret does not start with an operator.
+            return None
         if any(c.isspace() for c in value):
             words = value.split()
             if not (_UPPER_KEY.fullmatch(key) or (len(words) <= 4 and char_classes("".join(words)) >= 3)):
