@@ -13,6 +13,14 @@ pick); `default` leaves it to Splash, which takes that window when memory holds 
 the memory for a long context only while a request that long runs: about 10 KB a token for
 keepmum's pick, whose attention is in 10 of its 40 layers. Past the window Splash would stretch it
 (YaRN), which changes every answer, so keepmum does not offer it.
+
+Cache: keepmum starts Splash with `--persistent-cache`, so the prompts it has read stay on the SSD
+across a restart, an upgrade or a crash, and the first chat afterwards does not read an agent's
+system prompt and tools again (Nov 22, 2026: 0.58 s to the first token instead of 2.73 for a
+7,600-token head). Splash keeps them in ~/Library/Caches/Splash/prefix-cache, readable only by this
+user and kept out of Time Machine, within the SSD quota it already uses (at most 32 GB). Splash
+added the flag in 1.2.0, but before 1.3.2 it needed an explicit `--max-cache-disk`, so an older
+Splash, or one whose version keepmum cannot read, starts without it.
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ LABEL = "app.keepmum.splash"
 DEFAULT_IDLE = "5m"
 DEFAULT_CONTEXT = 65536  # tokens; None: Splash's own (the model's window when memory holds it)
 SEARCH = ("/opt/homebrew/bin/splash", "/usr/local/bin/splash")
+PERSISTENT_CACHE_SINCE = (1, 3, 2)  # works without --max-cache-disk from here (Splash 1.3.2, Oct 14, 2026)
 
 
 class SplashError(Exception):
@@ -101,6 +110,22 @@ def find() -> str | None:
     return shutil.which("splash") or next((p for p in SEARCH if os.access(p, os.X_OK)), None)
 
 
+def version(exe: str) -> tuple[int, int, int] | None:
+    """The version `splash --version` reports ("Splash 1.7.1"), or None if it says none."""
+    try:
+        r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"\b(\d+)\.(\d+)(?:\.(\d+))?\b", r.stdout + r.stderr)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)) if m else None
+
+
+def persistent_cache(exe: str) -> bool:
+    """Whether this Splash takes `--persistent-cache` on its own."""
+    v = version(exe)
+    return v is not None and v >= PERSISTENT_CACHE_SINCE
+
+
 def idle_release(keep_loaded: str) -> str:
     """`[guard] local_keep_loaded` as Splash's --idle-release: "always" is off."""
     return "off" if keep_loaded == "always" else keep_loaded
@@ -118,9 +143,12 @@ def parse_context_flag(text: str | None) -> int | None:
     return int(m.group(1)) * {"": 1, "k": 1024, "m": 1_000_000}[m.group(2).lower()]
 
 
-def arguments(exe: str, spec: str, port: int, idle: str = DEFAULT_IDLE, context: int | None = DEFAULT_CONTEXT) -> list[str]:
+def arguments(exe: str, spec: str, port: int, idle: str = DEFAULT_IDLE, context: int | None = DEFAULT_CONTEXT,
+              persistent: bool = False) -> list[str]:
     size = [] if context is None else ["--max-context", context_flag(context)]
-    return [exe, "serve", "--model", spec, "--language-only", "--no-webui", *size, "--port", str(port), "--idle-release", idle]
+    cache = ["--persistent-cache"] if persistent else []
+    return [exe, "serve", "--model", spec, "--language-only", "--no-webui", *cache, *size, "--port", str(port),
+            "--idle-release", idle]
 
 
 def _launchctl(*args: str) -> subprocess.CompletedProcess:
@@ -144,7 +172,7 @@ def start(spec: str, port: int, idle: str = DEFAULT_IDLE, context: int | None = 
     with plist.open("wb") as f:
         plistlib.dump({
             "Label": LABEL,
-            "ProgramArguments": arguments(exe, spec, port, idle, context),
+            "ProgramArguments": arguments(exe, spec, port, idle, context, persistent_cache(exe)),
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},  # again after a crash, not after a stop
             "ThrottleInterval": 30,

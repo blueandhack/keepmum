@@ -17,13 +17,15 @@ SPEC = "HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive:IQ3_M"
 
 @pytest.fixture
 def mac(tmp_path, monkeypatch):
-    """A HOME, a splash on PATH, and launchctl recorded instead of run."""
+    """A HOME, a splash 1.7.1 on PATH, and launchctl recorded instead of run."""
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / ".config" / "keepmum").mkdir(parents=True)
     (tmp_path / ".config" / "keepmum" / "config.toml").write_text("")
     calls, loaded = [], []
 
     def run(cmd, **kw):
+        if cmd[1] == "--version":
+            return subprocess.CompletedProcess(cmd, 0, "Splash 1.7.1\n", "")
         calls.append(cmd)
         if cmd[1] == "print":  # launchd still knows it: loaded, or not yet let go after a bootout
             return subprocess.CompletedProcess(cmd, 0 if loaded else 113, "", "")
@@ -48,7 +50,7 @@ def test_start_writes_a_launch_agent_and_loads_it(mac):
     assert agent["Label"] == "app.keepmum.splash" and agent["RunAtLoad"] is True
     assert agent["KeepAlive"] == {"SuccessfulExit": False}
     assert agent["ProgramArguments"] == ["/opt/homebrew/bin/splash", "serve", "--model", SPEC, "--language-only", "--no-webui",
-                                         "--max-context", "64K", "--port", "8000", "--idle-release", "5m"]
+                                         "--persistent-cache", "--max-context", "64K", "--port", "8000", "--idle-release", "5m"]
     assert agent["StandardOutPath"] == str(home / "Library" / "Logs" / "keepmum" / "splash.log")
     assert [c[1] for c in calls] == ["print", "bootstrap"] and calls[1][3] == str(path)  # nothing loaded to unload
     assert splashsvc.managed() == {"model": SPEC, "port": 8000, "idle": "5m", "context": 65536}
@@ -80,6 +82,24 @@ def test_start_again_waits_for_launchd_to_let_the_old_one_go(mac, monkeypatch):
     splashsvc.start(SPEC, 8000, context=262144)
     assert [c[1] for c in calls] == ["print", "bootout", "print", "print", "print", "bootstrap", "bootstrap"]
     assert splashsvc.managed()["context"] == 262144
+
+
+def test_start_keeps_the_ssd_cache_only_where_splash_takes_the_flag(mac, monkeypatch):
+    """--persistent-cache came in Splash 1.2.0, but refused to start without --max-cache-disk
+    before 1.3.2; a Splash whose version keepmum cannot read starts without it."""
+    real = splashsvc.subprocess.run
+    for says, has in [("Splash 1.7.1", True), ("Splash 1.3.2", True), ("Splash 1.3.1", False), ("Splash 1.0", False),
+                      ("", False)]:
+        monkeypatch.setattr(splashsvc.subprocess, "run", lambda cmd, says=says, **kw: subprocess.CompletedProcess(cmd, 0, says, "")
+                            if cmd[1] == "--version" else real(cmd, **kw))
+        args = plistlib.loads(splashsvc.start(SPEC, 8000).read_bytes())["ProgramArguments"]
+        assert ("--persistent-cache" in args) is has, says
+        assert splashsvc.managed() == {"model": SPEC, "port": 8000, "idle": "5m", "context": 65536}
+
+
+def test_splash_version():
+    assert splashsvc.version("/nonexistent/splash") is None
+    assert splashsvc.persistent_cache("/nonexistent/splash") is False
 
 
 def test_start_says_why_it_cannot(mac, monkeypatch):
