@@ -171,3 +171,48 @@ def test_a_result_resent_every_turn_is_scored_once():
 
     anyio.run(go)
     assert sum("make install" in c for c in model.calls) == 1 and not proxy.stats.guard_hits
+
+
+def test_what_cannot_be_read_gives_nothing_and_never_fails():
+    """Malformed or unexpected replies: no result, no error (the check must never stop a reply)."""
+    # A search result that is no list, an image a fetch returned, blank text, non-dict entries.
+    assert provided.result_text({"type": "web_search_tool_result", "content": {"type": "x"}}) is None
+    assert provided.result_text({"type": "web_fetch_tool_result", "content": {
+        "type": "web_fetch_result", "url": "https://x", "content": {"type": "document", "source": {"type": "base64", "data": "JVBERi0="}},
+    }}) is None
+    assert provided.result_text({"type": "code_execution_tool_result", "content": ["  ", {"stdout": "4\n"}, 5]}) == "4\n"
+    assert provided.call_name({"server_name": "", "name": "fetch"}) == "fetch" and provided.call_name({}) == "tool"
+    assert provided.messages_items("not a list") == []
+    assert provided.messages_items([5, {"type": "web_fetch_tool_result", "tool_use_id": "unknown",
+                                        "content": {"text": "page text"}}]) == [(provided.source("web_fetch"), "page text")]
+    assert provided.responses_items("nope") == [] and provided.responses_items([5, {"content": [5, {"annotations": [5]}]}]) == []
+    assert provided.gemini_items([5, {"candidates": [5, {"groundingMetadata": {"groundingChunks": [5, {"web": "x"}]}}]}]) == []
+    assert provided.items_of("messages", "not a reply") == []
+
+
+def test_the_same_text_is_reported_once():
+    block = {"type": "web_fetch_tool_result", "content": {"text": "same page"}}
+    assert provided.messages_items([block, dict(block)]) == [(provided.source("web_fetch"), "same page")]
+
+
+def test_a_stream_collector_skips_what_is_not_an_event():
+    c = provided.ReplyCollector("messages")
+    c.feed(b": a comment\nevent: x\ndata: not json\ndata: [1, 2]\n")
+    c.feed(b'data: {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking"}}\n')
+    c.feed(b'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "citations_delta", "citation": {}}}\n')
+    assert c.items() == []
+
+
+def test_openai_and_gemini_streams_give_the_same_as_their_whole_replies():
+    cite = {"type": "url_citation", "title": "Docs", "url": "https://docs.example"}
+    item = {"type": "message", "content": [{"type": "output_text", "annotations": [cite]}]}
+    want = [(provided.source("web_search"), "Docs\nhttps://docs.example")]
+    c = provided.ReplyCollector("responses")
+    c.feed(b"data: " + json.dumps({"type": "response.output_item.done", "item": item}).encode() + b"\n")
+    assert c.items() == want
+    c.feed(b"data: " + json.dumps({"type": "response.completed", "response": {"output": [item]}}).encode() + b"\n")
+    assert c.items() == want == provided.items_of("responses", {"output": [item]})
+    chunk = {"candidates": [{"groundingMetadata": {"groundingChunks": [{"web": {"title": "Page", "uri": "https://p.example"}}]}}]}
+    g = provided.ReplyCollector("gemini")
+    g.feed(b"data: " + json.dumps(chunk).encode() + b"\n")
+    assert g.items() == [(provided.source("google_search"), "Page\nhttps://p.example")] == provided.items_of("gemini", chunk)

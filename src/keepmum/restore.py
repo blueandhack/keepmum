@@ -218,17 +218,6 @@ def take_urls(counts: Counter) -> dict[str, int]:
     return {k[1]: counts.pop(k) for k in sorted(keys)}
 
 
-def _values(value, vault: Vault, counts: Counter | None, only: set[str] | None = None):
-    if isinstance(value, str):
-        return restore_text(value, vault, counts, only)
-    if isinstance(value, dict):
-        return {(restore_text(k, vault, counts, only) if isinstance(k, str) else k): _values(v, vault, counts, only)
-                for k, v in value.items()}
-    if isinstance(value, list):
-        return [_values(v, vault, counts, only) for v in value]
-    return value
-
-
 def tool_values(name: str, value, vault: Vault, policy: dict) -> tuple[set[str] | None, list[tuple[str, str, str, int]]]:
     """Which placeholders in a tool call's input get their real values: (None for all, or the set
     allowed; and the decisions as (action, reason, type, occurrences)) for the audit log."""

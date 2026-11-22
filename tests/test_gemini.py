@@ -401,3 +401,34 @@ def test_gemini_results_without_ids_are_credited_in_order():
                 {"role": "user", "parts": [first, shell, second]}]
     got = _gemini_results(contents)
     assert (got[id(first)], got[id(second)], got[id(shell)]) == ("mcp__gmail__find", "mcp__slack__find", "run_command")
+
+
+def test_every_kind_of_part_is_restored_and_thoughts_are_left_alone():
+    r = redactor()
+    ph, value = placeholder_for(r)
+    body = {"candidates": [5, {"content": {"parts": [
+        {"thought": True, "text": f"thinking {ph}"},
+        {"function_call": {"name": "run_shell_command", "args": {"command": f"echo {ph}"}}},
+        {"executableCode": {"code": f"print('{ph}')"}},
+        {"codeExecutionResult": {"output": f"{ph}\n"}},
+        "not a part",
+    ]}}, {"finishReason": "STOP"}]}
+    parts = restore_gemini(body, r.vault)["candidates"][1]["content"]["parts"]
+    assert parts[0]["text"] == f"thinking {ph}"  # a thought is the model's own: as it came
+    assert parts[1]["function_call"]["args"]["command"] == f"echo {value}"
+    assert parts[2]["executableCode"]["code"] == f"print('{value}')" and parts[3]["codeExecutionResult"]["output"] == f"{value}\n"
+    assert parts[4] == "not a part"
+    assert restore_gemini("not json", r.vault) == "not json" and restore_gemini({"usageMetadata": {}}, r.vault) == {"usageMetadata": {}}
+
+
+def test_a_stream_event_that_is_not_a_chunk_passes_as_it_came():
+    r = redactor()
+    ph, _ = placeholder_for(r)
+    for raw in (b": keep-alive\n\n", b"data: not json\n\n", b"data: [1, 2]\n\n", b'data: {"usageMetadata": {"x": 1}}\n\n',
+                b"data: \xff\xfe\n\n"):
+        assert GeminiStreamRestorer(r.vault).feed(raw) == raw
+    # A candidate that is no object, and one with no parts, pass; usage alone is still sent.
+    s = GeminiStreamRestorer(r.vault)
+    chunk = {"candidates": ["odd", {"index": 1, "content": {"role": "model"}}], "usageMetadata": {"totalTokenCount": 3}}
+    out = s.feed(f"data: {json.dumps(chunk)}\n\n".encode())
+    assert json.loads(out.decode().split("data: ", 1)[1]) == chunk

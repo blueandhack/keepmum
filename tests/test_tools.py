@@ -364,3 +364,44 @@ def test_the_proxy_records_servers_and_reports_each_tool_call(tmp_path):
     assert {(t["tool"], t["action"], t["reason"]) for t in event["tools"]} == {
         ("mcp__claude_ai_Gmail__get_thread", "restore", "own"), ("mcp__linear__create_issue", "keep", "not_allowed")}
     assert EMAIL not in json.dumps(event)
+
+
+def test_definitions_skip_what_is_not_a_tool_and_read_chat_completions():
+    assert definitions({"tools": [5, {"type": "function", "function": {"name": "f", "parameters": {}}}]}, "messages") == \
+        [("f", "", {})]
+    assert definitions({"tools": [5, {"functionDeclarations": [5, {"name": "g"}]}]}, "gemini") == [("g", "", None)]
+    assert server_of("mcp__") == "mcp__" and server_of("mcp____x") == "mcp____x"  # no server name: its own
+
+
+def test_a_damaged_or_unwritable_registry_never_stops_a_request(tmp_path):
+    path = tmp_path / "tools.json"
+    path.write_text("[not, the, format")
+    reg = ToolRegistry(path)
+    assert reg.snapshot(DEFAULT_POLICY) == []  # unreadable: an empty registry
+    path.write_text('{"servers": 5}')
+    reg = ToolRegistry(path)
+    assert reg.snapshot(DEFAULT_POLICY) == []
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    reg = ToolRegistry(ro / "tools.json")
+    ro.chmod(0o500)
+    try:
+        reg.observe(defs(), "claude-code", network)  # cannot write: decisions use what was read
+        reg.note_kept("mcp__claude_ai_Gmail", ["EMAIL"])
+    finally:
+        ro.chmod(0o700)
+    assert reg.snapshot(DEFAULT_POLICY) == []
+    reg.observe([("Read", "", {})], "claude-code", lambda name: False)  # no network tool: nothing to write
+    assert not (ro / "tools.json").exists()
+
+
+def test_finding_trusting_and_kept_counts_of_servers(tmp_path):
+    reg = ToolRegistry(tmp_path / "tools.json")
+    assert reg.find("gmail") is None and reg.trust("mcp__nothing") == []
+    reg.note_kept("mcp__linear", [])  # nothing kept: nothing written
+    assert not (tmp_path / "tools.json").exists()
+    reg.note_kept("mcp__linear", ["EMAIL"])  # a server first seen through a kept call
+    reg.observe(defs(), "claude-code", network)
+    assert reg.find("mcp__linear__*") == "mcp__linear" and reg.find("claude_ai_Gmail") == "mcp__claude_ai_Gmail"
+    assert reg.find("Gmail") == "mcp__claude_ai_Gmail" and reg.find("  mcp__linear ") == "mcp__linear"
+    assert {s["server"] for s in reg.snapshot(DEFAULT_POLICY)} == {"mcp__linear", "mcp__claude_ai_Gmail"}
