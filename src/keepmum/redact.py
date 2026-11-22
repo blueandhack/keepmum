@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import json
 import re
@@ -496,6 +497,42 @@ class Redactor:
         finally:
             self._origin, self._tool, self._in_result = before
 
+    # --- A request as a whole ------------------------------------------------------
+
+    # What one walk of a request adds to: copied before a walk, put back before walking it again.
+    _PER_REQUEST = ("counts", "fresh", "findings", "tool_results", "user_texts", "typed_in", "aside", "shown", "authored")
+    WALKS = 3  # at most: a walk learns from what the one before it masked (decoded blocks, pieces)
+
+    def _state(self) -> dict:
+        return {k: copy.copy(getattr(self, k)) for k in self._PER_REQUEST}
+
+    def _whole(self, walk):
+        """`walk` (a request's walk) masked as a whole: a value found anywhere in the request is
+        masked everywhere in it, the messages before the one it was found in too. The walk masks text
+        in order and learns values as it goes, so an earlier message went out with a secret found
+        further down in the clear, and the next request (the same messages again) masked it: the
+        provider got it once, and its prompt cache missed from that message on (a resumed session's
+        first request, Nov 22: 18 of 435 messages changed between two identical requests). Walked
+        again while the vault learns: the text is cached, so a walk again takes milliseconds. What
+        the request brought that was new (findings, the checks' texts and whether each is new) is
+        the first walk's, which met each text first; what was masked (counts, the Logs page's text)
+        the last's, which is what goes."""
+        mark, before = self.vault.mark(), self._state()
+        out = walk()
+        if self.vault.mark() == mark:
+            return out
+        first = self._state()
+        for _ in range(self.WALKS - 1):
+            if self.vault.mark() == mark:
+                break
+            mark = self.vault.mark()
+            for k, v in before.items():
+                setattr(self, k, copy.copy(v))
+            out = walk()
+        for k in ("fresh", "findings", "tool_results", "user_texts", "typed_in", "aside", "authored"):
+            setattr(self, k, first[k])
+        return out
+
     # --- Messages API payloads ----------------------------------------------------
 
     def redact_request(self, body: dict) -> dict:
@@ -503,6 +540,9 @@ class Redactor:
 
         `tools`, `metadata` and every other top-level field pass through unchanged.
         """
+        return self._whole(lambda: self._redact_request(body))
+
+    def _redact_request(self, body: dict) -> dict:
         out = dict(body)
         self._calls = {b["id"]: script_caller(b["name"], b.get("input")) for m in out.get("messages") or [] if isinstance(m, dict)
                        for b in (m.get("content") if isinstance(m.get("content"), list) else [])
@@ -526,6 +566,9 @@ class Redactor:
         Assist, `generateContentRequest` for countTokens, `requests` for batch embeddings).
         With `hint` (generateContent and streamGenerateContent only: countTokens and embeddings
         take no system instruction), the placeholder hint goes last in the system instruction."""
+        return self._whole(lambda: self._redact_gemini_request(body, hint))
+
+    def _redact_gemini_request(self, body: dict, hint: bool = False) -> dict:
         out = dict(body)
         # Each tool result, credited to the call it answers, as the call names its tool (Antigravity's
         # call_mcp_tool names an MCP server: tools.call_name). By id when the parts carry one;
@@ -534,10 +577,10 @@ class Redactor:
         self._gemini_results = _gemini_results(body.get("contents"))
         for key in ("request", "generateContentRequest", "generate_content_request"):
             if isinstance(out.get(key), dict):
-                out[key] = self.redact_gemini_request(out[key], hint)
+                out[key] = self._redact_gemini_request(out[key], hint)
                 hint = False  # the wrapped request carries it
         if isinstance(out.get("requests"), list):
-            out["requests"] = [self.redact_gemini_request(r) if isinstance(r, dict) else r for r in out["requests"]]
+            out["requests"] = [self._redact_gemini_request(r) if isinstance(r, dict) else r for r in out["requests"]]
         if isinstance(out.get("contents"), list):
             out["contents"] = [self._in_message(c, lambda c=c: self._gemini_content(c)) if isinstance(c, dict)
                                else self._gemini_content(c) for c in out["contents"]]
@@ -629,6 +672,9 @@ class Redactor:
         Reasoning items are encrypted and signed: they pass through, like thinking blocks. The
         placeholder hint goes first in `input` as a developer message, stable across turns.
         """
+        return self._whole(lambda: self._redact_responses_request(body))
+
+    def _redact_responses_request(self, body: dict) -> dict:
         out = dict(body)
         if isinstance(out.get("instructions"), str):
             out["instructions"] = self.redact_text(out["instructions"])
@@ -647,6 +693,9 @@ class Redactor:
         conversation's last messages, as a /responses body's; `commands` (queries, pages to open,
         patterns to find) and `settings` (a location, allowed domains) value by value. Its id,
         model and limits pass."""
+        return self._whole(lambda: self._redact_search_request(body))
+
+    def _redact_search_request(self, body: dict) -> dict:
         out = dict(body)
         items = out.get("input")
         if isinstance(items, str):

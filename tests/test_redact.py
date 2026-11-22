@@ -137,6 +137,62 @@ def test_known_values_mask_later_occurrences():
     assert FAKE_TOKEN not in r.redact_text(f"it failed with {FAKE_TOKEN} again")
 
 
+def _only_in_export(t):
+    """The detector recognizes the token only in an `export` line, as a rule finds an assignment."""
+    if "export" not in t or FAKE_TOKEN not in t:
+        return []
+    a = t.index(FAKE_TOKEN)
+    return [Span(a, a + len(FAKE_TOKEN), "SECRET")]
+
+
+def test_a_value_found_later_in_a_request_is_masked_earlier_in_it_too():
+    """A resumed session's first request: the token is plain in message 0 and found in message 2.
+    It went out in message 0, and the next request masked it there, so the two differed and the
+    provider's prompt cache missed from message 0 (Nov 22)."""
+    r = Redactor(Fixed(_only_in_export), Vault(SALT))
+    body = {"model": "m", "max_tokens": 8, "messages": [
+        {"role": "user", "content": f"why does {FAKE_TOKEN} fail?"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "cat .env"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": f"export TOKEN={FAKE_TOKEN}"}]},
+    ]}
+    first = r.redact_request(body)
+    assert FAKE_TOKEN not in json.dumps(first)
+    assert r.counts["SECRET"] == 2  # what went: both places, counted once each
+    assert len(r.findings) == 1 and r.fresh == 1  # what the request brought: the one finding, once
+    assert [(tool, new) for tool, _, new in r.tool_results] == [("Bash", True)]  # read once, new
+    assert [t for _, t, _ in r.user_texts] == [f"why does {FAKE_TOKEN} fail?"]
+    r.counts.clear(); r.findings = []; r.fresh = 0; r.tool_results = []; r.user_texts = []
+    assert r.redact_request(body) == first  # the same request again goes the same
+    assert r.counts["SECRET"] == 2 and r.findings == [] and r.fresh == 0
+
+
+def test_a_request_with_nothing_new_is_walked_once():
+    det = Fixed(_only_in_export)
+    r = Redactor(det, Vault(SALT))
+    body = {"messages": [{"role": "user", "content": "nothing here"}, {"role": "user", "content": "nor here"}]}
+    walks = []
+    real = r._redact_request
+    r._redact_request = lambda b: walks.append(1) or real(b)
+    r.redact_request(body)
+    assert len(walks) == 1
+
+
+def test_responses_and_gemini_requests_are_masked_as_a_whole():
+    r = Redactor(Fixed(_only_in_export), Vault(SALT))
+    out = r.redact_responses_request({"input": [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": f"why does {FAKE_TOKEN} fail?"}]},
+        {"type": "function_call", "call_id": "c1", "name": "shell", "arguments": json.dumps({"command": ["cat", ".env"]})},
+        {"type": "function_call_output", "call_id": "c1", "output": f"export TOKEN={FAKE_TOKEN}"},
+    ]})
+    assert FAKE_TOKEN not in json.dumps(out)
+    r = Redactor(Fixed(_only_in_export), Vault(SALT))
+    out = r.redact_gemini_request({"request": {"contents": [
+        {"role": "user", "parts": [{"text": f"why does {FAKE_TOKEN} fail?"}]},
+        {"role": "user", "parts": [{"functionResponse": {"name": "run", "response": {"output": f"export TOKEN={FAKE_TOKEN}"}}}]},
+    ]}}, hint=True)
+    assert FAKE_TOKEN not in json.dumps(out)
+
+
 def test_known_values_respect_word_boundaries():
     v = Vault(SALT)
     r = Redactor(Fixed(lambda t: [Span(0, 4, "PERSON")] if t.startswith("Anna ") else []), v)
