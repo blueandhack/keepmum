@@ -131,6 +131,11 @@ class Pipeline:
         # The model's raw spans per text. Settings only filter them, so they outlive a settings
         # change: the redactor scans the resent conversation again, but only the rules rerun.
         self._model_cache: OrderedDict[bytes, tuple[Span, ...]] = OrderedDict()
+        self._cache_lock = threading.Lock()  # the store's writer reads the cache from its own thread
+        # The same on disk across restarts (spancache.py), once keep_on_disk has given a way to
+        # make one for the running model; its keyed hash is then the cache's key too.
+        self._store_for = None
+        self.store = None
         self.model_error: str | None = None  # why the model asked for (detect.model) is not running
         self.name = self._label()
 
@@ -143,9 +148,35 @@ class Pipeline:
         """Turn the model on (a started PfServe) or off (None) while running. Bumps `generation`,
         so text scanned without the model is scanned again with it."""
         self.pf = pf
-        self._model_cache.clear()
+        if self.store is not None:
+            self.store.flush()  # what the model before found, written before it is let go
+        with self._cache_lock:
+            self._model_cache.clear()
+        self._open_store()
         self.name = self._label()
         self.generation += 1
+
+    def keep_on_disk(self, store_for) -> None:
+        """Keep the model's spans across restarts: `store_for(pf)` makes the SpanStore for a running
+        model (or None), now and whenever the model is turned on again."""
+        self._store_for = store_for
+        self._open_store()
+
+    def _open_store(self) -> None:
+        if self.store is not None:
+            self.store.flush()
+        self.store = self._store_for(self.pf) if self._store_for and self.pf else None
+        if self.store is not None:
+            loaded = self.store.load()
+            with self._cache_lock:
+                self._model_cache.clear()
+                self._model_cache.update(loaded[-MODEL_CACHE:])
+            if loaded:
+                log.info("the model's results for %d texts read from %s", len(loaded), self.store.path)
+
+    def _cached(self) -> list[tuple[bytes, tuple[Span, ...]]]:
+        with self._cache_lock:
+            return list(self._model_cache.items())
 
     def detect(self, text: str) -> list[Span]:
         spans: list[Span] = []
@@ -274,15 +305,20 @@ class Pipeline:
         return out
 
     def _model_detect(self, pf, text: str) -> tuple[Span, ...]:
-        key = hashlib.sha256(text.encode("utf-8", "surrogatepass")).digest()
-        hit = self._model_cache.get(key)
-        if hit is not None:
-            self._model_cache.move_to_end(key)
-            return hit
+        store = self.store
+        key = store.key_of(text) if store else hashlib.sha256(text.encode("utf-8", "surrogatepass")).digest()
+        with self._cache_lock:
+            hit = self._model_cache.get(key)
+            if hit is not None:
+                self._model_cache.move_to_end(key)
+                return hit
         spans = tuple(pf.detect(text))  # a failure raises: nothing is cached, the request is blocked
-        self._model_cache[key] = spans
-        if len(self._model_cache) > MODEL_CACHE:
-            self._model_cache.popitem(last=False)
+        with self._cache_lock:
+            self._model_cache[key] = spans
+            if len(self._model_cache) > MODEL_CACHE:
+                self._model_cache.popitem(last=False)
+        if store:
+            store.changed(self._cached)
         return spans
 
     @staticmethod

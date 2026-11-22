@@ -89,6 +89,13 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     pipeline = default_pipeline(pii=pii, rules_only=rules_only or not cfg.model, allow_strings=cfg.allow_strings,
                                 allow_patterns=cfg.allow_patterns, pass_types=cfg.pass_types, mask_rules=cfg.mask_rules,
                                 off_rules=cfg.off_rules)
+    from .detect.spancache import SpanStore
+    from .vault import install_salt
+
+    # The model's results across restarts (spancache.py): a resumed session's first request reads
+    # only the new text again.
+    salt = install_salt()
+    pipeline.keep_on_disk(lambda pf: SpanStore.for_model(pf, salt))
     info = {"mode": mode, "pii": pii, "detector": pipeline.name, "version": __version__, "apis": ["messages", "responses", "gemini", "antigravity"],
             "checks": {"injection": cfg.guard_injection, "harm": cfg.guard_harm, "harm_model": cfg.guard_harm_model,
                        "commands": cfg.guard_commands}}
