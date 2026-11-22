@@ -7,6 +7,55 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a14</title>
+      <pubDate>Sun, 22 Nov 2026 09:06:32 GMT</pubDate>
+      <sparkle:version>10014</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a14</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a14</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The fourteenth alpha of keepmum lets you turn protection on or off for Codex and Claude Code without restarting either one, and the change reaches sessions that are already open. The injection check now asks a second model before it reports a hit, and it also reads what the provider's own tools return. The Mac app has a new sidebar and Overview.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://github.com/blueandhack/keepmum#limitations).
+
+## Install
+
+1. Download `Keepmum-0.1.0a14.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Setup**.
+
+**From 0.1.0a2 through 0.1.0a13:** Keepmum updates itself if you allowed update checks (Settings › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a14.dmg.sha256`
+
+## On and off take effect at once
+
+- **Codex.** keepmum now points Codex's own OpenAI provider at itself, instead of adding a provider of its own. Codex reads that setting again for every conversation it starts or reopens, in a terminal, an editor or the Codex app, so nothing needs a restart. A conversation from before you turned protection on goes through keepmum when you reopen it. Before, it could resume straight to OpenAI, or not resume at all. A conversation that is open at the moment you switch keeps its route until it closes, and `keepmum protect` says how many are still open. Codex's web search works through keepmum, and what it sends is scanned. Both the ChatGPT login and an API key work.
+- **Claude Code.** Turning protection off reached only new sessions, because a running session keeps the last address it read. keepmum now writes the address explicitly, so every running session switches at once, in either direction. `keepmum include` does the same for a project you had excluded: Claude Code already open there goes back through keepmum at once, instead of carrying on straight to Anthropic, unscanned.
+
+## The injection check
+
+- **A second opinion.** A hit now stands only if a second model, Wolf Defender Small v2.1, also flags it. On 3,500 real tool results from Claude Code, Codex and OpenHands, the 53 flagged at Medium became 1. Catches held within about two points, except attacks planted in prodnull's repository files (46% down to 37%). It is on by default; turn it off with `keepmum guard confirm off` or on the **Checks** page. If the second model is missing or fails, the hit stands.
+- **Tools the provider runs.** Anthropic's web search, web fetch, code execution and MCP connector, OpenAI's web search, and Gemini's grounding run at the provider, so their results arrive inside the reply, where the check never read them. keepmum now reads them as the reply comes in, and logs a hit as a warning.
+
+## Secrets and false masks
+
+- **A PDF string continued over two lines** was dropped whole by keepmum's PDF reader, so a key in it went out unread. It is read and masked now.
+- No longer masked: a label's closing quote and the code after it (`print('KEY:', x)`), a chat channel such as `#search-rollout`, and, with personal data on, a list of city counts (`北京: 3, 上海: 2`), the text right after an email address, or the Antigravity CLI's own name for itself ("Jetski") taken for a person's.
+
+## The app
+
+- **One sidebar** for every page and setting: Overview and Setup; Monitor (Activity, Logs, Performance); Protection (Protection map, Masking, Tools, Checks, Extensions); Local mode (Local models, Local turns, Skills); Audit and Settings. Detection is now part of Masking.
+- **The Overview** opens with where protection stands and a "Needs you" list, each item opening the place that fixes it. **⌘K** finds any page, setting or action, and ⌘1 to ⌘9 open the first nine pages.
+- **Show masked values** on Logs and Activity (`keepmum log values on`, off by default). It asks for Touch ID or your login password first, keeps the values only in keepmum's memory, and records turning it on in the audit log.
+- **Extensions** has a section per agent. Each item says what it is, and you can search and filter the list.
+- **Setup** can restart the background service. A click on a check's mode or sensitivity shows at once. Notices slide in instead of flashing "Not connected" for a moment. On a large window, settings pages use two columns.
+- The **Protection map** shows the injection check on arriving replies.
+
+This release was checked with the unit tests, the scripted suite on all five agents, and the live suite on real models: a full run on Claude Code, Codex, the Antigravity CLI, pi and opencode on Nov 21, and on Nov 22 a rerun on all five of the cases the last fixes touched.</description>
+      <enclosure url="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a14/Keepmum-0.1.0a14.dmg" length="40176575" type="application/octet-stream" sparkle:edSignature="wllIZu5ff2VUIvBpLSYNN7b6sWB4eor8VoMshwmtHbaUD6w1gdsMZSUCkruUPsXeesTTeHqwQ0A2nzPRmFOpAg=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a13</title>
       <pubDate>Thu, 19 Nov 2026 16:22:14 GMT</pubDate>
       <sparkle:version>10013</sparkle:version>
@@ -520,6 +569,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 9pVfBUOPFWO8aXbHEqtj/pZG902znZlnj5/aRtwRScdoueSNetgex1i8ps2EUGiosm3WNIYgccrgQDT9s43kBA==
-length: 54489
+edSignature: 60tTHnWL3j/3NQLd3RCjgWJ0W8Jx8z3PK7coOFZy4xNy+pr2/FkQOz99ohycbi7uP8+nlEH6r9WO6OF04TQxDw==
+length: 60178
 -->
