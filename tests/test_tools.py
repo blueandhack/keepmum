@@ -32,7 +32,7 @@ from keepmum.restore import (
     rule_for,
     take_tools,
 )
-from keepmum.tools import BULK, ToolRegistry, definitions, label_of, server_of
+from keepmum.tools import ABOUT, BULK, ToolRegistry, about_of, definitions, label_of, server_of
 from keepmum.vault import PLACEHOLDER, Vault
 
 EMAIL = "alice.walker@acme-corp.com"
@@ -182,14 +182,18 @@ def network(name):
     return rule_for(name, DEFAULT_POLICY)[1] != "restore"
 
 
-def test_servers_are_recorded_new_with_names_and_hashes_only(tmp_path):
+def test_servers_are_recorded_new_with_names_hashes_and_what_each_tool_says_it_does(tmp_path):
     reg = ToolRegistry(tmp_path / "tools.json")
-    reg.observe(defs(), "claude-code", network)
+    reg.observe(defs("Search mail threads by sender or subject. Returns thread ids; call get for a thread.\n\n"
+                     "Usage: query is Gmail search syntax."), "claude-code", network)
     [s] = reg.snapshot(DEFAULT_POLICY)
     assert (s["server"], s["label"], s["agents"], s["new"], s["paused"], s["setting"]) == \
         ("mcp__claude_ai_Gmail", "Gmail", ["claude-code"], True, False, "own")
     assert stat.S_IMODE(os.stat(tmp_path / "tools.json").st_mode) == 0o600
-    assert "Search mail" not in (tmp_path / "tools.json").read_text()  # a hash, not the description
+    # Its one tool's first sentence, for the Tools page; the rest of the description stays out.
+    assert s["about"] == "Search mail threads by sender or subject."
+    assert s["details"] == [{"name": "mcp__claude_ai_Gmail__search_threads", "about": s["about"]}]
+    assert "Gmail search syntax" not in (tmp_path / "tools.json").read_text()
     reg.reviewed()
     assert not reg.snapshot(DEFAULT_POLICY)[0]["new"]
 
@@ -213,6 +217,32 @@ def test_a_changed_tool_pauses_its_server_until_trusted(tmp_path):
     # Another keepmum process (the CLI) trusts it: this one sees it on its next decision.
     assert ToolRegistry(tmp_path / "tools.json").trust("mcp__claude_ai_Gmail") == ["mcp__claude_ai_Gmail__search_threads"]
     assert restored_input(r, "mcp__claude_ai_Gmail__get", policy, q=ph) == {"q": EMAIL}
+
+
+def test_each_tool_keeps_the_first_sentence_of_its_description(tmp_path):
+    assert about_of("\n- Allows Claude to search the web and use the results to inform responses\n- Provides results") == \
+        "Allows Claude to search the web and use the results to inform responses"
+    assert about_of("Use a mouse and keyboard to interact with a web browser, and take screenshots. If you don't") == \
+        "Use a mouse and keyboard to interact with a web browser, and take screenshots."
+    assert about_of("# Search\n\nSearch pages") == "Search"
+    assert about_of("Run JS\x07 in a REPL") == "Run JS in a REPL"  # nothing the page cannot print
+    assert about_of("") == "" and about_of(None) == "" and about_of({"x": 1}) == ""
+    long = about_of("word " * 100)
+    assert len(long) <= ABOUT + 1 and long.endswith("word…")
+    reg = ToolRegistry(tmp_path / "tools.json")
+    many = [(f"mcp__notes__{n}", f"{n.title()} a note.", {}) for n in ("find", "send")]
+    reg.observe(many, "codex", network)
+    [s] = reg.snapshot(DEFAULT_POLICY)
+    assert s["about"] == "" and [d["about"] for d in s["details"]] == ["Find a note.", "Send a note."]
+    # A Responses MCP server describes itself as a whole.
+    reg.observe([("mcp__docs__*", "Our team's docs. Read-only.", "https://docs.example/mcp")], "codex", network)
+    assert next(x for x in reg.snapshot(DEFAULT_POLICY) if x["server"] == "mcp__docs")["about"] == "Our team's docs."
+    # A registry written before descriptions were kept fills them in on the next request.
+    data = json.loads((tmp_path / "tools.json").read_text())
+    del data["servers"]["mcp__notes"]["tools"]["mcp__notes__find"]["about"]
+    (tmp_path / "tools.json").write_text(json.dumps(data))
+    reg.observe(many, "codex", network)
+    assert ToolRegistry(tmp_path / "tools.json").snapshot(DEFAULT_POLICY)[1]["details"][0]["about"] == "Find a note."
 
 
 def test_kept_calls_a_setting_could_fix_are_counted_per_type(tmp_path):

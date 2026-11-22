@@ -13,9 +13,10 @@ BULK real values in one call (a search needs one or two; dumping a contact list 
 and gets none while its server's tools differ from the ones keepmum saw first or you last
 trusted (a server that rewrites its tool descriptions, or another server taking its name).
 
-The servers seen, a fingerprint of each tool's definition, and how often a call kept
-placeholders a setting could have let through live in ~/.config/keepmum/tools.json (0600):
-tool names and hashes, never a value.
+The servers seen, a fingerprint of each tool's definition, the first sentence of its description
+(for the Tools page: what each tool says it does, in its author's words), and how often a call kept
+placeholders a setting could have let through live in ~/.config/keepmum/tools.json (0600): what
+the servers wrote about themselves, never a value from a request.
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ CONTACTS = ("PERSON", "EMAIL", "PHONE", "ADDRESS")
 BULK = 5
 # How long kept-call counts are kept, in days (Settings shows the last 7).
 KEEP_DAYS = 30
+# The most characters kept of a tool's description.
+ABOUT = 200
 
 
 def tools_file() -> Path:
@@ -141,6 +144,26 @@ def definitions(body: dict, api: str | None) -> list[tuple[str, str, object]]:
     return out
 
 
+_LEAD = re.compile(r"^[-*•>#]+\s*")
+_SENTENCE = re.compile(r"(.+?[.!?])(?=\s+[A-Z(\"'`]|$)")
+
+
+def about_of(description) -> str:
+    """What a tool says it does, for the Tools page: the first sentence of its description's first
+    line, without a list marker, at most ABOUT characters. Claude Code's WebSearch starts
+    "- Allows Claude to search the web and use the results to inform responses"."""
+    if not isinstance(description, str):
+        return ""
+    line = next((x for x in description.splitlines() if x.strip(" -*•>#\t")), "")
+    line = "".join(c for c in line if c.isprintable())
+    line = " ".join(_LEAD.sub("", line.strip()).split())
+    if m := _SENTENCE.match(line):
+        line = m.group(1)
+    if len(line) > ABOUT:
+        line = line[:ABOUT].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return line
+
+
 def _hash(description: str, schema) -> str:
     raw = json.dumps([description, schema], sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:16]
@@ -219,7 +242,7 @@ class ToolRegistry:
         seen = {}
         for name, description, schema in defs:
             if network(name):
-                seen[name] = _hash(description, schema)
+                seen[name] = (_hash(description, schema), about_of(description))
         if not seen:
             return
         with self._lock:
@@ -227,21 +250,21 @@ class ToolRegistry:
             servers = self._state["servers"]
             fresh = any(
                 (s := servers.get(server_of(n))) is None or (t := s["tools"].get(n)) is None or t["hash"] != h
-                or (client and client not in s.get("agents", []))
-                for n, h in seen.items())
+                or t.get("about") != about or (client and client not in s.get("agents", []))
+                for n, (h, about) in seen.items())
         if not fresh:
             return
         try:
             with self._update() as servers:
                 now = round(time.time())
-                for name, h in seen.items():
+                for name, (h, about) in seen.items():
                     key = server_of(name)
                     s = servers.setdefault(key, {"label": label_of(key), "agents": [], "first_seen": now,
                                                  "new": True, "tools": {}, "kept": {}})
                     if client and client not in s["agents"]:
                         s["agents"] = sorted([*s["agents"], client])
                     t = s["tools"].setdefault(name, {"hash": h, "trusted": h})
-                    t["hash"] = h
+                    t["hash"], t["about"] = h, about
         except OSError:
             pass  # a read-only home: decisions still use what was read
 
@@ -309,7 +332,9 @@ class ToolRegistry:
 
     def snapshot(self, policy: dict, now: float | None = None) -> list[dict]:
         """Every server, for the app and `keepmum tools`: its setting, whether it is new or
-        paused (and which tools changed), and the last 7 days' kept calls by type."""
+        paused (and which tools changed), the last 7 days' kept calls by type, and what it and each
+        of its tools say they do (`about`, `details`): a Responses MCP server's own description, or
+        a server's one tool's."""
         from .restore import DEFAULT_POLICY, rule_for
 
         with self._lock:
@@ -324,8 +349,11 @@ class ToolRegistry:
                 if day >= week:
                     kept.update(kinds)
             changed = sorted(n for n, t in s["tools"].items() if t["hash"] != t["trusted"]) if pinned(key) else []
+            details = [{"name": n, "about": t.get("about", "")} for n, t in sorted(s["tools"].items())]
+            whole = s["tools"].get(rule_key(key), {}).get("about") if key.startswith("mcp__") else None
+            about = whole or (details[0]["about"] if len(details) == 1 else "")
             out.append({"server": key, "label": s.get("label", label_of(key)), "agents": s.get("agents", []),
-                        "tools": sorted(s["tools"]), "new": bool(s.get("new")), "paused": bool(changed), "changed": changed,
+                        "tools": sorted(s["tools"]), "about": about, "details": details, "new": bool(s.get("new")), "paused": bool(changed), "changed": changed,
                         "setting": setting_of(action), "types": list(action) if isinstance(action, (list, tuple)) else [],
                         "rule": pattern, "own_rule": pattern == rule_key(key) or pattern in s["tools"],
                         "default": DEFAULT_POLICY.get(pattern) == action,

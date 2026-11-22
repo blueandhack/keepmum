@@ -865,6 +865,11 @@ struct ToolServer: Decodable, Sendable, Identifiable, Hashable {
     var label: String
     var agents: [String] = []
     var tools: [String] = []
+    /// What it says it does, in its author's words: a Responses MCP server's own description, or
+    /// its one tool's. Optional: an engine before 0.1.0a15 sends none.
+    var about: String?
+    /// Each tool and the first sentence of its description.
+    var details: [Detail]?
     /// Not reviewed yet: it runs on keepmum's default until you choose.
     var new = false
     /// One of its tools changed since it was trusted: it gets placeholders only.
@@ -886,16 +891,32 @@ struct ToolServer: Decodable, Sendable, Identifiable, Hashable {
     /// Set by a broader [restore] key written in the config file ("mcp__*" = [...]), not by this row.
     var setElsewhere: Bool { !ownRule && !self.default }
 
+    struct Detail: Decodable, Sendable, Hashable, Identifiable {
+        var name: String
+        var about: String
+        var id: String { name }
+    }
+
     static let samples: [ToolServer] = [
-        .init(server: "mcp__claude_ai_Gmail", label: "Gmail", agents: ["claude-code"], tools: ["mcp__claude_ai_Gmail__search_threads"],
+        .init(server: "mcp__claude_ai_Gmail", label: "Gmail", agents: ["claude-code"],
+              tools: ["mcp__claude_ai_Gmail__get_thread", "mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Gmail__send_message"],
+              details: [.init(name: "mcp__claude_ai_Gmail__get_thread", about: "Get a thread's messages by its id."),
+                        .init(name: "mcp__claude_ai_Gmail__search_threads", about: "Search threads with Gmail's search syntax."),
+                        .init(name: "mcp__claude_ai_Gmail__send_message", about: "Send an email.")],
               setting: "own", rule: "mcp__*", default: true, keptWeek: ["EMAIL": 6]),
         .init(server: "mcp__linear", label: "linear", agents: ["claude-code", "codex"], tools: ["mcp__linear__create_issue"],
+              about: "Create a new Linear issue.", details: [.init(name: "mcp__linear__create_issue", about: "Create a new Linear issue.")],
               setting: "contacts", types: ["PERSON", "EMAIL", "PHONE", "ADDRESS"], rule: "mcp__linear__*", ownRule: true),
-        .init(server: "mcp__notion", label: "notion", agents: ["claude-code"], tools: ["mcp__notion__search"], new: true,
+        .init(server: "mcp__notion", label: "notion", agents: ["claude-code"], tools: ["mcp__notion__search"],
+              about: "Search the workspace's pages and databases.",
+              details: [.init(name: "mcp__notion__search", about: "Search the workspace's pages and databases.")], new: true,
               setting: "own", rule: "mcp__*", default: true),
-        .init(server: "mcp__docs", label: "docs", agents: ["codex"], tools: ["mcp__docs__fetch"], paused: true,
-              changed: ["mcp__docs__fetch"], setting: "own", rule: "mcp__*", default: true),
+        .init(server: "mcp__docs", label: "docs", agents: ["codex"], tools: ["mcp__docs__fetch"],
+              about: "Fetch a page of the team's docs.", details: [.init(name: "mcp__docs__fetch", about: "Fetch a page of the team's docs.")],
+              paused: true, changed: ["mcp__docs__fetch"], setting: "own", rule: "mcp__*", default: true),
         .init(server: "WebSearch", label: "WebSearch", agents: ["claude-code"], tools: ["WebSearch"],
+              about: "Allows Claude to search the web and use the results to inform responses",
+              details: [.init(name: "WebSearch", about: "Allows Claude to search the web and use the results to inform responses")],
               setting: "placeholders", rule: "WebSearch", default: true, public: true),
     ]
 }

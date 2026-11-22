@@ -115,6 +115,8 @@ private struct ToolRow: View {
     var change: (String?, [String]) -> Void
     var trust: () -> Void
     @Environment(\.isSnapshot) private var isSnapshot
+    /// Its tools listed, each with what it says it does.
+    @State private var open = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
@@ -128,12 +130,34 @@ private struct ToolRow: View {
                         if server.paused { Chip(text: "Paused", tone: Theme.warning) }
                         if server.public { Chip(text: "Public") }
                     }
-                    Text(detail).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
-                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    // Its author's words, in quotes: a claim, not keepmum's.
+                    if let about = server.about, !about.isEmpty {
+                        Text("\u{201C}\(about)\u{201D}").font(.km(.callout)).foregroundStyle(Theme.text.opacity(0.85))
+                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                            .help("What it says it does, from the definition your agent sent")
+                    }
+                    HStack(spacing: Space.xs) {
+                        Text(detail).font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        if listed.count > 1 {
+                            if !detail.isEmpty { Text("·").font(.km(.caption)).foregroundStyle(Theme.textTertiary) }
+                            Button {
+                                withAnimation(Motion.quick) { open.toggle() }
+                            } label: {
+                                HStack(spacing: Space.xxs) {
+                                    Text("\(listed.count) tools")
+                                    Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 8, weight: .bold))
+                                }
+                            }
+                            .buttonStyle(.plain).font(.km(.caption).weight(.medium)).foregroundStyle(Theme.accent)
+                            .help(open ? "Hide its tools" : "What each of its tools says it does")
+                        }
+                    }
                 }
                 Spacer(minLength: Space.m)
                 picker.disabled(busy || server.setElsewhere || server.setting == "restore")
             }
+            if open && listed.count > 1 { toolList }
             if server.paused {
                 Banner(tone: .warning, icon: "exclamationmark.shield",
                        title: "Its tools changed",
@@ -154,6 +178,35 @@ private struct ToolRow: View {
             }
         }
         .padding(.vertical, Space.s + Space.xxs)
+    }
+
+    /// Its tools with what each says it does; an engine before descriptions sends names only.
+    private var listed: [ToolServer.Detail] {
+        server.details ?? server.tools.map { ToolServer.Detail(name: $0, about: "") }
+    }
+
+    private var toolList: some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Space.m, verticalSpacing: Space.xs + Space.xxs) {
+            ForEach(listed) { tool in
+                GridRow {
+                    HStack(spacing: Space.xs) {
+                        Text(short(tool.name)).font(.km(.monoSmall)).foregroundStyle(Theme.text)
+                            .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                        if server.changed.contains(tool.name) { Chip(text: "Changed", tone: Theme.warning) }
+                    }
+                    .help(tool.name)
+                    if tool.about.isEmpty {
+                        Text("No description").font(.km(.caption)).foregroundStyle(Theme.textTertiary)
+                    } else {
+                        Text("\u{201C}\(tool.about)\u{201D}").font(.km(.caption)).foregroundStyle(Theme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(.leading, 24 + Space.m)
+        .padding(.top, Space.xxs)
+        .transition(.opacity)
     }
 
     private var detail: String {
