@@ -22,7 +22,8 @@ MAX_TEXT = 400_000  # characters of text kept
 MAX_STREAM = 20_000_000  # bytes a stream may inflate to
 
 _STREAM = re.compile(rb"<<(?P<dict>(?:[^<>]|<<(?:[^<>]|<<[^<>]*>>)*>>|<[0-9A-Fa-f\s]*>)*)>>\s*stream\r?\n", re.S)
-_TOKEN = re.compile(rb"\((?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*\)|<[0-9A-Fa-f\s]*>|\[|\]|/[^\s/<>\[\]()]+|[-+]?\d*\.\d+|[-+]?\d+|[A-Za-z'\"*]+")
+# A string's escape takes any next byte, a newline too: a backslash at a line's end continues it.
+_TOKEN = re.compile(rb"\((?:\\[\s\S]|[^\\()]|\((?:\\[\s\S]|[^\\()])*\))*\)|<[0-9A-Fa-f\s]*>|\[|\]|/[^\s/<>\[\]()]+|[-+]?\d*\.\d+|[-+]?\d+|[A-Za-z'\"*]+")
 _ESCAPES = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f", b"(": b"(", b")": b")", b"\\": b"\\"}
 _BFCHAR = re.compile(rb"beginbfchar(.*?)endbfchar", re.S)
 _BFRANGE = re.compile(rb"beginbfrange(.*?)endbfrange", re.S)

@@ -135,3 +135,55 @@ def test_a_secrets_cut_off_tail_in_plain_text_is_masked():
     assert key[-54:-30] not in out and out.startswith("KEEPMUM_SECRET_") and "CHAIN_ID=11155111" in out
     # Text that only shares a few characters with it is left alone.
     assert r.redact_text(f"commit {key[2:10]}abcdef0123 done") == f"commit {key[2:10]}abcdef0123 done"
+
+
+def test_text_of_escapes_in_literal_strings():
+    # \101 is octal for "A", a backslash at a line end continues the string, \q is no escape: dropped
+    drawn = b"BT (\\101cme\\\nPay \\q(x) \\t\\\\ ok) Tj ET"
+    assert text_of(pdf(drawn)) == "AcmePay q(x) \t\\ ok"
+
+
+def test_text_of_the_quote_operators_and_spacing_in_tj():
+    # ' and " move to the next line and show a string; in TJ a gap wider than 200 is a space; a Td
+    # along the line (second operand 0) keeps the line, one that moves down starts a new one.
+    drawn = (b"BT (first) ' 1 2 (second) \" [(wide) -250 (gap) -50 (narrow)] TJ 40 0 Td (same) Tj "
+             b"0 -14 Td (next) Tj /F1 9 Tf (font) Tj ET")
+    assert text_of(pdf(drawn)) == "first\nsecond\nwide gapnarrowsame\nnextfont"
+
+
+def test_text_of_a_font_with_a_range_of_codes():
+    # bfrange: <0001> <0003> <0041> maps codes 1..3 to A..C; an array form and a short line are skipped.
+    cmap = (b"begincmap\n3 beginbfrange\n<0001> <0003> <0041>\n<0010> <0011> [<0058> <0059>]\n<0020>\nendbfrange\nendcmap")
+    cmap_obj = b"<< /Length %d >>\nstream\n" % len(cmap) + cmap + b"\nendstream"
+    assert text_of(pdf(b"BT <000100020003> Tj ET", [cmap_obj])) == "ABC"
+    # Codes the table does not know, in a one-byte font: read as they are.
+    one = b"begincmap\n1 beginbfchar\n<01> <0041>\nendbfchar\nendcmap"
+    one_obj = b"<< /Length %d >>\nstream\n" % len(one) + one + b"\nendstream"
+    assert text_of(pdf(b"BT (\\001bc) Tj ET", [one_obj])) == "Abc"
+
+
+def test_text_of_skips_streams_it_cannot_read():
+    broken = b"<< /Length 9 /Filter /FlateDecode >>\nstream\nnot zlib!\nendstream"
+    image = b"<< /Length 4 /Filter /DCTDecode >>\nstream\n\xff\xd8\xff\xe0\nendstream"
+    unclosed = b"<< /Length 99 >>\nstream\nBT (lost) Tj ET"
+    assert text_of(pdf(b"BT (kept) Tj ET", [broken, image])) == "kept"
+    assert text_of(pdf(b"BT (kept) Tj ET", [unclosed])) == "kept"
+
+
+def test_text_of_stops_at_its_caps(monkeypatch):
+    from keepmum import pdftext
+
+    monkeypatch.setattr(pdftext, "MAX_TEXT", 30)
+    many = b"BT " + b" T* ".join(b"(line %02d of text) Tj" % i for i in range(20)) + b" ET"
+    out = text_of(pdf(many, [b"<< /Length 20 >>\nstream\nBT (after the cap) Tj ET\nendstream"]))
+    assert out.startswith("line 00 of text\nline 01") and len(out) <= 30 and "after" not in out
+    monkeypatch.setattr(pdftext, "MAX_PDF", 10)
+    assert text_of(PLAIN) == ""
+
+
+def test_from_base64_reads_data_urls_and_refuses_what_is_not_base64():
+    from keepmum.pdftext import from_base64
+
+    assert from_base64("data:application/pdf;base64," + base64.b64encode(b"%PDF-1.4").decode()) == b"%PDF-1.4"
+    assert from_base64(base64.b64encode(b"x").decode()) == b"x"
+    assert from_base64("abc") is None  # incomplete padding
