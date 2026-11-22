@@ -632,6 +632,9 @@ def test_a_key_in_a_sed_expression_is_masked_alone(rules):
     ("北京市朝阳区建国路88号\\n王芳,+86 139", "北京市朝阳区建国路88号\\n王芳", "PERSON", "王芳"),
     ("Ship to 10 Downing St, London SW1A 2AA", "10 Downing St, London SW1A 2AA", "ADDRESS", "10 Downing St, London SW1A 2AA"),
     ("Customers: Beijing (3), Shanghai (2), Shenzhen (1)", "Beijing (3), Shanghai", "ADDRESS", None),
+    # The Antigravity CLI's own name for itself, in its safety monitor's prompt (data-01 on agy, Nov 22).
+    ("You are a safety and security rater overseeing Jetski, an AI agent.", "Jetski", "PERSON", None),
+    ("Margaret Thornbury asked Jetski to help.", "Margaret Thornbury", "PERSON", "Margaret Thornbury"),
     # An email run over the domain written after it (data-01 on Claude Code, Nov 21).
     ("- margaret.thornbury@gmail.com gmail.com: 6 tickets", "margaret.thornbury@gmail.com gmail.com", "EMAIL", "margaret.thornbury@gmail.com"),
     ("Top: Margaret (margaret.thornbury@gmail.com) gmail.com", "(margaret.thornbury@gmail.com) gmail.com", "EMAIL", "margaret.thornbury@gmail.com"),

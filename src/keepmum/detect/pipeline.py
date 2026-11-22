@@ -93,6 +93,9 @@ _PLACES = frozenset("""北京 上海 天津 重庆 广州 深圳 杭州 南京 �
 青海 台湾 内蒙古 广西 西藏 宁夏 新疆
 Beijing Shanghai Tianjin Chongqing Guangzhou Shenzhen Hangzhou Nanjing Suzhou Chengdu Wuhan Xian Changsha
 Zhengzhou Qingdao Xiamen Hong Kong Macau Taipei""".split())
+# Agents' names for themselves, in their own prompts: the Antigravity CLI's safety monitor is told it
+# oversees "Jetski, an AI agent" (data-01 on agy, Nov 22). No person's name; Claude is one, so it is not here.
+_AGENT_NAMES = frozenset({"jetski", "antigravity", "codex", "cascade"})
 _MONTH_OR_DIGITS = re.compile(r"(?i)\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|[\d\s:,./-]+")
 
 
@@ -438,7 +441,7 @@ class Pipeline:
             # A name has a capital or a space; it is no dot-file (.git, .codex in a listing), no
             # handle or path, and no city (北京 in a table of cities: i18n-01, Nov 18).
             return not (_IDENTIFIER_WORD.fullmatch(value) or value[:1] in ".@" or "/" in value or "@" in value
-                        or value.rstrip("市") in _PLACES
+                        or value.rstrip("市") in _PLACES or value.strip().lower() in _AGENT_NAMES
                         or value.isascii() and " " not in value.strip() and not any(c.isupper() for c in value))  # n-rw-r--r
         if span.type == "ADDRESS":
             return _plausible_address(value)

@@ -97,6 +97,7 @@ def test_keepmum_claude_refuses_when_protected_and_the_service_is_down(claude_di
     from keepmum.cli import app
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)  # not the checkout: a project that skips keepmum there would decide it
     protect.enable(7788)
     monkeypatch.setattr(launch, "shared_serve_port", lambda cfg: None)
     r = CliRunner().invoke(app, ["claude", "-p", "hi"])
@@ -109,6 +110,7 @@ def test_keepmum_claude_uses_the_service_when_protected(claude_dir, tmp_path, mo
     from keepmum.cli import app
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)  # not the checkout: a project that skips keepmum there would decide it
     protect.enable(7788)
     monkeypatch.setattr(launch, "shared_serve_port", lambda cfg: 7788)
     bin_dir = tmp_path / "bin"
