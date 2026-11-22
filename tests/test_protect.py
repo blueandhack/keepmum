@@ -253,23 +253,22 @@ def test_wrapper_runs_claude_directly_in_an_excluded_project(tmp_path):
 def test_off_switches_running_sessions_at_once_then_takes_its_line_out(claude_dir, monkeypatch):
     """A running Claude Code takes a new value at once but keeps the last one when the key is removed
     (Claude Code 2.1.310 and 2.1.330). So `off` sets where keepmum forwarded, which reads as plain off,
-    and takes the line out once the sessions that read keepmum's value have ended."""
+    and takes the line out once running sessions have taken it."""
     claude_dir.mkdir()
     (claude_dir / "settings.json").write_text(json.dumps({"model": "opus"}))
     protect.enable(7788)
-    running = {"n": 2}
-    monkeypatch.setattr(protect, "claude_sessions_since", lambda when: running["n"])
+    monkeypatch.setattr(protect, "SETTLE_S", 3600.0)  # running sessions have not taken it yet
     st = protect.disable(7788, upstream="https://api.anthropic.com")
     assert settings(claude_dir) == {"model": "opus", "env": {"ANTHROPIC_BASE_URL": "https://api.anthropic.com"}}
     assert not st.on and st.value is None and st.as_dict()["base_url"] is None  # off, not "another gateway"
     assert protect.status(7788).value is None  # still running: the line stays
-    running["n"] = 0
-    assert protect.status(7788).value is None and settings(claude_dir) == {"model": "opus"}  # gone: so is the line
+    monkeypatch.setattr(protect, "SETTLE_S", 0.0)  # taken: the line goes, and they keep the value
+    assert protect.status(7788).value is None and settings(claude_dir) == {"model": "opus"}
     assert not protect._off_file().exists()
 
 
 def test_on_after_off_is_not_taken_for_another_gateway(claude_dir, monkeypatch):
-    monkeypatch.setattr(protect, "claude_sessions_since", lambda when: 1)
+    monkeypatch.setattr(protect, "SETTLE_S", 3600.0)
     protect.enable(7788)
     protect.disable(7788, upstream="https://api.anthropic.com")
     st = protect.enable(7788)  # no adopt: Anthropic is not a gateway to put keepmum in front of
@@ -281,7 +280,7 @@ def test_off_uses_keepmums_upstream_and_leaves_a_changed_value_alone(claude_dir,
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / ".config" / "keepmum").mkdir(parents=True)
     (tmp_path / ".config" / "keepmum" / "config.toml").write_text('[server]\nupstream = "https://llm.example"\n')
-    monkeypatch.setattr(protect, "claude_sessions_since", lambda when: None)  # ps cannot say: kept
+    monkeypatch.setattr(protect, "SETTLE_S", 3600.0)  # not taken yet: kept
     protect.enable(7788)
     protect.disable(7788)
     assert settings(claude_dir)["env"]["ANTHROPIC_BASE_URL"] == "https://llm.example"
@@ -303,24 +302,19 @@ def test_tidy_with_a_broken_settings_file_or_no_note_does_nothing(claude_dir):
     assert protect._switched_off() is None
 
 
-def test_claude_sessions_are_counted_from_ps(monkeypatch):
-    monkeypatch.undo()  # conftest stubs the counter for every test; this one checks the real one
-    out = ("Sat Nov 21 12:58:50 2026     /Users/me/.vscode/extensions/anthropic.claude-code-2.1.330/resources/native-binary/claude --output-format stream-json\n"
-           "Sat Nov 21 13:00:00 2026     claude\n"
-           "Sat Nov 21 13:00:01 2026     /Users/me/.local/share/claude/versions/2.1.310 -p hi\n"
-           "Sat Nov 21 14:00:00 2026     claude --resume\n"  # started after: never read keepmum's value
-           "Sat Nov 21 12:00:00 2026     /Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/x\n"
-           "Sat Nov 21 12:00:00 2026     /usr/bin/python3 claude.py\n"
-           "Xxx Nov 99 12:00:00 2026     claude\nnot a ps line\n")
-    from datetime import datetime
+def test_keepmum_claude_waits_for_a_fresh_switch_then_its_line_goes(claude_dir, monkeypatch):
+    """`keepmum claude` sets its address in the environment, which a settings line would override:
+    right after a switch it waits the rest of SETTLE_S, a few seconds, rather than refuse."""
+    import time
 
-    when = datetime(2026, 11, 21, 13, 30).timestamp()
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, out, ""))
-    assert protect.claude_sessions_since(when) == 3
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "no"))
-    assert protect.claude_sessions_since(when) is None
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError("no ps")))
-    assert protect.claude_sessions_since(when) is None
+    protect.enable(7788)
+    monkeypatch.setattr(protect, "SETTLE_S", 0.2)
+    protect.disable(7788, upstream=UP)
+    assert settings(claude_dir) == {"env": {"ANTHROPIC_BASE_URL": UP}}
+    started = time.time()
+    protect.settle()
+    assert 0.05 < time.time() - started < 1 and settings(claude_dir) == {}
+    protect.settle()  # nothing left to wait for
 
 
 def test_a_note_that_cannot_be_written_or_removed_is_no_error(monkeypatch, tmp_path):
@@ -332,3 +326,98 @@ def test_a_note_that_cannot_be_written_or_removed_is_no_error(monkeypatch, tmp_p
     monkeypatch.setattr(protect, "_off_file", lambda: tmp_path)  # a folder: unlink fails
     protect._forget_off()
     assert protect._switched_off() is None
+
+
+def test_settings_and_config_that_cannot_be_read_are_refused_or_skipped(claude_dir, tmp_path, monkeypatch):
+    assert not protect.is_keepmum_url("http://[::1", 7788)  # not a URL at all
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text(json.dumps({"env": ["not", "an", "object"]}))
+    with pytest.raises(ProtectError, match="env object"):
+        protect.enable(7788)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".config" / "keepmum").mkdir(parents=True)
+    (tmp_path / ".config" / "keepmum" / "config.toml").write_text("[gateways\n")
+    assert protect._gateways() == {}  # a broken config: no gateways, not a crash
+
+
+def test_a_project_root_when_git_cannot_say(tmp_path, monkeypatch):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert protect.project_root(plain) == plain.resolve()  # no repository: the folder itself
+
+    def no_git(*a, **k):
+        raise OSError("no git")
+
+    monkeypatch.setattr(subprocess, "run", no_git)
+    assert protect.project_root(plain) == plain.resolve()
+
+
+def test_a_repository_owned_by_someone_else_is_not_used_as_the_root(repo, monkeypatch):
+    real = os.getuid()
+    monkeypatch.setattr(os, "getuid", lambda: real + 1)  # as if another user owned it
+    assert protect.project_root(repo / "src") == (repo / "src").resolve()
+
+
+def test_exclusions_whose_files_cannot_be_read(repo, monkeypatch):
+    protect.exclude(repo, UP)
+    (repo / ".claude" / "settings.local.json").write_text("{broken")
+    assert protect.is_excluded(repo) is None  # unreadable: not counted as excluded
+    assert protect.excluded_projects() == [{"path": str(repo.resolve()), "url": UP, "active": False}]
+    protect.include(repo)  # still undone in keepmum's list, the broken file left as it is
+    assert protect.excluded_projects() == [] and (repo / ".claude" / "settings.local.json").read_text() == "{broken"
+
+    def git_fails(*a, **k):
+        raise subprocess.TimeoutExpired("git", 10)
+
+    root = protect.project_root(repo)
+    monkeypatch.setattr(subprocess, "run", git_fails)
+    with pytest.raises(ProtectError, match="could not check git"):
+        protect._keep_out_of_git(root, root / ".claude" / "settings.local.json")
+
+
+def test_include_switches_running_sessions_back_to_keepmum_at_once(repo, claude_dir, monkeypatch):
+    """Claude Code open in an excluded project keeps the last value it read when the key goes, so it
+    would go on straight to Anthropic, unscanned, after `include`. The line takes keepmum's value
+    instead, which running sessions take at once, and goes once they have."""
+    protect.enable(7788)
+    keepmum = "http://127.0.0.1:7788"
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "settings.local.json").write_text(json.dumps({"permissions": {"allow": ["Bash(ls)"]}}))
+    protect.exclude(repo, UP)
+    monkeypatch.setattr(protect, "SETTLE_S", 3600.0)
+    protect.include(repo)
+    assert local(repo) == {"permissions": {"allow": ["Bash(ls)"]}, "env": {"ANTHROPIC_BASE_URL": keepmum}}
+    assert protect.is_excluded(repo) is None and protect.excluded_projects() == []
+    # While it is there, it follows the user settings: off and on reach this project's sessions too.
+    protect.disable(7788, upstream=UP)
+    assert local(repo)["env"]["ANTHROPIC_BASE_URL"] == UP
+    protect.enable(7788)
+    assert local(repo)["env"]["ANTHROPIC_BASE_URL"] == keepmum
+    monkeypatch.setattr(protect, "SETTLE_S", 0.0)
+    assert not protect.tidy() and local(repo) == {"permissions": {"allow": ["Bash(ls)"]}}
+    assert not protect._projects_file().exists()
+
+
+def test_a_project_line_someone_changed_or_cannot_read_is_left_alone(repo, claude_dir, monkeypatch):
+    protect.enable(7788)
+    monkeypatch.setattr(protect, "SETTLE_S", 3600.0)
+    protect.exclude(repo, UP)
+    protect.include(repo)
+    f = repo / ".claude" / "settings.local.json"
+    f.write_text("{broken")
+    protect.tidy()
+    protect.disable(7788, upstream=UP)  # unreadable: skipped, not rewritten
+    assert f.read_text() == "{broken" and protect._project_notes()
+    f.write_text(json.dumps({"env": {"ANTHROPIC_BASE_URL": "https://mine.example"}}))
+    monkeypatch.setattr(protect, "SETTLE_S", 0.0)
+    protect.tidy()  # someone else's now: left, and forgotten
+    assert local(repo) == {"env": {"ANTHROPIC_BASE_URL": "https://mine.example"}} and protect._project_notes() == {}
+    protect._projects_file().write_text("not json")
+    assert protect._project_notes() == {}
+
+
+def test_include_with_protection_off_just_removes_its_line(repo, claude_dir):
+    protect.exclude(repo, UP)
+    protect.include(repo)  # nothing in the user settings: running sessions already go where they would
+    assert not (repo / ".claude" / "settings.local.json").read_text().strip("{} \n")
+    assert protect._project_notes() == {}

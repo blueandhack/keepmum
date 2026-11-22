@@ -548,6 +548,9 @@ def wrap_main() -> int:
         cfg = load()
     except ConfigError as e:
         return refuse(f"bad config: {e}")
+    from .protect import settle
+
+    settle()  # a switch just made: its line goes once running sessions have it, a few seconds at most
     risks = bypass_risks(Path.cwd(), cfg.port)
     if risks:
         return refuse("refusing to start, Claude Code could bypass the proxy: " + "; ".join(risks))

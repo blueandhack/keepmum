@@ -27,9 +27,9 @@ def _no_codex_processes(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_claude_sessions(monkeypatch, tmp_path):
-    """Claude Code sessions running on this Mac must not keep a test's `off` line (protect.tidy), and
-    each test notes `off` in a place of its own."""
+    """keepmum's switching lines go at once in tests (protect.SETTLE_S), and each test notes them in a
+    place of its own."""
     from keepmum import protect
 
-    monkeypatch.setattr(protect, "claude_sessions_since", lambda when: 0)
+    monkeypatch.setattr(protect, "SETTLE_S", 0.0)
     monkeypatch.setattr(protect, "_off_file", lambda: tmp_path / "keepmum-claude-off.json")

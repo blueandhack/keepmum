@@ -123,9 +123,10 @@ def claude(ctx: typer.Context) -> None:
     import shutil
 
     from .launch import PROTECTED_BUT_DOWN, _run_child, bypass_risks, log_to_file, protected, run_claude, shared_serve_port
-    from .protect import is_excluded
+    from .protect import is_excluded, settle
 
     cfg = _config()
+    settle()  # a switch just made: its line goes once running sessions have it, a few seconds at most
     if url := is_excluded(Path.cwd()):
         typer.echo(f"keepmum claude: this project is excluded (Claude Code here goes straight to {url}); "
                    "run `claude`, or `keepmum include` to scan it again", err=True)

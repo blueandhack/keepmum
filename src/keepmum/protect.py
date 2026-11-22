@@ -2,13 +2,14 @@
 
 Sets `env.ANTHROPIC_BASE_URL` in Claude Code's user settings file. Claude Code reads that file in
 the terminal, VS Code, JetBrains and the desktop app, and a value there replaces the same
-variable exported in the shell. A running session takes a new value as soon as the file is saved,
-but keeps the last one it read when the key is removed (seen Nov 21, 2026 with Claude Code 2.1.310
-and 2.1.330: a session switched A -> B at once, and stayed on B after the key went). So `off` does
-not remove keepmum's value while sessions that read it run: it sets the address keepmum forwarded
-to (Anthropic, or the gateway keepmum was in front of), which every running session takes at once,
-and the line goes once no session from before is left (`tidy`). Project settings can still
-override it, which `bypass_risks` reports.
+variable exported in the shell. A running session takes a new value once it has been in the file
+for about a second, and keeps it when the key is removed after that (seen Nov 21, 2026 with Claude
+Code 2.1.310 and 2.1.330: a session switched A -> B at once, and stayed on B after the key went;
+B there 1.5 s or more was always taken, 1 s or less never). So `off` does not just remove
+keepmum's value, which no running session would follow: it sets the address keepmum forwarded to
+(Anthropic, or the gateway keepmum was in front of), every running session takes it, and the line
+goes after SETTLE_S (`tidy`). `include` puts a project back the same way. Project settings can
+still override it, which `bypass_risks` reports.
 
 When it already sends Claude Code to another gateway (Magpie, LiteLLM), keepmum goes in front of it
 (gateway.py): the value becomes keepmum's route for that gateway, and `off` puts the gateway back.
@@ -128,13 +129,14 @@ def enable(port: int, adopt=None) -> Status:
     if env.get(KEY) != want:
         env[KEY] = want
         _write(path, data)
+    _follow_user_value(want)
     return status(port, getattr(adopt, "gateways", None))
 
 
 def disable(port: int, upstream: str | None = None) -> Status:
     """Take keepmum out: Claude Code goes back to the gateway keepmum was in front of, or to
     `upstream` (Anthropic), running sessions too, at once. A value, not a removed key, is what a
-    running session takes; the line is keepmum's, and goes once the sessions from before are gone."""
+    running session takes; the line is keepmum's, and goes once they have taken it (SETTLE_S)."""
     from .gateway import is_ours, unroute
 
     path = settings_path()
@@ -149,7 +151,7 @@ def disable(port: int, upstream: str | None = None) -> Status:
             env[KEY] = upstream or _upstream()
             _note_off(env[KEY])
         _write(path, data)
-        tidy()  # no session running from before: nothing to switch, and the line goes now
+        _follow_user_value(env[KEY])
     return status(port)
 
 
@@ -179,6 +181,65 @@ def _note_off(value: str) -> None:
         pass
 
 
+def _user_value() -> str | None:
+    """What the user settings send Claude Code to, keepmum's own `off` line included."""
+    try:
+        value = _read(settings_path()).get("env", {}).get(KEY)
+    except ProtectError:
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _projects_file() -> Path:
+    return _off_file().with_name("claude-included.json")
+
+
+def _project_notes() -> dict[str, dict]:
+    try:
+        notes = json.loads(_projects_file().read_text())
+        return {k: v for k, v in notes.items() if isinstance(v, dict) and isinstance(v.get("value"), str)} \
+            if isinstance(notes, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_project_notes(notes: dict[str, dict]) -> None:
+    f = _projects_file()
+    try:
+        if notes:
+            f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            f.write_text(json.dumps(notes))
+        else:
+            f.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _note_project(file: Path, value: str) -> None:
+    import time
+
+    notes = _project_notes()
+    notes[str(file)] = {"value": value, "since": time.time()}
+    _save_project_notes(notes)
+
+
+def _follow_user_value(value: str) -> None:
+    """A project's line from `include` follows the user settings while it is there: `off` or `on`
+    reach the sessions in that project at once too."""
+    notes = _project_notes()
+    for name, note in notes.items():
+        file = Path(name)
+        try:
+            data = _read(file)
+        except ProtectError:
+            continue
+        if data.get("env", {}).get(KEY) == note["value"] != value:
+            data["env"][KEY] = value
+            _write(file, data, backup=False)
+            note["value"] = value
+    _save_project_notes(notes)
+
+
 def _off_note() -> dict | None:
     try:
         note = json.loads(_off_file().read_text())
@@ -200,41 +261,58 @@ def _forget_off() -> None:
         pass
 
 
-def claude_sessions_since(when: float) -> int | None:
-    """How many Claude Code processes started before `when` still run (the CLI, an editor's, the
-    desktop app's); None if `ps` cannot say."""
-    import re
-    import subprocess
-    from datetime import datetime
+SETTLE_S = 15.0  # how long keepmum's switching line stays: ten times what Claude Code needed to take it
 
-    try:
-        res = subprocess.run(["ps", "-A", "-o", "lstart=,args="], capture_output=True, text=True, timeout=5,
-                             env={**os.environ, "LC_ALL": "C"})
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if res.returncode != 0:
-        return None
-    n = 0
-    for line in res.stdout.splitlines():
-        parts = line.split(None, 5)  # lstart is "Sat Nov 21 14:36:36 2026"
-        if len(parts) < 6:
-            continue
-        program = parts[5].split(" -", 1)[0].strip()
-        if not (re.search(r"(?:^|/)claude$", program) or "/claude/versions/" in program):
-            continue
+
+def settled(note: dict, now: float | None = None) -> bool:
+    import time
+
+    return (now or time.time()) - float(note.get("since") or 0) >= SETTLE_S
+
+
+def settle() -> None:
+    """Wait until keepmum's switching lines have been taken, then take them out: `keepmum claude`
+    sets its address in the environment, which a line in the settings would override."""
+    import time
+
+    notes = [n for n in (_off_note(), *_project_notes().values()) if n]
+    wait = max((SETTLE_S - (time.time() - float(n.get("since") or 0)) for n in notes), default=0)
+    if wait > 0:
+        time.sleep(wait)
+    tidy()
+
+
+def _tidy_projects() -> None:
+    """Take out each project's line from `include` once running sessions have taken it (SETTLE_S)."""
+    notes = _project_notes()
+    if not notes:
+        return
+    for name in list(notes):
+        file, note = Path(name), notes[name]
         try:
-            started = datetime.strptime(" ".join(parts[:5]), "%a %b %d %H:%M:%S %Y").timestamp()
-        except ValueError:
+            data = _read(file)
+        except ProtectError:
             continue
-        n += started <= when
-    return n
+        env = data.get("env", {})
+        if env.get(KEY) != note["value"]:
+            del notes[name]  # changed since: someone else's now
+            continue
+        if not settled(note):
+            continue
+        del env[KEY]
+        if not env:
+            data.pop("env", None)
+        _write(file, data, backup=False)
+        del notes[name]
+    _save_project_notes(notes)
 
 
 def tidy() -> bool:
-    """Take out the line `off` set once no Claude Code session from before it runs: one started
-    since never read keepmum's value, and the key gone, it goes wherever it would anyway. True if
-    taken out. Left as it is if it changed since (someone else's now), and while `ps` cannot tell."""
+    """Take out the line `off` set once running sessions have taken it (SETTLE_S): they keep it when
+    it goes, and a session started later goes wherever it would anyway. True if taken out. Left as it
+    is if it changed since (someone else's now)."""
     note = _off_note()
+    _tidy_projects()
     if note is None:
         return False
     path = settings_path()
@@ -246,7 +324,7 @@ def tidy() -> bool:
     if env.get(KEY) != note["value"]:
         _forget_off()
         return False
-    if claude_sessions_since(float(note.get("since") or 0)) != 0:
+    if not settled(note):
         return False
     del env[KEY]
     if not env:
@@ -380,11 +458,20 @@ def include(path: Path) -> Path:
     except ProtectError:
         data = None
     if data is not None and data.get("env", {}).get(KEY) == url:
-        del data["env"][KEY]
-        if not data["env"]:
-            data.pop("env")
+        # A running session keeps the last value it read when the key goes: Claude Code open in this
+        # project would go on around keepmum. So the line takes the value the user settings give
+        # (keepmum's, when protection is on), which they take at once, and goes once they are gone.
+        now = _user_value()
+        if now is not None and now != url:
+            data["env"][KEY] = now
+            _note_project(file, now)
+        else:
+            del data["env"][KEY]
+            if not data["env"]:
+                data.pop("env")
         _write(file, data, backup=False)
     _save_registry(reg)
+    tidy()
     return root
 
 
