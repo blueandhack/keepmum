@@ -20,9 +20,12 @@ IDLE_S unused (`Idle`), so it takes memory only while agents are working. `Guard
 the harm check (harm.py).
 
 Text is normalized first, as the model's own tokenizer does (`normalize`: smuggled text decoded,
-NFKC, invisible characters removed), then scored in 2,048-token windows (at most 16: 12 from the
-start and 4 from the end); a text gets its highest window. A result flags when its score reaches the
-threshold, Medium's 0.8 by default; one under SHORT_CHARS must reach a much higher one (`short_threshold`).
+NFKC, invisible characters removed), then scored in 2,048-token windows, every one of them; a text gets
+its highest window, and scoring stops at the first that reaches the threshold. Until Nov 22, 2026 a text
+got at most 16 windows (12 from the start and 4 from the end): a line planted halfway into a
+250,000-character result was never scored, and went to the cloud as it was. Every window costs 100-180
+ms here (M5 Pro): about 5 s for that result, once, since a text scored before is not scored again.
+A result flags when its score reaches the threshold, Medium's 0.8 by default; one under SHORT_CHARS must reach a much higher one (`short_threshold`).
 On real coding-agent sessions (bench/results/guard-public-*.md) short results were most of the false
 alarms: a grep line, an error, an agent's own notice. Few published attacks are that short, and a line
 planted in a repository usually arrives inside a longer file.
@@ -38,6 +41,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect
 import json
 import logging
 import math
@@ -141,7 +145,9 @@ def short_threshold(threshold: float) -> float:
     return max(threshold, max(bars, default=LEVELS["high"].short))
 
 
-WINDOW, OVERLAP, MAX_WINDOWS, TAIL_WINDOWS = 2048, 256, 16, 4
+WINDOW, OVERLAP = 2048, 256
+MAX_WINDOWS: int | None = None  # every window (see above); a number keeps the first and last of a longer text
+TAIL_WINDOWS = 4
 BOS, EOS = 2, 1  # <bos>, <eos>
 BATCH = 1  # windows per request to llama-server: one at a time is the fastest here, and the smallest
 MIN_CHARS = 40  # shorter tool results ("ok", an exit code) carry no instructions worth scoring
@@ -354,15 +360,15 @@ class Idle:
                     self.unload()
 
 
-def windows(ids: list[int], window: int, overlap: int, most: int, tail: int) -> list[list[int]]:
+def windows(ids: list[int], window: int, overlap: int, most: int | None, tail: int) -> list[list[int]]:
     """Windows of `window` tokens (with the two special tokens added later) overlapping by `overlap`.
-    A text longer than `most` of them keeps its first `most - tail` and its last `tail`."""
+    A text longer than `most` of them keeps its first `most - tail` and its last `tail`; None: all of them."""
     body = window - 2
     step = body - overlap
     if len(ids) <= body:
         return [ids]
     starts = list(range(0, len(ids) - body + step, step))
-    if len(starts) > most:
+    if most is not None and len(starts) > most:
         starts = starts[:most - tail] + [len(ids) - body - k * step for k in range(tail - 1, -1, -1)]
     return [ids[s:s + body] for s in starts]
 
@@ -422,8 +428,9 @@ class InjectionModel(Idle):
     def windows(ids: list[int]) -> list[list[int]]:
         return windows(ids, WINDOW, OVERLAP, MAX_WINDOWS, TAIL_WINDOWS)
 
-    def score(self, text: str) -> float:
-        """P(INJECTION) of the text's most likely window."""
+    def score(self, text: str, enough: float | None = None) -> float:
+        """P(INJECTION) of the text's most likely window; with `enough`, of the first window that
+        reaches it (the rest would not change the verdict)."""
         with self._lock:
             if not self.loaded():
                 self._start()
@@ -436,6 +443,8 @@ class InjectionModel(Idle):
                 for e in out:
                     safe, injection = e["embedding"][0]  # the classifier's logits: [SAFE, INJECTION]
                     best = max(best, sigmoid(injection - safe))  # softmax over two labels: a sigmoid of the margin
+                if enough is not None and best >= enough:
+                    break
             return best
 
 
@@ -566,6 +575,13 @@ class FlaggedStore:
         return rows
 
 
+def _score(model, text: str, enough: float) -> float:
+    """model.score(text), stopping at the first window that reaches `enough` where the model can."""
+    if "enough" in inspect.signature(model.score).parameters:
+        return model.score(text, enough=enough)
+    return model.score(text)
+
+
 class Guard:
     """One check (`name`: "injection" or "harm") over the texts of one request. `mode` is a callable
     (the live config). The model has score(text) -> float, and may have categories(text) -> list,
@@ -645,7 +661,7 @@ class Guard:
                     continue
                 s = carried["score"]
             else:
-                s = self.model.score(scored)
+                s = _score(self.model, scored, self.threshold_for(len(scored)))
                 # Set aside by the second model, it is no hit of its own; it may still repeat a flagged piece.
                 if s < self.threshold_for(len(scored)) or not self._confirmed(scored):
                     carried = self._carried(scored) if self.carry else None
@@ -684,7 +700,7 @@ class Guard:
         if not self.confirming():
             return True
         try:
-            c = self.confirm.score(text)
+            c = _score(self.confirm, text, self.confirm_threshold)
         except Exception as e:  # a hit stands without its second opinion
             logging.getLogger("keepmum").warning("%s check: the second model failed, the hit stands: %s", self.name, e)
             return True

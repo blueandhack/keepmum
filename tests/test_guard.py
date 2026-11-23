@@ -503,20 +503,41 @@ def test_tokens_are_of_the_normalized_text():
     assert m.tokens("Ｈｉ\u200b there") == [10, 11] and m._server.content == "Hi there"
 
 
-def test_windows_overlap_and_long_texts_keep_both_ends():
+def test_windows_overlap_and_every_window_of_a_long_text_is_scored():
     body, step = guard.WINDOW - 2, guard.WINDOW - 2 - guard.OVERLAP
     assert guard.InjectionModel.windows(list(range(body))) == [list(range(body))]
     two = guard.InjectionModel.windows(list(range(body + 1)))
     assert [w[0] for w in two] == [0, step] and two[-1][-1] == body
     ids = list(range(100_000))
     w = guard.InjectionModel.windows(ids)
-    assert len(w) == guard.MAX_WINDOWS and all(len(x) == body for x in w)
-    assert w[0][0] == 0 and w[-1][-1] == ids[-1]
-    heads = guard.MAX_WINDOWS - guard.TAIL_WINDOWS
-    assert [x[0] for x in w[:heads]] == [k * step for k in range(heads)]
-    assert [x[0] for x in w[heads:]] == [len(ids) - body - k * step for k in (3, 2, 1, 0)]
-    whole = guard.InjectionModel.windows(list(range(step * (guard.MAX_WINDOWS - 1) + body)))  # the longest scored whole
-    assert [x[0] for x in whole] == [k * step for k in range(guard.MAX_WINDOWS)] and len(whole[-1]) == body
+    # Every window, the middle too: a line planted halfway into a long result is scored (Nov 22, 2026).
+    assert [x[0] for x in w] == list(range(0, len(ids) - body + step, step)) and w[-1][-1] == ids[-1] and len(w) > 16
+    assert all(len(x) == body for x in w[:-1])
+    # A limit, where one is given (the harm check's), keeps both ends.
+    kept = guard.windows(ids, guard.WINDOW, guard.OVERLAP, 16, 4)
+    assert len(kept) == 16 and [x[0] for x in kept[:12]] == [k * step for k in range(12)] and kept[-1][-1] == ids[-1]
+
+
+def test_scoring_stops_at_the_first_window_over_the_threshold():
+    class Server:
+        def __init__(self):
+            self.calls = 0
+
+        def running(self):
+            return True
+
+        def post(self, path, body):
+            if path == "/tokenize":
+                return {"tokens": list(range(30_000))}
+            self.calls += 1
+            hit = self.calls == 3
+            return [{"embedding": [[0.0, 9.0 if hit else -9.0]]}]
+
+    m = guard.InjectionModel(Path("/nonexistent"))
+    m._server = Server()
+    assert m.score("x") > 0.99 and m._server.calls == len(guard.InjectionModel.windows(list(range(30_000))))
+    m._server = Server()
+    assert m.score("x", enough=0.8) > 0.99 and m._server.calls == 3
 
 
 # --- The real model, when it is on this Mac ------------------------------------------------
