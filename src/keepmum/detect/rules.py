@@ -87,6 +87,10 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
             if not _UPPER_KEY.fullmatch(key) and words[0].isalpha() and words[0].islower():
                 return None
         return close
+    if text[start:start + 1] in ("|", ")", "]", "}"):
+        # An alternation or a closing bracket follows the key, not a value: `grep -E 'token:|secret'`, an
+        # agent checking its own doc for leaks (cloud-01 on Claude Code, Nov 22). A secret starts with neither.
+        return None
     i = start
     while i < stop:
         c = text[i]
@@ -346,8 +350,10 @@ def in_hostname(text: str, start: int, end: int) -> bool:
 
 # A pattern, not a value: a character class with a range, an alternation, an escape class
 # (`STRIPE_KEY|STRIPE_SECRET_KEY|sk_(live|test)_`, `?-?[A-Za-z0-9+/=]+`: an agent's grep, Nov 18;
-# `openai|langchain_openai|google.generativeai|…`, in Claude Code's own instructions).
-_REGEX_SHAPE = re.compile(r"\[[^\]]*\w-\w[^\]]*\]|\([^()]*\|[^()]*\)|\\[dwsbS]|^[\w.()|-]+\|[\w.()|-]+$|\\\|")  # `\|`: grep's alternation
+# `openai|langchain_openai|google.generativeai|…`, in Claude Code's own instructions; `KEEPMUM|AKIA|token:|secret`,
+# cloud-01 on Claude Code, Nov 22), or a name anchored as a pattern (`grep 'deploy_ed25519$'`: srv-01 on Codex).
+_REGEX_SHAPE = re.compile(r"\[[^\]]*\w-\w[^\]]*\]|\([^()]*\|[^()]*\)|\\[dwsbS]|^[\w.():|-]+\|[\w.():|-]+$|\\\|"  # `\|`: grep's alternation
+                          r"|^\^?[a-z][a-z0-9]*(?:[_.-][a-z0-9]+)+\$$|^\^[a-z][a-z0-9]*(?:[_.-][a-z0-9]+)+$")
 
 
 def is_regex(value: str) -> bool:
@@ -364,6 +370,8 @@ def is_bare_hash(text: str, start: int, end: int) -> bool:
     value = text[start:end]
     if value[:2] in ("0x", "0X"):
         value = value[2:]
+    elif value[:1] == "#":  # a link's fragment: yarn.lock's `….tgz#<sha1>`, with the `#` (lock-01 on Claude Code, Nov 22)
+        value = value[1:]
     return (bool(_PIN.fullmatch(value)) and bool(_HEX_ONLY.fullmatch(value))
             and not _SECRET_WORD_BEFORE.search(text, max(0, start - 40), start))
 

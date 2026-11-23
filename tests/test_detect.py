@@ -497,6 +497,14 @@ def test_a_model_span_is_cut_at_a_name_and_at_escaped_breaks(rules, text, piece,
     ("cp .env.example .env && cat .npmrc", ".env.example", "SECRET"),
     ("13:> Authorization: Bearer [omitted]\\n18:< x-request-id: 4e8a1c2f-7b3d-4a6e-9f05-c1d2b3a4e5f6\\n",
      "4e8a1c2f-7b3d-4a6e-9f05-c1d2b3a4e5f6", "SECRET"),
+    # The live run of Nov 22 (API keys, the cheapest models): an agent's own leak check, a key file's name
+    # anchored in a grep, and yarn.lock's resolved link with its sha1 after `#`.
+    ("grep -nE 'KEEPMUM|LS0t|AKIA|AIDA|password|token:|secret' docs/infra.md",
+     "KEEPMUM|LS0t|AKIA|AIDA|password|token:|secret", "SECRET"),
+    ("ls -la keys/ | grep deploy_ed25519$", "deploy_ed25519$", "SECRET"),
+    ("grep -n '^deploy_ed25519' keys.txt", "^deploy_ed25519", "SECRET"),
+    ('  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz#679591c564c3bffaae8454cf0b3df370c3d6911c"',
+     "#679591c564c3bffaae8454cf0b3df370c3d6911c", "SECRET"),
 ])
 def test_more_public_text_the_model_took_for_secrets(rules, text, piece, kind):
     pf = _FakePF([Span(text.index(piece), text.index(piece) + len(piece), kind, 0.9, "pf-serve")])
@@ -828,3 +836,22 @@ def test_no_personal_data_span_runs_into_a_file_name():
     email = "write to margaret_t@example.org"
     e = Pipeline.trim_pii(email, Span(9, len(email), "EMAIL", 0.9, "pf-serve"))
     assert email[e.start:e.end] == "margaret_t@example.org"
+
+
+@pytest.mark.parametrize("text, masked", [
+    # An alternation after the key is a pattern, not a value (cloud-01 on Claude Code, Nov 22).
+    ("grep -nE 'KEEPMUM|LS0t|AKIA|AIDA|password|token:|secret' docs/infra.md", []),
+    ("rg 'api_key=|password=)' src", []),
+    # A value after it is still one.
+    ("token: Kq7vX2mLp9RtW4zB8nQ", ["Kq7vX2mLp9RtW4zB8nQ"]),
+    ("password=|Kq7vX2mLp9", []),  # but not one that starts with `|`: a pipe, not a password
+])
+def test_an_alternation_after_a_secret_word_is_no_value(rules, text, masked):
+    assert values(text, Pipeline(rules, None, pii=False).detect(text)) == masked
+
+
+def test_a_hash_named_a_key_is_still_a_secret_after_a_hash_mark(rules):
+    text = 'api_key = "#679591c564c3bffaae8454cf0b3df370c3d6911c"'
+    piece = "#679591c564c3bffaae8454cf0b3df370c3d6911c"
+    got = values(text, Pipeline(rules, _FakePF(_guess(text, piece)), pii=False).detect(text))
+    assert any("679591c564c3bffaae8454cf0b3df370c3d6911c" in g for g in got)
