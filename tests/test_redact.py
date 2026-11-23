@@ -415,3 +415,48 @@ def test_a_url_and_the_name_in_it_found_together_mask_only_the_name():
 
     out = Redactor(Pipeline(RulesDetector(), Both(), pii=True), Vault(bytes(range(32)))).redact_text(text)
     assert out.startswith('curl -sL "https://html.duckduckgo.com/html/?q=KEEPMUM_PERSON_') and name not in out
+
+
+class _Guesses:
+    """A model that takes every bare base64 run of 40 characters or more for a secret, as pf-serve did."""
+
+    def __init__(self, rules):
+        self.rules = rules
+
+    def detect(self, text):
+        import re as _re
+        return [Span(m.start(), m.end(), "SECRET", 0.97, "pf-serve") for m in _re.finditer(r"(?<![\w:-])[A-Za-z0-9+/]{40,}", text)]
+
+
+GOSUM = "golang.org/x/crypto v0.31.0 h1:68RbgsSwMRnuFwGRYM5pbHUGTV0kGOXOutW9t/kK3sk=\n"
+NPM = '"integrity": "sha512-6xtPQCUSpt8+nbktNn34Ey7lOwCEK+Q1S53JHtAG9g3kpuO8jXYUWIKQ/zqxGFK7UF/qL+1Lx5kPZRuA+SGJkw=="\n'
+
+
+def _checking(command: str, result: str, rules=None) -> dict:
+    return {"model": "m", "max_tokens": 10, "messages": [
+        {"role": "user", "content": "Which checksums are locked?"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "Read", "input": {"file_path": "go.sum"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": result}]},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "b", "name": "Bash", "input": {"command": command}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "b", "content": "1"}]}]}
+
+
+@pytest.mark.parametrize("command", [
+    "for s in '68RbgsSwMRnuFwGRYM5pbHUGTV0kGOXOutW9t/kK3sk=' ; do grep -cF \"$s\" go.sum; done",
+    "printf '%s\\n' '6xtPQCUSpt8+nbktNn34Ey7lOwCEK+Q1S53JHtAG9g3kpuO8jXYUWIKQ/zqxGFK7UF/qL+1Lx5kPZRuA+SGJkw==' | cut -c1-16",
+])
+def test_a_checksum_the_request_shows_is_no_secret_where_it_is_quoted_bare(command):
+    """An agent checking the table it wrote quotes lockfile hashes without their label; a guess took them for
+    keys, and the go.sum read before was masked too (lock-01, code-02 on Claude Code, Nov 22)."""
+    rules = RulesDetector()
+    r = Redactor(Pipeline(rules, _Guesses(rules), pii=False), Vault(bytes(32)))
+    out = json.dumps(r.redact_request(_checking(command, GOSUM + NPM)))
+    assert not r.counts and "68RbgsSw" in out and "6xtPQCUS" in out
+
+
+def test_a_token_a_rule_knows_is_masked_even_after_a_checksum_label():
+    token = "ghp_" + "a1B2c3D4" * 4 + "Zz9q"
+    rules = RulesDetector()
+    r = Redactor(Pipeline(rules, _Guesses(rules), pii=False), Vault(bytes(32)))
+    out = json.dumps(r.redact_request(_checking(f"echo {token} | gh auth login --with-token", f"sha256:{token}\n")))
+    assert token not in out and r.counts["SECRET"] >= 1

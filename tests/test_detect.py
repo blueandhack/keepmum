@@ -505,6 +505,12 @@ def test_a_model_span_is_cut_at_a_name_and_at_escaped_breaks(rules, text, piece,
     ("grep -n '^deploy_ed25519' keys.txt", "^deploy_ed25519", "SECRET"),
     ('  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz#679591c564c3bffaae8454cf0b3df370c3d6911c"',
      "#679591c564c3bffaae8454cf0b3df370c3d6911c", "SECRET"),
+    # grep's file name in front of each checksum, the model's span from the name on (lock-01, Nov 22, again).
+    ('"web/yarn.lock:sha512-Z4jtVdSClePIEelBxFvNUshyE0MlW0ctYN2sR+wZeJbR01ScVkrUAGoUh0TMvJJOGeIcUPajaB7Fq0mcoKtGhw==" "x"',
+     "web/yarn.lock:sha512-Z4jtVdSClePIEelBxFvNUshyE0MlW0ctYN2sR+wZeJbR01ScVkrUAGoUh0TMvJJOGeIcU", "SECRET"),
+    ('"go.sum:h1:kLxQiBxrJ0JAHbCXUGC7/dwLyB1GRmqHQFMDA9Jan1Q=" "x"', "go.sum:h1:kLxQiBxrJ0JAHbCXUGC7/dwLyB1GRmqHQFMDA9Jan1Q", "SECRET"),
+    ("go.sum:3:golang.org/x/crypto v0.31.0 h1:68RbgsSwMRnuFwGRYM5pbHUGTV0kGOXOutW9t/kK3sk=",
+     "go.sum:3:golang.org/x/crypto", "SECRET"),
 ])
 def test_more_public_text_the_model_took_for_secrets(rules, text, piece, kind):
     pf = _FakePF([Span(text.index(piece), text.index(piece) + len(piece), kind, 0.9, "pf-serve")])
@@ -855,3 +861,20 @@ def test_a_hash_named_a_key_is_still_a_secret_after_a_hash_mark(rules):
     piece = "#679591c564c3bffaae8454cf0b3df370c3d6911c"
     got = values(text, Pipeline(rules, _FakePF(_guess(text, piece)), pii=False).detect(text))
     assert any("679591c564c3bffaae8454cf0b3df370c3d6911c" in g for g in got)
+
+
+@pytest.mark.parametrize("text", [
+    # A .docx's text read by a script, its line breaks escaped: the label, then the value on the next line
+    # (doc-03 on opencode, Nov 22). The placeholder took the `\\n` with it.
+    r"Shared logins (do not forward)\n\nStaging admin: admin@staging.orders.example / password:\n76TfD5zNnZ4gFC0ClS\n",
+    r"password:\\n76TfD5zNnZ4gFC0ClS\\n",
+])
+def test_a_value_after_an_escaped_line_break_is_the_value_alone(rules, text):
+    assert values(text, Pipeline(rules, None, pii=False).detect(text)) == ["76TfD5zNnZ4gFC0ClS"]
+    guess = text[text.index("password:") + 9:text.index("ClS") + 3]  # the model's span, the escape included
+    assert values(text, Pipeline(rules, _FakePF(_guess(text, guess)), pii=False).detect(text)) == ["76TfD5zNnZ4gFC0ClS"]
+
+
+def test_a_secret_after_grep_s_file_name_is_still_one(rules):
+    text = "config.env:Xy7pQ2mL9vR4tW8zB3nKq"
+    assert values(text, Pipeline(rules, _FakePF(_guess(text, text)), pii=False).detect(text)) == ["Xy7pQ2mL9vR4tW8zB3nKq"]

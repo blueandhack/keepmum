@@ -201,6 +201,17 @@ def _gemini_results(contents) -> dict[int, str]:
     return out
 
 
+# A value a request shows as a checksum (go.sum's `h1:…`, npm's `sha512-…`, an `integrity`, Cargo's `checksum`)
+# is one wherever else it is. An agent checking the table it wrote quotes the hashes bare (`for s in '68Rb…='
+# …; do grep -cF "$s" go.sum`, `printf '%s\n' '6xtPQ…==' | cut -c1-16`), and a guess took them for keys; the
+# known-value pass then masked them in the lockfile read earlier too (lock-01, code-02 on Claude Code, Nov 22).
+_CHECKSUM = re.compile(r"(?i)(?:\bh1:|\bsha(?:1|224|256|384|512)[-:]|\bintegrity\\?[\"']?\s*[:=]?\s*\\?[\"']?(?:sha\d+-)?"
+                       r"|\bchecksum\\?[\"']?\s*[:=]\s*\\?[\"']?)([A-Za-z0-9+/_-]{16,})={0,2}")
+CHECKSUMS = 4096  # checksum values kept, the newest
+# What only guessed a value (the model, entropy) or knew it from such a guess before: not a format rule's find.
+_GUESSED = frozenset({"rules:entropy", "pf-serve", "known"})
+
+
 class Redactor:
     def __init__(self, detector, vault: Vault, cache_size: int = 4096):
         self.detector = detector
@@ -255,6 +266,8 @@ class Redactor:
         # only of it is no outside content for the injection check (Redactor._authored_by_model).
         self.authored: list[str] = []
         self._authoring = False
+        # Values the conversation shows as checksums (_CHECKSUM): a guess at one of them is no secret.
+        self._checksums: OrderedDict[str, None] = OrderedDict()
 
     @staticmethod
     def _key(text: str) -> bytes:
@@ -309,7 +322,26 @@ class Redactor:
                       and not (released and released(value, self.vault.sources_of(value), kind))]
         spans += self._encoded(text, spans, known, blocks)
         spans += self._known_pieces(text, spans)
-        return merge(narrow(spans, text)), seen
+        spans = merge(narrow(spans, text))
+        if self._checksums:
+            spans = [s for s in spans if not (set(s.source.split("|")) <= _GUESSED
+                                              and text[s.start:s.end].rstrip("=") in self._checksums)]
+        return spans, seen
+
+    def _note_checksums(self, body) -> None:
+        """The values a request shows as checksums (_CHECKSUM), kept for the conversation."""
+        try:
+            raw = json.dumps(body, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return
+        if not any(k in raw for k in ("h1:", "sha", "integrity", "checksum", "SHA", "Integrity", "Checksum")):
+            return
+        for m in _CHECKSUM.finditer(raw):
+            value = m.group(1)
+            self._checksums[value] = None
+            self._checksums.move_to_end(value)
+        while len(self._checksums) > CHECKSUMS:
+            self._checksums.popitem(last=False)
 
     def _known_in(self, text: str, derived: list, known) -> list[tuple[int, int, str]]:
         """The known values in text, as (start, end, value): where they were the last time, with
@@ -506,7 +538,7 @@ class Redactor:
     def _state(self) -> dict:
         return {k: copy.copy(getattr(self, k)) for k in self._PER_REQUEST}
 
-    def _whole(self, walk):
+    def _whole(self, walk, body=None):
         """`walk` (a request's walk) masked as a whole: a value found anywhere in the request is
         masked everywhere in it, the messages before the one it was found in too. The walk masks text
         in order and learns values as it goes, so an earlier message went out with a secret found
@@ -517,6 +549,8 @@ class Redactor:
         the request brought that was new (findings, the checks' texts and whether each is new) is
         the first walk's, which met each text first; what was masked (counts, the Logs page's text)
         the last's, which is what goes."""
+        if body is not None:
+            self._note_checksums(body)
         mark, before = self.vault.mark(), self._state()
         out = walk()
         if self.vault.mark() == mark:
@@ -540,7 +574,7 @@ class Redactor:
 
         `tools`, `metadata` and every other top-level field pass through unchanged.
         """
-        return self._whole(lambda: self._redact_request(body))
+        return self._whole(lambda: self._redact_request(body), body)
 
     def _redact_request(self, body: dict) -> dict:
         out = dict(body)
@@ -566,7 +600,7 @@ class Redactor:
         Assist, `generateContentRequest` for countTokens, `requests` for batch embeddings).
         With `hint` (generateContent and streamGenerateContent only: countTokens and embeddings
         take no system instruction), the placeholder hint goes last in the system instruction."""
-        return self._whole(lambda: self._redact_gemini_request(body, hint))
+        return self._whole(lambda: self._redact_gemini_request(body, hint), body)
 
     def _redact_gemini_request(self, body: dict, hint: bool = False) -> dict:
         out = dict(body)
@@ -672,7 +706,7 @@ class Redactor:
         Reasoning items are encrypted and signed: they pass through, like thinking blocks. The
         placeholder hint goes first in `input` as a developer message, stable across turns.
         """
-        return self._whole(lambda: self._redact_responses_request(body))
+        return self._whole(lambda: self._redact_responses_request(body), body)
 
     def _redact_responses_request(self, body: dict) -> dict:
         out = dict(body)
@@ -693,7 +727,7 @@ class Redactor:
         conversation's last messages, as a /responses body's; `commands` (queries, pages to open,
         patterns to find) and `settings` (a location, allowed domains) value by value. Its id,
         model and limits pass."""
-        return self._whole(lambda: self._redact_search_request(body))
+        return self._whole(lambda: self._redact_search_request(body), body)
 
     def _redact_search_request(self, body: dict) -> dict:
         out = dict(body)

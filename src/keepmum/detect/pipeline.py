@@ -53,6 +53,10 @@ def _pieces(text: str, start: int, end: int) -> list[tuple[int, int]]:
     return out
 # Used with Pattern.match(text, pos), which anchors at pos (a leading ^ would not).
 _LABEL = re.compile(r"[A-Za-z_][\w.-]*=")
+# grep's file and line in front of a match (`web/yarn.lock:sha512-…`, `go.sum:12:h1:…`): the model ran a span
+# from the file's name over the checksum after it (lock-01 on Claude Code, Nov 22). Only the prefix goes; what
+# follows it is judged as any value is.
+_FILE_PREFIX = re.compile(r"(?:\.{0,2}/)?(?:[\w.-]+/)*[\w-]+\.[A-Za-z][A-Za-z0-9]{0,5}(?::\d+)?:(?=\S)")
 _DIGEST = re.compile(r"(?i)(?:[\w.-]+@)?sha(?:1|256|384|512):")
 _URL = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^\s:/@]*:([^\s@/]+)@)?[^\s/]*(\S*)")
 _URL_SEGMENT = re.compile(r"[A-Za-z0-9_-]{16,}")
@@ -342,8 +346,19 @@ class Pipeline:
         """
         out = []
         for a, b in _pieces(text, span.start, span.end):
-            while a < b and text[a] in _EDGE:
-                a += 1
+            while a < b:  # an edge, or an escape JSON text leaves before a value (`password:\\n<value>`: doc-03, Nov 22)
+                if text[a] in _EDGE:
+                    a += 1
+                elif text[a] == "\\":
+                    j = a
+                    while j < b and text[j] == "\\":  # at whatever depth the text is escaped
+                        j += 1
+                    if b - j > 1 and text[j] in "nrt":
+                        a = j + 1
+                    else:
+                        break
+                else:
+                    break
             while b > a:  # an edge, or an escape JSON text leaves after a value (`\"`, `\n`: nb-01, Nov 18)
                 if text[b - 1] in _EDGE:
                     b -= 1
@@ -351,6 +366,9 @@ class Pipeline:
                     b -= 2
                 else:
                     break
+            path = _FILE_PREFIX.match(text, a, b)
+            if path:
+                a = path.end()
             label = _LABEL.match(text, a, b) or _INNER_LABEL.search(text, a, b)
             if label:
                 a = label.end()
