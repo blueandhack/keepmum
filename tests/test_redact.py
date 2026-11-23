@@ -478,3 +478,193 @@ def test_a_guess_at_a_checksum_with_its_label_or_cut_short_is_none(guess):
     r = Redactor(Pipeline(RulesDetector(), One(), pii=False), Vault(bytes(32)))
     out = json.dumps(r.redact_request(_checking(command, NPM)))
     assert not r.counts and guess in out
+
+
+# --- Guesses: none in the model's own text, none at a value already sent (Redactor._spans) -------------
+
+UUID = "9b2e4c71-5d0a-4f3e-8c6b-2a7d1e9f0c35"
+
+
+class _Flags:
+    """A model that flags these values wherever they are, as pf-serve did in the live runs of Nov 22-23."""
+
+    def __init__(self, *values):
+        self.values = values
+
+    def detect(self, text):
+        return [Span(i, i + len(v), "SECRET", 0.97, "pf-serve") for v in self.values for i in _all(text, v)]
+
+
+def _all(text, v):
+    i = text.find(v)
+    while i >= 0:
+        yield i
+        i = text.find(v, i + 1)
+
+
+def _turn(*messages):
+    return {"model": "m", "max_tokens": 10, "messages": [{"role": "user", "content": "Why does the client get a 401?"}, *messages]}
+
+
+def test_the_models_own_words_and_commands_get_no_guesses():
+    """debug-01 on Codex: a request id it named. cloud-01, srv-01, git-01: its greps and awk patterns."""
+    grep = "grep -nE 'KEEPMUM|LS0t|AKIA|token:|secret' docs/infra.md && grep -n 'deploy_ed25519$' ~/.ssh/config"
+    r = Redactor(Pipeline(RulesDetector(), _Flags(UUID, "deploy_ed25519$"), pii=False), Vault(bytes(32)))
+    body = _turn({"role": "assistant", "content": [
+        {"type": "text", "text": f"The failing request ID is `{UUID}`."},
+        {"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": grep}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": "no match"}]})
+    out = json.dumps(r.redact_request(body))
+    assert not r.counts and UUID in out and "deploy_ed25519$" in out
+    # The same guess in the model's words is none; in what the user typed it still masks.
+    key = "Kq7vX2mLp9RtW4zB8nQs"
+    r = Redactor(Pipeline(RulesDetector(), _Flags(key), pii=False), Vault(bytes(32)))
+    out = json.dumps(r.redact_request(_turn({"role": "assistant", "content": f"Is it {key}?"},
+                                            {"role": "user", "content": "go on"})))
+    assert key in out and not r.counts
+    r = Redactor(Pipeline(RulesDetector(), _Flags(key), pii=False), Vault(bytes(32)))
+    out = json.dumps(r.redact_request(_turn({"role": "assistant", "content": "ok"}, {"role": "user", "content": f"it is {key}"})))
+    assert key not in out and r.counts["SECRET"] == 1
+
+
+def test_a_value_the_model_was_given_masked_is_masked_where_it_writes_it():
+    pw = "Tr0ub4dor&3xqZ"
+    r = Redactor(Pipeline(RulesDetector(), _Flags(pw), pii=False), Vault(bytes(32)))
+    body = {"model": "m", "max_tokens": 10, "messages": [
+        {"role": "user", "content": f"the staging password is {pw}"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "Bash",
+                                           "input": {"command": f"psql -W '{pw}' -c 'select 1'"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": "1"}]}]}
+    out = json.dumps(r.redact_request(body))
+    assert pw not in out and r.counts["SECRET"] == 2  # in what was typed, and again, known, in the command
+
+
+def test_a_format_rule_still_masks_the_models_own_text():
+    token = "ghp_" + "a1B2c3D4" * 4 + "Zz9q"
+    r = Redactor(Pipeline(RulesDetector(), None, pii=False), Vault(bytes(32)))
+    out = json.dumps(r.redact_request(_turn({"role": "assistant", "content": f"export GH_TOKEN={token}"},
+                                            {"role": "user", "content": "go on"})))
+    assert token not in out
+
+
+def test_a_guess_cannot_take_back_what_an_earlier_request_sent():
+    """debug-01, rotate-01: a value an earlier request sent unmasked, guessed later elsewhere, was masked in
+    the earlier message too: the provider had it already, and that message changed (its prompt cache missed)."""
+    ref = "acmeOrdersReplica7"  # nothing flags it on its own: only the guess, later
+    log = f"2026-11-18T10:42:07Z ERROR request failed: HTTP 401 trace={ref}"
+
+    class Later(_Flags):  # flags it only in the later text, as the model did beside `Bearer` (no rule there)
+        def detect(self, text):
+            return super().detect(text) if "x-trace" in text else []
+
+    def run(two_requests: bool):
+        r = Redactor(Pipeline(RulesDetector(), Later(ref), pii=False), Vault(bytes(32)))
+        first = [{"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "cat app.log"}}]},
+                 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": log}]}]
+        sent = r.redact_request(_turn(*first)) if two_requests else None
+        second = first + [{"role": "assistant", "content": [{"type": "tool_use", "id": "b", "name": "Bash", "input": {"command": "curl -v x"}}]},
+                          {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "b",
+                                                        "content": f"< HTTP 401\n< x-trace: {ref}"}]}]
+        return r, sent, r.redact_request(_turn(*second))
+
+    r, sent, again = run(two_requests=True)
+    assert ref in json.dumps(sent) and not r.counts
+    assert json.dumps(again["messages"][:3]) == json.dumps(sent["messages"][:3]) and ref in json.dumps(again)
+    # Not sent before, the same guess masks it, in both places.
+    r, _, once = run(two_requests=False)
+    assert ref not in json.dumps(once) and r.counts["SECRET"] == 2
+
+
+def test_a_guess_at_base64_of_keepmums_own_placeholder_is_none():
+    """Codex encoded the placeholder it was given for a Kubernetes Secret, and the model took the base64
+    for a secret (k8s-01, Nov 23). Base64 of a real value is still guessed at."""
+    import base64
+
+    ph = "KEEPMUM_SECRET_a719c6d7"
+    encoded_ph = base64.b64encode(ph.encode()).decode()
+    real = base64.b64encode(b"sk_" b"live_Cz8wSPedxSdC6KOqnWj0rEyw").decode()
+    r = Redactor(Pipeline(RulesDetector(), _Flags(encoded_ph, real), pii=False), Vault(bytes(32)))
+    out = json.dumps(r.redact_request(_turn(
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "cat k8s/secret.yaml"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a",
+                                      "content": f"data:\n  STRIPE_SECRET_KEY: {encoded_ph}\n  OTHER: {real}"}]})))
+    assert encoded_ph in out and real not in out and r.counts["SECRET"] == 1
+    from keepmum.redact import encodes_nothing
+
+    assert encodes_nothing("LOG_LEVEL:aW5mbw") and encodes_nothing("aW5mbw==")  # `info` (k8s-01 on opencode, Nov 23)
+    assert not encodes_nothing(real) and not encodes_nothing(f"STRIPE_SECRET_KEY:{real}") and not encodes_nothing("aHVudGVyMg==")
+
+
+def _responses(*items):
+    return {"model": "m", "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Make the Secret."}]}, *items]}
+
+
+def _ran(call_id, command, output):
+    return [{"type": "function_call", "call_id": call_id, "name": "bash", "arguments": json.dumps({"command": command})},
+            {"type": "function_call_output", "call_id": call_id, "output": output}]
+
+
+def _left(body, value):
+    """Any form of `value` in a masked body: as is, or JSON-escaped."""
+    text = json.dumps(body)
+    return value in text or json.dumps(value)[1:-1] in text
+
+
+def test_a_guess_never_hides_an_exact_find_nor_takes_a_name_with_it():
+    """k8s-01 on opencode (Nov 23): a script printed `STRIPE_SECRET_KEY:<base64 of the key>`, the model
+    flagged the name with the base64, and that guess hid the decoded find. Masked as one value, it
+    counted as sent; the file read later showed the base64 alone, the guess there was dropped as sent
+    already, and nothing else masked it: the base64 of the Stripe key left. Now the decoded find masks
+    the base64 alone, the name and the earlier message stay as they were, and nothing of it leaves."""
+    import base64
+
+    key = "sk_" "live_LoMQh2hq5sSFRmXYSk7wAyTF"
+    b64 = base64.b64encode(key.encode()).decode()
+    printed = f"DATABASE_URL:cG9zdGdyZXM6Ly9vcmRlcnM=\nSTRIPE_SECRET_KEY:{b64}\nLOG_LEVEL:aW5mbw==\n"
+    r = Redactor(Pipeline(RulesDetector(), _Flags(f"STRIPE_SECRET_KEY:{b64}", "LOG_LEVEL:aW5mbw"), pii=False), Vault(bytes(32)))
+    first = _ran("a", "python3 enc.py", printed)
+    sent = r.redact_responses_request(_responses(*first))
+    later = r.redact_responses_request(_responses(*first, *_ran("b", "cat k8s/secret.yaml",
+                                                                f"data:\n  STRIPE_SECRET_KEY: {b64}\n  LOG_LEVEL: aW5mbw==\n")))
+    for body in (sent, later):
+        assert not _left(body, b64) and not _left(body, key)
+    out = json.dumps(later)
+    assert out.count("STRIPE_SECRET_KEY") == 2 and "LOG_LEVEL:aW5mbw==" in out  # the name, and `info` encoded
+    assert json.dumps(later["input"][:len(sent["input"])]) == json.dumps(sent["input"])  # the earlier messages as they went
+
+
+def test_a_value_masked_inside_a_wider_one_was_not_sent():
+    """k8s-01 on pi (Nov 23): two lines of base64 masked as one value, the first line alone guessed
+    in a later output, the guess dropped as sent: the database URL's base64 left. What went out
+    decides, not the text before masking."""
+    import base64
+
+    db = base64.b64encode(b"postgres://orders:I705gxxHJzPmZWUKXk@db.internal:5432/orders").decode()
+    other = base64.b64encode(b"sk_" b"live_xTKOBF7k9GsLU85sHiQcY1pC").decode()
+    r = Redactor(Pipeline(RulesDetector(), _Flags(f"{db}\n{other}", db), pii=False), Vault(bytes(32)))
+    first = _ran("a", "python3 enc.py", f"{db}\n{other}\naW5mbw==\n")
+    sent = r.redact_responses_request(_responses(*first))
+    later = r.redact_responses_request(_responses(*first, *_ran("b", "python3 show.py", f"db '{db}'\nlog 'aW5mbw=='\n")))
+    assert not _left(sent, db) and not _left(later, db)
+
+
+def test_a_guess_at_what_the_model_wrote_is_none_but_a_value_restored_into_it_still_masks():
+    """k8s-01 on Claude Code (Nov 23): its script printed a label it wrote, `startswith_KEEPMUM_in_b64_text`,
+    the model flagged the label in the output, and it was masked in the command too. The model's text
+    holds real values too, restored from placeholders: one restored inside a wider value is no part
+    of what the model sent, and a guess at it alone still masks it."""
+    label = "startswith_KEEPMUM_in_b64_text"
+    cmd = f"python3 - <<'EOF'\nprint(k, 'matches_env', ok, '{label}', b.startswith('KEEPMUM'))\nEOF"
+    r = Redactor(Pipeline(RulesDetector(), _Flags(label), pii=False), Vault(bytes(32)))
+    out = r.redact_request(_turn({"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": cmd}}]},
+                                 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a",
+                                                               "content": f"LOG_LEVEL matches_env True {label} False"}]}))
+    assert json.dumps(out).count(label) == 2 and not r.counts  # in the command and in its output
+
+    pw = "Xk9mPq2vLw7RtZ"
+    r = Redactor(Pipeline(RulesDetector(), _Flags(pw), pii=False), Vault(bytes(32)))
+    r.vault.placeholder("SECRET", f"ADMIN_PASS:{pw}", ("pf-serve",))
+    out = r.redact_request(_turn({"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "Bash",
+                                                                     "input": {"command": f"echo ADMIN_PASS:{pw} > creds"}}]},
+                                 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": f"saved {pw}"}]}))
+    assert pw not in json.dumps(out)

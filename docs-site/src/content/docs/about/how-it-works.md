@@ -22,6 +22,15 @@ Two layers, cheapest first:
 
 A deterministic refinement step then drops what the model gets wrong: UUIDs, hashes, request IDs, timestamps, paths, placeholders and documented example keys. File names with an extension (`guard-20261104-231405.md`, `bench/results/PHASE0.md`) are not taken for secrets by the entropy check or the model, and the model's emails without an `@` are dropped; a token whose format a rule knows is masked wherever it is, file name or not.
 
+**Guesses and exact finds.** The model, the entropy check and the generic `password = …` and `--token …` rules guess: they find secrets no format names, and are wrong now and then on ids, hashes, images and patterns. Format rules (`ghp_…`, `sk_live_…`, `AKIA…`) and values keepmum masked before are exact. Two kinds of guess are set aside:
+
+- in text the model wrote itself (its words, the commands and edits it asks for): any real value there came from a request, where keepmum masked it (it is masked again, exactly) or sent it already. A guess there only took the model's own grep patterns, hashes it quoted to compare and request ids it named for secrets;
+- at a value the provider already has as it is: shown unmasked in a message an earlier request sent, or written by the model (a label its own script prints). Masking it now would change that message, and with it the prompt cache. What decides is what went out, not the text before masking: a value that went inside a wider masked one was not sent.
+
+A guess never hides an exact find. Where both found a value, the exact find's span is masked: a guess that took `STRIPE_SECRET_KEY:<base64>` gives way to the decoded base64 alone, so the name is not masked, and setting a guess aside never leaves a value an exact find would have masked. Base64 of nothing secret (keepmum's own placeholders, a plain word) is no secret either.
+
+Of the 13 false masks the live tests found on Nov 22-23, 2026, every one came from a guess, and nine were of one of those kinds; the rest are handled by the refinement above. What you type and what tools return are guessed at as before.
+
 Output a command printed encoded is decoded and scanned too: a hex dump (`xxd`, `hexdump -C`, `od` in any layout), `od -c`, plain hex, hex bytes after a label or in a list (`bytes: 47 49 …`, `0x47, 0x49, …`, as scripts models write print them) and base64. A block whose decoded text holds a secret, or a value masked before, is masked whole, so `xxd .env` or `base64 < .env` cannot carry a key out in hex or in pieces. Only decoded text is scanned, and only by the rules and the values masked before, so a hash or an image is left alone.
 
 ## 2. Mask

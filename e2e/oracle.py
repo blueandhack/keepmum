@@ -106,9 +106,10 @@ def _dumps_a_piece(value: str, declared) -> bool:
     return False
 
 
-def _encodes(value: str, declared) -> bool:
+def _encodes(value: str, declared, depth: int = 3) -> bool:
     """value is a declared value written in base64 or hex, alone or in the text it was part of
-    (`DATABASE_URL` in a Kubernetes Secret, k8s-01): masking it is masking that value."""
+    (`DATABASE_URL` in a Kubernetes Secret, k8s-01): masking it is masking that value. Encoded again
+    and again too: a Secret's data encoded twice (k8s-01 on Codex, Nov 23)."""
     import base64
     import binascii
 
@@ -118,7 +119,7 @@ def _encodes(value: str, declared) -> bool:
             text = decode(value).decode("utf-8")
         except (ValueError, binascii.Error, UnicodeDecodeError):
             continue
-        if any(d and d in text for d in declared):
+        if any(d and d in text for d in declared) or depth > 1 and len(text) >= 8 and _encodes(text.strip(), declared, depth - 1):
             return True
     return False
 

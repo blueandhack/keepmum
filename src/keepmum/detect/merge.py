@@ -6,6 +6,19 @@ import re
 
 from . import PRIORITY, Span
 
+# The detectors that guess: the model, entropy, and a generic `name = value` or `--name value` for any
+# name that sounds secret. A format rule (`ghp_…`, `sk_live_…`, `AKIA…`) knows, and so do a block
+# whose decoded text a format rule matched (`decoded`) and a value masked before (`known`). Guesses are
+# right most of the time and wrong on ids, hashes, images and patterns: each of the 13 false masks the
+# live runs of Nov 22-23 found. A guess never hides an exact find, or stands in for it: where both
+# found a value, the exact find's span is the one masked.
+GUESSING = frozenset({"pf-serve", "rules:entropy", "rules:secret-assignment", "rules:secret-flag"})
+
+
+def guessed(span: Span) -> bool:
+    """Only guessers found it: no format rule, and not a value masked before (`known`)."""
+    return set(span.source.split("|")) <= GUESSING
+
 
 def merge(spans: list[Span]) -> list[Span]:
     """Merge overlapping spans; the result keeps the highest-priority type and confidence."""
@@ -43,13 +56,10 @@ def _guess_around_rule(spans: list[Span], text: str) -> list[Span]:
     plus only the user and host around it, gives way to the rule's span. The model masked `<password>@db.internal:5432/orders`
     from a connection string whose password the connection-string rule had found (k8s-01, Nov 18):
     the placeholder stood for the host too, and the model could no longer say where the database is."""
-    from .rules import GUESSES
-
-    exact = [s for s in spans if s.source.startswith("rules:") and s.source not in GUESSES
-             and "secret-assignment" not in s.source]
+    exact = [s for s in spans if not guessed(s)]
     if not exact:
         return spans
-    return [s for s in spans if not (s.source in GUESSES and any(
+    return [s for s in spans if not (guessed(s) and any(
         s.start < e.end and e.start < s.end and (e.start, e.end) != (s.start, s.end)  # overlapping, not the same
         and _BEFORE.fullmatch(text, min(s.start, e.start), e.start)
         and _AFTER.fullmatch(text, e.end, max(s.end, e.end)) for e in exact))]

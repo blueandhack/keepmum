@@ -403,6 +403,10 @@ class Vault:
         """The value itself, for one of its escaped forms."""
         return self._values[self._forms[value]] if value in self._forms and value not in self._kinds else value
 
+    def contains(self, value: str) -> bool:
+        """Whether `value` (or an escaped form of it) is masked."""
+        return self._real(value) in self._kinds
+
     def kind_of(self, value: str) -> str:
         return self._kinds.get(self._real(value), "SECRET")
 

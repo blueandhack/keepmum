@@ -91,6 +91,10 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
         # An alternation or a closing bracket follows the key, not a value: `grep -E 'token:|secret'`, an
         # agent checking its own doc for leaks (cloud-01 on Claude Code, Nov 22). A secret starts with neither.
         return None
+    if _NESTED.match(text, start):
+        # An object or list nested under the key, its own first key quoted: `'secretRef': {'name': 'orders-env'}`,
+        # a Deployment printed by Python (k8s-01 on Claude Code, Nov 23). An LDAP hash `{SSHA}…` still counts.
+        return None
     if text[start:start + 1] == "/" and (start + 1 >= n or text[start + 1] in "{,;)|" or text[start + 1].isspace()):
         # The `/` closing a pattern the key was in: awk's `/_authToken=/{sub(/=.*/, …)}` (git-01 on pi, Nov 23).
         return None
@@ -122,6 +126,8 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
     return i
 
 
+# An object or list opening where a value would: `{'name':`, `[\"a\",`, its first key or item quoted.
+_NESTED = re.compile(r"""[{\[]\s*(?P<q>\\*['"])[\w.-]*(?P=q)\s*[:,\]}]""")
 # `$NAME` or `${NAME}`: a variable the value comes from, not the value.
 _VARIABLE = re.compile(r"\$\{[A-Za-z_]\w*\}|\$[A-Z_][A-Z0-9_]*")  # not `$ecr3tPass`: a password may start with `$`
 

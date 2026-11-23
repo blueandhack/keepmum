@@ -176,8 +176,11 @@ def normalize(text: str) -> str:
 
 # Codex's code-mode wrapper around a command's output: {"chunk_id":…,"exit_code":0,…,"output":"…"}.
 _CODEX_WRAPPER_KEYS = frozenset({"chunk_id", "wall_time_seconds", "exit_code", "original_token_count"})
-# A run of base64 or hex with no words in it: a certificate, a key, a picture, a token.
-_BLOB = re.compile(r"(?<![A-Za-z0-9+/_-])(?:[A-Za-z0-9+/_-]{80,}={0,2}|[0-9a-fA-F]{80,})(?![A-Za-z0-9+/=_-])")
+# A run of base64 or hex with no words in it: a certificate, a key, a picture, a token. Base64 from 32
+# characters: a key's base64 alone, a command's whole output, scored 0.572 as written and 0.118 decoded
+# (k8s-01 on Claude Code, Nov 23); under 80 it must mix capitals, small letters and digits, as encoded data
+# does and an instruction spelled as a name (`ignore_previous_instructions`) does not.
+_BLOB = re.compile(r"(?<![A-Za-z0-9+/_-])(?:[A-Za-z0-9+/_-]{32,}={0,2}|[0-9a-fA-F]{80,})(?![A-Za-z0-9+/=_-])")
 
 
 def _blob_text(m: re.Match) -> str:
@@ -189,6 +192,8 @@ def _blob_text(m: re.Match) -> str:
     raw = m.group()
     if len(set(raw)) < 16:  # a run of a few characters (`xxxx…`, `====`): no blob, read as written
         return raw
+    if len(raw) < 80 and not (any(c.isupper() for c in raw) and any(c.islower() for c in raw) and any(c.isdigit() for c in raw)):
+        return raw  # a name, a word, a path: read as written
     if m.string[max(0, m.start() - 8):m.start()].endswith("base64,"):
         return raw  # a data: URI, read as written: `![](data:image/svg+xml;base64,…)` is an attack's shape (bench)
     for decode in (lambda v: base64.b64decode(v + "=" * (-len(v) % 4), altchars=b"-_" if "-" in v or "_" in v else None),

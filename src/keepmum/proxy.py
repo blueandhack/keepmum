@@ -778,6 +778,7 @@ class Proxy:
             self.redactor.findings = []
             self.redactor.tool_results = []
             self.redactor.authored = []
+            self.redactor.wrote = []
             self.redactor.user_texts = []
             self.redactor.typed_in = {}
             self.redactor.aside = False

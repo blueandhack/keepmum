@@ -54,6 +54,7 @@ files = { ".env" = { contains = "ACME_API_KEY={{v:sk}}" }, "vendor/acme.json" = 
 only_new = [".env", "vendor/acme.json", "vendor/*.txt"]
 
 [[expect.run]]
-cmd = "python3 -c 'import json; d = json.load(open(\"vendor/acme.json\")); print(json.dumps(d, sort_keys=True))'"
+# The amount as a number or as text with a thousands separator: `"12,480.00"` is as right as 12480 (pi, Nov 23).
+cmd = "python3 -c 'import json, re; d = json.load(open(\"vendor/acme.json\")); print(re.sub(r\"(\\d),(\\d{3})\", r\"\\1\\2\", json.dumps(d, sort_keys=True)))'"
 contains = ["12480", "2026-12-04", "Dana Whitfield"]
 lacks = ["{{v:sk}}", "KEEPMUM_"]

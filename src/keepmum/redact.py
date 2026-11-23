@@ -10,7 +10,7 @@ import re
 from collections import Counter, OrderedDict
 
 from .detect import Span
-from .detect.merge import narrow
+from .detect.merge import GUESSING, guessed, narrow  # noqa: F401 (GUESSING: tests)
 from .detect.merge import merge
 from .encode import json_strings
 from .tools import call_name, item_name, server_of
@@ -59,6 +59,9 @@ NOT_FETCHED = frozenset({"AskUserQuestion"})
 # file." as an attack (k8s-01, Nov 18). The path is one word, so nothing else can ride in it.
 AGENT_NOTICE = re.compile(r"Claude requested permissions to (?:edit|write to|write|read|use) \S{1,400}"
                           r"(?: which is a sensitive file\.|, but you haven't granted it yet\.)"
+                          # Claude Code 2.1's notice for a compound command it holds for approval, the part on one
+                          # line: scored 0.9997 (k8s-01 on Claude Code, Nov 23).
+                          r"|This (?:Bash )?command contains multiple operations\. The following parts? requires? approval: [^\n]{1,400}"
                           # A file system's error as Node prints it, from pi's and opencode's own tools:
                           # `EISDIR: illegal operation on a directory, read` scored 0.489 (wf-01 on pi, Nov 19).
                           r"|E[A-Z]{3,9}: [a-z][a-z ]{4,60}(?:, [a-z]{2,12})?(?: '\S{1,400}')?")
@@ -212,6 +215,41 @@ CHECKSUMS = 4096  # checksum values kept, the newest
 _CHECKSUM_LABEL = re.compile(r"(?i)^.*?(?:h1:|sha(?:1|224|256|384|512)[-:])")
 # What only guessed a value (the model, entropy) or knew it from such a guess before: not a format rule's find.
 _GUESSED = frozenset({"rules:entropy", "pf-serve", "known"})
+_ONLY_PLACEHOLDERS = re.compile(r"\s*(?:KEEPMUM_[A-Z]+_[0-9a-f]{8,12}\s*)+")
+
+
+_LABEL = re.compile(r"[A-Za-z_][\w.-]*:")  # `LOG_LEVEL:` before a value a script printed
+
+
+def encodes_nothing(value: str) -> bool:
+    """`value`, a label before it or not, is base64 of nothing secret: of keepmum's own placeholders
+    only (a model that encoded the placeholder it was given, for a Kubernetes Secret: k8s-01 on
+    Codex, Nov 23), or of a plain word (`LOG_LEVEL:aW5mbw`, `info` encoded: k8s-01 on opencode, Nov
+    23), which a guess would not take for a secret unencoded either (rules.public_shape)."""
+    import base64
+    import binascii
+
+    if m := _LABEL.match(value):
+        value = value[m.end():]
+    if len(value) < 6:
+        return False
+    for altchars in (None, b"-_"):
+        try:
+            text = base64.b64decode(value + "=" * (-len(value) % 4), altchars=altchars, validate=True).decode("ascii")
+        except (ValueError, binascii.Error, UnicodeDecodeError):
+            continue
+        if _ONLY_PLACEHOLDERS.fullmatch(text) or text.isalpha() and len(text) <= 16 and sum(c.isupper() for c in text) <= 2:
+            return True
+    return False
+
+
+def _blanked(text: str, masked) -> str:
+    """`text` as it went: each of the `masked` (start, end) ranges a NUL."""
+    pos, out = 0, []
+    for a, b in masked:
+        out += [text[pos:a], "\0"]
+        pos = b
+    return "".join(out) + text[pos:]
 
 
 class Redactor:
@@ -267,10 +305,17 @@ class Redactor:
         # What the model wrote in this request (its text, its tool calls' inputs): a tool result made
         # only of it is no outside content for the injection check (Redactor._authored_by_model).
         self.authored: list[str] = []
+        # The same, as it went: what was masked in it blanked (_provider_has).
+        self.wrote: list[str] = []
         self._authoring = False
         # Values the conversation shows as checksums (_CHECKSUM): a guess at one of them is no secret.
         self._checksums: OrderedDict[str, None] = OrderedDict()
         self._checksum_starts: dict[str, str] = {}  # the first 16 characters of each -> it
+        # This request's texts an earlier request sent, as they went, joined (_note_sent): what the
+        # provider has seen. Per text, where it was masked when it last went (`_went`): positions only.
+        self._sent = ""
+        self._wrote_joined: tuple[list[str] | None, int, str] = (None, 0, "")
+        self._went: OrderedDict[bytes, tuple[tuple[int, int], ...]] = OrderedDict()
 
     @staticmethod
     def _key(text: str) -> bytes:
@@ -299,7 +344,17 @@ class Redactor:
         """Detector spans plus every exact occurrence of a value masked before."""
         return self._spans(text)[0]
 
-    def _spans(self, text: str) -> tuple[list[Span], bool]:
+    def _spans(self, text: str, authored: bool = False) -> tuple[list[Span], bool]:
+        """The spans to mask in `text`. Two kinds of guess are no secret (GUESSING):
+
+        - one in text the model wrote (its words, its tool calls' input). A real value there came from a
+          request: masked, it is masked again as known (`known`, the format rules); sent unmasked, the
+          provider has it. A guess there only took the model's own commands for secrets: a grep for
+          `token:|secret`, a key file's name, a hash quoted to compare, an awk pattern, a request id it
+          named (cloud-01, srv-01, lock-01, code-02, git-01, debug-01, rotate-01: Nov 22-23);
+        - one at a value a message already sent showed unmasked (`_sent`): the provider has it, and
+          masked now it would change that message, and the prompt cache with it (debug-01, rotate-01).
+        """
         key = self._key(text)
         found, seen = self._detect(text, key)
         derived = self._derived.get(key)
@@ -326,6 +381,11 @@ class Redactor:
         spans += self._encoded(text, spans, known, blocks)
         spans += self._known_pieces(text, spans)
         spans = merge(narrow(spans, text))
+        spans = [s for s in spans if not (guessed(s) and encodes_nothing(text[s.start:s.end]))]
+        if authored:
+            spans = [s for s in spans if not guessed(s)]
+        elif self._sent or self.wrote:
+            spans = [s for s in spans if not (guessed(s) and self._provider_has(text[s.start:s.end]))]
         if self._checksums:
             spans = [s for s in spans if not (set(s.source.split("|")) <= _GUESSED and self._a_checksum(text[s.start:s.end]))]
         return spans, seen
@@ -340,6 +400,41 @@ class Redactor:
             return True
         full = self._checksum_starts.get(value[:16])
         return full is not None and full.startswith(value)
+
+    def _provider_has(self, value: str) -> bool:
+        """`value` went to the provider as it is, not masked nor inside a value masked whole: in a text
+        of this request an earlier request sent (`_sent`), or in what the model wrote (`wrote`): the
+        label a script of its own prints (`startswith_KEEPMUM_in_b64_text`, k8s-01 on Claude Code,
+        Nov 23). Both as they went: `STRIPE_SECRET_KEY:<its base64>` masked as one value sent no part
+        of it, and a guess at the base64 alone, read later, was dropped as sent (k8s-01 on opencode,
+        Nov 23: the base64 of the Stripe key left)."""
+        if len(value) < 4 or self.vault.contains(value):
+            return False
+        if value in self._sent:
+            return True
+        wrote, n, joined = self._wrote_joined
+        if wrote is not self.wrote or n != len(self.wrote):
+            self._wrote_joined = (self.wrote, len(self.wrote), joined := "\0".join(self.wrote))
+        return value in joined
+
+    def _note_sent(self, body) -> None:
+        """The texts of `body` an earlier request sent, as they went (what was masked in them blanked),
+        joined, for `_sent_unmasked`. A text new in this request is not one, even after a walk of it."""
+        sent = []
+
+        def walk(v):
+            if isinstance(v, str):
+                if len(v) >= 8 and (masked := self._went.get(self._key(v))) is not None:
+                    sent.append(_blanked(v, masked))
+            elif isinstance(v, dict):
+                for x in v.values():
+                    walk(x)
+            elif isinstance(v, list):
+                for x in v:
+                    walk(x)
+
+        walk(body)
+        self._sent = "\0".join(sent)
 
     def _note_checksums(self, body) -> None:
         """The values a request shows as checksums (_CHECKSUM), kept for the conversation."""
@@ -389,8 +484,8 @@ class Redactor:
         out = []
         rules = getattr(self.detector, "rules", None) or self.detector
         for start, end, decoded in (encoded(text) if blocks is None else blocks):
-            if any(s.start <= start and end <= s.end for s in spans):
-                continue  # already masked
+            if any(s.start <= start and end <= s.end and not guessed(s) for s in spans):
+                continue  # already masked, by an exact find: a guess may be dropped, or give way
             kinds = [s.type for s in rules.detect(decoded) if s.source not in GUESSES]
             if known is not None:
                 kinds += [self.vault.kind_of(m.group()) for m in known.finditer(decoded)]
@@ -470,9 +565,17 @@ class Redactor:
     def redact_text(self, text: str) -> str:
         if not text:
             return text
-        if not self._in_result and (self._authoring or self._role in ("assistant", "model")):
+        authored = not self._in_result and (self._authoring or self._role in ("assistant", "model"))
+        if authored:
             self.authored.append(text)
-        spans, seen = self._spans(text)
+        spans, seen = self._spans(text, authored)
+        key = self._key(text)
+        self._went[key] = tuple((s.start, s.end) for s in spans)  # the walk that goes is the last
+        if authored:
+            self.wrote.append(_blanked(text, self._went[key]))
+        self._went.move_to_end(key)
+        if len(self._went) > self._cache_size:
+            self._went.popitem(last=False)
         if self._in_result and self._tool not in NOT_FETCHED:
             if not AGENT_NOTICE.fullmatch(text.strip()) and not self._authored_by_model(text):
                 self.tool_results.append((self._tool, text, not seen))
@@ -548,7 +651,7 @@ class Redactor:
     # --- A request as a whole ------------------------------------------------------
 
     # What one walk of a request adds to: copied before a walk, put back before walking it again.
-    _PER_REQUEST = ("counts", "fresh", "findings", "tool_results", "user_texts", "typed_in", "aside", "shown", "authored")
+    _PER_REQUEST = ("counts", "fresh", "findings", "tool_results", "user_texts", "typed_in", "aside", "shown", "authored", "wrote")
     WALKS = 3  # at most: a walk learns from what the one before it masked (decoded blocks, pieces)
 
     def _state(self) -> dict:
@@ -567,6 +670,7 @@ class Redactor:
         the last's, which is what goes."""
         if body is not None:
             self._note_checksums(body)
+            self._note_sent(body)
         mark, before = self.vault.mark(), self._state()
         out = walk()
         if self.vault.mark() == mark:
