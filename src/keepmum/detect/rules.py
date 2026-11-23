@@ -91,6 +91,9 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
         # An alternation or a closing bracket follows the key, not a value: `grep -E 'token:|secret'`, an
         # agent checking its own doc for leaks (cloud-01 on Claude Code, Nov 22). A secret starts with neither.
         return None
+    if text[start:start + 1] == "/" and (start + 1 >= n or text[start + 1] in "{,;)|" or text[start + 1].isspace()):
+        # The `/` closing a pattern the key was in: awk's `/_authToken=/{sub(/=.*/, …)}` (git-01 on pi, Nov 23).
+        return None
     i = start
     while i < stop:
         c = text[i]
@@ -112,7 +115,15 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
         if c == "<" and text.startswith("</", i):  # a closing tag ends it: a .docx's XML (doc-03, Nov 18)
             break
         i += 1
+    if _VARIABLE.fullmatch(text[start:i].replace("\\", "").rstrip("$")):
+        # A variable's name, escaped for a pattern: `re.search(r'_authToken=\$\{NPM_TOKEN\}$', npmrc)`
+        # checks that .npmrc names the variable (git-01 on opencode, Nov 23). The reference, not a value.
+        return None
     return i
+
+
+# `$NAME` or `${NAME}`: a variable the value comes from, not the value.
+_VARIABLE = re.compile(r"\$\{[A-Za-z_]\w*\}|\$[A-Z_][A-Z0-9_]*")  # not `$ecr3tPass`: a password may start with `$`
 
 
 def closes_a_string(text: str, at: int, quote: str) -> bool:
@@ -488,7 +499,10 @@ _PUBLIC_PEM = re.compile(r"-----BEGIN (?:PUBLIC KEY|RSA PUBLIC KEY|CERTIFICATE|X
 # A certificate or a public key, PEM in base64 (a kubeconfig's certificate-authority-data: cloud-01).
 _FILE_MAGIC = r"(?:iVBORw0KGgo|/9j/|R0lGOD[lh]h|UklGR|JVBERi0|UEsDB|LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t|LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS)"
 _FILE_MAGIC_HINT = re.compile(_FILE_MAGIC)
-_ENCODED_FILE = re.compile(r"(?<![A-Za-z0-9+/])" + _FILE_MAGIC + r"(?:[A-Za-z0-9+/]|\\{1,3}[nr]|\r?\n)*={0,2}")  # padding ends it
+# Codex cuts a long output's middle out, in place: `…1234 tokens truncated…`. A file's base64 runs on across it
+# (a notebook's chart, nb-01 on Codex, Nov 23: the model flagged the run on each side of the cut).
+_CUT = r"…\d+ tokens truncated…"
+_ENCODED_FILE = re.compile(r"(?<![A-Za-z0-9+/])" + _FILE_MAGIC + r"(?:[A-Za-z0-9+/]|\\{1,3}[nr]|\r?\n|" + _CUT + r")*={0,2}")  # padding ends it
 _ISSUED_LINK = re.compile(r"https?://vertexaisearch\.cloud\.google\.com/grounding-api-redirect/[A-Za-z0-9_=-]+")
 _CARD = re.compile(r"(?<![\d-])\d(?:[ -]?\d){12,18}(?![\d-])")
 # Issuer prefixes for Visa, Mastercard, Amex, Discover; cuts Luhn-valid noise like timestamps.

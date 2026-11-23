@@ -882,3 +882,34 @@ def test_a_value_after_an_escaped_line_break_is_the_value_alone(rules, text):
 def test_a_secret_after_grep_s_file_name_is_still_one(rules):
     text = "config.env:Xy7pQ2mL9vR4tW8zB3nKq"
     assert values(text, Pipeline(rules, _FakePF(_guess(text, text)), pii=False).detect(text)) == ["Xy7pQ2mL9vR4tW8zB3nKq"]
+
+
+@pytest.mark.parametrize("text, masked", [
+    # The `/` closing awk's pattern after the key (git-01 on pi, Nov 23).
+    ("""awk '/_authToken=/{sub(/=.*/, "=${NPM_TOKEN}")} {print}' .npmrc""", []),
+    # The variable's name, escaped for a regex (git-01 on opencode, Nov 23).
+    (r"re.search(r'^//registry\.npmjs\.org/:_authToken=\$\{NPM_TOKEN\}$', npmrc, re.M)", []),
+    (r"grep -E '_authToken=\$NPM_TOKEN$' .npmrc", []),
+    # Values all the same.
+    ("password=/Kq7vX2mLp9Rt", ["/Kq7vX2mLp9Rt"]),
+])
+def test_a_pattern_or_a_variable_after_a_secret_word_is_no_value(rules, text, masked):
+    assert values(text, Pipeline(rules, None, pii=False).detect(text)) == masked
+
+
+def test_a_file_in_base64_cut_by_codex_is_still_a_file(rules):
+    """Codex cut a notebook chart's base64 in the middle (`…N tokens truncated…`), and the model flagged the
+    run on each side of the cut, past the PNG's own signature (nb-01 on Codex, Nov 23)."""
+    import base64
+    import struct
+
+    raw = b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">IIBBBBB", 160, 100, 8, 2, 0, 0, 0) + bytes(range(256)) * 8
+    b = base64.b64encode(raw).decode()
+    text = '{"data": {"image/png": "' + b[:400] + "…41882 tokens truncated…" + b[-400:] + '\\n"}}'
+    head = b[11:400] + "…41882"  # past `iVBORw0KGgo`, into the marker
+    tail = "truncated…" + b[-400:-2]
+    pf = _FakePF([*_guess(text, head), *_guess(text, tail)])
+    assert Pipeline(rules, pf, pii=False).detect(text) == []
+    # Not a file: base64 with no signature is judged as before.
+    plain = '{"key": "' + b[11:400] + '"}'
+    assert values(plain, Pipeline(rules, _FakePF(_guess(plain, b[11:400])), pii=False).detect(plain))
