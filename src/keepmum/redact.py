@@ -208,6 +208,8 @@ def _gemini_results(contents) -> dict[int, str]:
 _CHECKSUM = re.compile(r"(?i)(?:\bh1:|\bsha(?:1|224|256|384|512)[-:]|\bintegrity\\?[\"']?\s*[:=]?\s*\\?[\"']?(?:sha\d+-)?"
                        r"|\bchecksum\\?[\"']?\s*[:=]\s*\\?[\"']?)([A-Za-z0-9+/_-]{16,})={0,2}")
 CHECKSUMS = 4096  # checksum values kept, the newest
+# A checksum's label at the start of a guessed span (`sha512-oUsD…`, `h1:68Rb…`), and anything before it.
+_CHECKSUM_LABEL = re.compile(r"(?i)^.*?(?:h1:|sha(?:1|224|256|384|512)[-:])")
 # What only guessed a value (the model, entropy) or knew it from such a guess before: not a format rule's find.
 _GUESSED = frozenset({"rules:entropy", "pf-serve", "known"})
 
@@ -268,6 +270,7 @@ class Redactor:
         self._authoring = False
         # Values the conversation shows as checksums (_CHECKSUM): a guess at one of them is no secret.
         self._checksums: OrderedDict[str, None] = OrderedDict()
+        self._checksum_starts: dict[str, str] = {}  # the first 16 characters of each -> it
 
     @staticmethod
     def _key(text: str) -> bytes:
@@ -324,9 +327,19 @@ class Redactor:
         spans += self._known_pieces(text, spans)
         spans = merge(narrow(spans, text))
         if self._checksums:
-            spans = [s for s in spans if not (set(s.source.split("|")) <= _GUESSED
-                                              and text[s.start:s.end].rstrip("=") in self._checksums)]
+            spans = [s for s in spans if not (set(s.source.split("|")) <= _GUESSED and self._a_checksum(text[s.start:s.end]))]
         return spans, seen
+
+    def _a_checksum(self, value: str) -> bool:
+        """`value` is a checksum the conversation shows, or the start of one (a guess's span can stop
+        short), with or without its label (`.yaml:sha512-oUsD…`: lock-01 on DeepSeek, Nov 22)."""
+        value = _CHECKSUM_LABEL.sub("", value).rstrip("=")
+        if len(value) < 16:
+            return False
+        if value in self._checksums:
+            return True
+        full = self._checksum_starts.get(value[:16])
+        return full is not None and full.startswith(value)
 
     def _note_checksums(self, body) -> None:
         """The values a request shows as checksums (_CHECKSUM), kept for the conversation."""
@@ -340,8 +353,11 @@ class Redactor:
             value = m.group(1)
             self._checksums[value] = None
             self._checksums.move_to_end(value)
+            self._checksum_starts[value[:16]] = value
         while len(self._checksums) > CHECKSUMS:
-            self._checksums.popitem(last=False)
+            gone, _ = self._checksums.popitem(last=False)
+            if self._checksum_starts.get(gone[:16]) == gone:
+                del self._checksum_starts[gone[:16]]
 
     def _known_in(self, text: str, derived: list, known) -> list[tuple[int, int, str]]:
         """The known values in text, as (start, end, value): where they were the last time, with

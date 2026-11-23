@@ -56,7 +56,7 @@ _LABEL = re.compile(r"[A-Za-z_][\w.-]*=")
 # grep's file and line in front of a match (`web/yarn.lock:sha512-…`, `go.sum:12:h1:…`): the model ran a span
 # from the file's name over the checksum after it (lock-01 on Claude Code, Nov 22). Only the prefix goes; what
 # follows it is judged as any value is.
-_FILE_PREFIX = re.compile(r"(?:\.{0,2}/)?(?:[\w.-]+/)*[\w-]+\.[A-Za-z][A-Za-z0-9]{0,5}(?::\d+)?:(?=\S)")
+_FILE_PREFIX = re.compile(r"(?:\.{0,2}/)?(?:[\w.-]+/)*[\w-]*\.[A-Za-z][A-Za-z0-9]{0,5}(?::\d+)?:(?=\S)")  # or its end only: `.yaml:sha512-…`
 _DIGEST = re.compile(r"(?i)(?:[\w.-]+@)?sha(?:1|256|384|512):")
 _URL = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^\s:/@]*:([^\s@/]+)@)?[^\s/]*(\S*)")
 _URL_SEGMENT = re.compile(r"[A-Za-z0-9_-]{16,}")

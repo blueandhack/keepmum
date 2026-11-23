@@ -460,3 +460,21 @@ def test_a_token_a_rule_knows_is_masked_even_after_a_checksum_label():
     r = Redactor(Pipeline(rules, _Guesses(rules), pii=False), Vault(bytes(32)))
     out = json.dumps(r.redact_request(_checking(f"echo {token} | gh auth login --with-token", f"sha256:{token}\n")))
     assert token not in out and r.counts["SECRET"] >= 1
+
+
+@pytest.mark.parametrize("guess", [
+    "sha512-6xtPQCUSpt8+nbktNn34Ey7lOwCEK+Q1S53JHtAG9g3kpuO8jXYUWIKQ/zqxGFK7UF/qL+1Lx5kPZRuA+SGJkw",  # its label in the span
+    "6xtPQCUSpt8+nbktNn34Ey7lOwCEK+Q1S53JHtAG9g3kpuO8jXYUWIKQ",  # a span stopped short of its end
+])
+def test_a_guess_at_a_checksum_with_its_label_or_cut_short_is_none(guess):
+    """lock-01, Claude Code on DeepSeek (Nov 22): a guessed `sha512-…` was learned as a secret, then masked in
+    the lockfile read before it, labeled and all."""
+    command = f"echo '{guess}' | head -c 16"
+
+    class One:
+        def detect(self, text):
+            return [Span(text.index(guess), text.index(guess) + len(guess), "SECRET", 0.97, "pf-serve")] if guess in text else []
+
+    r = Redactor(Pipeline(RulesDetector(), One(), pii=False), Vault(bytes(32)))
+    out = json.dumps(r.redact_request(_checking(command, NPM)))
+    assert not r.counts and guess in out
