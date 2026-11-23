@@ -236,6 +236,7 @@ warned = ["script"]                               # checks that must warn (let t
 blocked = ["harm"]                                 # checks that must refuse (a request: its 403 and the agent's error are then no `health` failure)
 refusal_shown = true                               # the user must see a refused request's `keepmum: the …` message
 warn_shown = true                                  # the agent must show the user a `keepmum: …` note
+tools_about = ["Look up a record by name."]        # the Tools page must show a tool saying this (its description's first sentence)
 masked_none = true                                 # only the case's own [values] may be masked: anything else is a false-mask
 may_mask = []                                      # regexes of values masked_none lets through
 quiet = true                                       # ordinary work: any check hit is a false-alarm

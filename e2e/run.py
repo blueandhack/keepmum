@@ -287,6 +287,8 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
                    "restarted": restarted.is_set(),
                    "hits": [{k: h.get(k) for k in ("check", "action", "source", "score", "chars")} for h in hits],
                    "warned": sorted({h.get("check") for h in hits if h.get("action") == "warned"}),
+                   # The Tools page: the network tools the agent offered, each with what it says it does.
+                   "tools": [s for p in proxies if p.tools is not None for s in p.tools.snapshot(p.policy)],
                    # Refused: blocked, or meant for a local model that did not answer (sent nowhere).
                    "blocked": sorted({h.get("check") for h in hits if h.get("action") == "blocked"
                                       or (h.get("action") == "local" and h.get("local_error"))}),
@@ -609,7 +611,9 @@ def check_tools(results: list[dict]) -> dict:
     seen: dict[str, set[str]] = {}
     for r in results:
         if r.get("tools") is not None:
-            seen.setdefault(r["agent"], set()).update(r["tools"])
+            # MCP tools are held to their server's [restore] setting, whatever they are (tools.toml):
+            # Claude Code declares the stub server's once ToolSearch loads them (mcp-06).
+            seen.setdefault(r["agent"], set()).update(t for t in r["tools"] if not t.startswith("mcp__"))
     new = {a: sorted(t - set(known.get(a, {}))) for a, t in seen.items() if t - set(known.get(a, {}))}
     gone = {a: sorted(set(known.get(a, {})) - t) for a, t in seen.items() if set(known.get(a, {})) - t}
     lines = ["", "## Tools the agents offer", ""]

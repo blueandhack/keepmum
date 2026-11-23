@@ -352,6 +352,11 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
     for check in case.expect.get("warned", []):
         if check not in keepmum.get("warned", []):
             out.append(Finding("task", f"keepmum's {check} check never warned", "keepmum"))
+    # The Tools page: each MCP tool the agent offered, with the first sentence of its own description.
+    for about in case.expect.get("tools_about", []):
+        if not any(d.get("about") == about for srv in keepmum.get("tools", []) for d in srv.get("details") or []):
+            seen = sorted({d.get("about") for srv in keepmum.get("tools", []) for d in srv.get("details") or []})
+            out.append(Finding("task", f"keepmum's Tools page has no tool that says {about!r} (it has {seen})", "keepmum"))
     if case.expect.get("warn_shown") and not any("keepmum: " in t for t in [*transcript.shown, transcript.final]):
         out.append(Finding("task", "the agent never showed keepmum's note", "transcript"))
     if keepmum.get("unresolved") and keepmum["unresolved"] != case.expect.get("unresolved") \

@@ -1,0 +1,34 @@
+id = "mcp-06-tools-page-shows-what-each-tool-does"
+title = "The Tools page lists the MCP server's tools, each with what its own description says"
+why = """
+keepmum records the network tools an agent offers (tools.py), and the Tools page shows each with the first
+sentence of its description, in its author's words, so the user can tell what a server can do before giving it
+real values. Claude Code sends an MCP server's tools only once the model loads them with ToolSearch, as the
+model here does first. (Codex and the Antigravity CLI load MCP tools by a search of their own, and opencode
+lists them inside its `execute` tool's description: keepmum sees no definition of them.) If this fails, a
+server's tools show up without what they do, or not at all.
+"""
+agents = ["claude"]
+modes = ["scripted"]
+mcp = true
+mcp_reply = "Margaret Thornbury, Acme Corp, Leeds."
+prompt = "Look up Margaret Thornbury in notes and tell me where she works. Do not ask questions."
+config = "[detect]\nmodel = false\n"
+
+[[script]]
+calls = [
+  { claude = { name = "ToolSearch", input = { query = "select:mcp__notes__lookup,mcp__notes__send_note", max_results = 5 } } },
+]
+
+[[script]]
+calls = [
+  { claude = { name = "mcp__notes__lookup", input = { name = "Margaret Thornbury" } } },
+]
+
+[[script]]
+say = "She works at Acme Corp, in Leeds."
+
+[expect]
+mcp_calls_min = 1
+tools_about = ["Send a note to the team.", "Look up a record by name."]
+only_new = []
