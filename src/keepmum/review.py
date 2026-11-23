@@ -12,7 +12,9 @@ that follows: the next request, carrying the flagged result, waits for it. Sendi
 notice in the result's place, an edit puts the user's text there, and keeping it local keeps every
 turn that carries the result on this Mac.
 
-A result too long for the local model (its context) gets no summary or rewrite. Under review, keepmum
+A rewrite is a cut (cut.py): the review carries what it took out (`cut`), and a long draft or proposal
+reaches the app only up to FLAGGED_SHOWN characters (`shown`), its start then standing for the whole.
+A summary too long for the local model (its context) is not written. Under review, keepmum
 asks about its notice instead (strategy "withhold", with the reason): send the notice, send the
 user's own text, or keep the turn local. Without review, the turn stays local, as before.
 
@@ -134,12 +136,21 @@ class Piece:
     model: str = ""
     drafting: bool = False
     asked: int = 0  # drafts asked for: only the latest one's lands
+    cut: dict | None = None  # a rewrite that is the result with lines cut out: which (cut.Cut.public)
 
     def public(self) -> dict:
         return {"id": self.id, "check": self.check, "source": self.source, "flagged": self.text[:FLAGGED_SHOWN],
-                "flagged_chars": len(self.text), "default": self.default, "draft": self.draft, "kind": self.kind,
+                "flagged_chars": len(self.text), "default": self.default, "draft": shown(self.draft),
+                "draft_chars": len(self.draft or ""), "kind": self.kind, "cut": self.cut if self.kind == "rewrite" else None,
                 "failed": self.failed, "model": self.model, "drafting": self.drafting,
                 "actions": list(PIECE_ACTIONS[self.check])}
+
+
+def shown(text: str | None) -> str | None:
+    """What the app gets of a draft: the whole of it up to FLAGGED_SHOWN characters, else its start.
+    A longer one (a cut of a long result) is shown by what was cut, and sent as it is unless the user
+    writes their own."""
+    return text if text is None or len(text) <= FLAGGED_SHOWN else text[:FLAGGED_SHOWN]
 
 
 @dataclass
@@ -190,6 +201,9 @@ class TurnReview:
             if action not in PIECE_ACTIONS[p.check]:
                 return None, f"piece {p.id}: the action must be one of {', '.join(PIECE_ACTIONS[p.check])}"
             text = choice.get("text")
+            if action in WRITTEN_ACTIONS and p.kind == action and p.draft and text is not None \
+                    and text.strip() == (shown(p.draft) or "").strip():
+                text = p.draft  # the start of a long draft, as the app got it: the draft itself
             if action in WRITTEN_ACTIONS:
                 text = (text or "").strip() or (p.draft if p.kind == action else None)
                 if not text or defaults_only and p.failed:
@@ -219,6 +233,7 @@ class Review:
     reason: str | None = None  # why it did not pass on its own: the local model wrote nothing, or what it wrote failed a check
     check: str = "injection"  # "harm": a rewrite of what the user typed, not of a tool result
     sendable: bool = True  # False: what is proposed is nothing to send (no rewrite, or nothing left of the message)
+    cut: dict | None = None  # a rewrite that is the result with lines cut out: which (cut.Cut.public)
     id: str = field(default_factory=lambda: secrets.token_hex(6))
     created: float = field(default_factory=time.time)
     decision: Decision | None = None
@@ -243,7 +258,8 @@ class Review:
         return {"id": self.id, "strategy": self.strategy, "source": self.source, "path": self.path,
                 # The app shows the first few hundred lines: a 237,646-character result need not go every second.
                 "flagged": self.flagged[:FLAGGED_SHOWN], "flagged_chars": len(self.flagged),
-                "proposed": self.proposed, "answer": self.answer,
+                "proposed": shown(self.proposed), "proposed_chars": len(self.proposed), "cut": self.cut,
+                "answer": self.answer,
                 "model": self.model, "reason": self.reason, "check": self.check, "actions": list(self.actions),
                 "created": self.created, **_clock(self)}
 

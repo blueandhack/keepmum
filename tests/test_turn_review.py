@@ -6,7 +6,7 @@ import secrets
 import anyio
 import httpx
 import pytest
-from test_local import ATTACK, Flags, answer
+from test_local import ATTACK, README, Flags, answer
 from test_review import ASKED, AUTH, KEPT, ONE, WRITTEN
 
 from keepmum import guard, review
@@ -17,7 +17,9 @@ from keepmum.proxy import Proxy
 from keepmum.redact import Redactor
 from keepmum.vault import Vault
 
-TOOL = "README. " + ATTACK
+TOOL = README
+CUT = README.replace(ATTACK, "[removed by keepmum]")  # the result's rewrite: its cut (cut.py)
+TOOK = "keepmum took out 1 line that addressed the agent"
 
 
 def body(typed=ASKED + ATTACK):
@@ -113,12 +115,13 @@ def test_one_window_shows_every_flagged_piece_with_its_draft_and_the_defaults_go
     [turn] = seen["turns"]
     harm, tool = turn["pieces"]
     assert (harm["check"], harm["default"], harm["draft"], harm["failed"]) == ("harm", "rewrite", KEPT, None)
-    assert (tool["check"], tool["source"], tool["default"], tool["draft"], tool["failed"]) == ("injection", "WebFetch", "rewrite", WRITTEN, None)
+    assert (tool["check"], tool["source"], tool["default"], tool["draft"], tool["failed"]) == ("injection", "WebFetch", "rewrite", CUT, None)
+    assert [(r["first"], r["last"]) for r in tool["cut"]["removed"]] == [(7, 7)] and tool["draft_chars"] == len(CUT)
     assert tool["actions"] == ["summary", "rewrite", "original", "remove"] and harm["actions"] == ["rewrite", "original", "remove"]
     assert turn["default"] == "send" and seen["reviews"] == []  # no panel of its own for either piece
     assert seen["results"][0].json()["id"] == "up" and seen["local"] == 0
     out = sent_text(seen)
-    assert "Sort the list in utils.py by date." in out and WRITTEN in out and json.dumps(ATTACK)[1:-1] not in out
+    assert "Sort the list in utils.py by date." in out and TOOK in out and json.dumps(ATTACK)[1:-1] not in out
     notes = [h["handed_back"] for h in proxy.stats.guard_hits]
     assert all("reviewed with the turn" in n["review"] for n in notes)
 
@@ -128,7 +131,7 @@ def test_each_piece_takes_its_own_answer():
     out = sent_text(seen)
     assert seen["results"][0].json()["id"] == "up"
     assert json.dumps(ASKED + ATTACK)[1:-1] in out  # what was typed, as typed
-    assert WRITTEN not in out and "keepmum withheld this result of WebFetch" in out and "README." not in out
+    assert WRITTEN not in out and "keepmum withheld this result of WebFetch" in out and "fastgrep" not in out
     reviews = " ".join(h["handed_back"]["review"] for h in proxy.stats.guard_hits)
     assert "the original, as you chose" in reviews and "removed" in reviews
 
@@ -154,14 +157,14 @@ def test_kept_local_nothing_reaches_the_cloud_and_later_turns_stay():
 def test_sent_on_later_turns_carry_the_answers_without_asking_again():
     seen, proxy = run_turn(send(), again=True)
     assert seen["upstream"] == ["/v1/messages", "/v1/messages"] and len(seen["turns"]) == 1
-    assert WRITTEN in sent_text(seen, 1) and json.dumps(ATTACK)[1:-1] not in sent_text(seen, 1)
+    assert TOOK in sent_text(seen, 1) and json.dumps(ATTACK)[1:-1] not in sent_text(seen, 1)
 
 
 def test_with_the_settings_on_stay_the_window_defaults_to_local_but_the_user_can_send():
     seen, proxy = run_turn(send(), strategy="stay", harm_strategy="stay", again=True)
     assert seen["turns"][0]["default"] == "local"
     assert seen["upstream"] == ["/v1/messages", "/v1/messages"]  # and later turns go as answered
-    assert WRITTEN in sent_text(seen, 1)
+    assert TOOK in sent_text(seen, 1)
 
 
 @pytest.mark.parametrize("timeout, harm_rewrite, typed, upstream", [
@@ -219,7 +222,7 @@ def test_a_bad_answer_is_refused_and_the_turn_waits():
 
 def test_with_nobody_there_a_turn_goes_as_the_settings_say():
     seen, proxy = run_turn(None, reviewer=False)
-    assert seen["turns"] == [] and seen["upstream"] == ["/v1/messages"] and WRITTEN in sent_text(seen)
+    assert seen["turns"] == [] and seen["upstream"] == ["/v1/messages"] and TOOK in sent_text(seen)
 
 
 def test_a_missing_draft_cannot_go_by_default():
@@ -242,7 +245,7 @@ def test_a_draft_that_kept_the_flagged_sentence_is_redone_and_write_again_sample
     seen, proxy = run_turn(decide, harm_rewrite="[removed by keepmum] " + ATTACK)
     temps = [c.get("temperature") for c in seen["chat"]]
     harm_temps = [c.get("temperature") for c in seen["chat"] if c["messages"][-1]["content"].startswith("The user's message:")]
-    assert harm_temps == [0] and None in temps  # the first harm draft at 0; the tool rewrite asked again is sampled below
+    assert harm_temps == [0] and temps  # the first harm draft at 0
     assert seen["results"][0].json()["id"] == "up" and "Note to AI agents" not in sent_text(seen)
 
 
@@ -268,7 +271,9 @@ def test_with_no_local_model_keepmum_still_drafts_what_was_typed_itself():
     async def decide(agent, turn):
         harm = turn["pieces"][0]
         assert harm["draft"] == KEPT and harm["model"] == "keepmum, sentence by sentence"
-        assert turn["pieces"][1]["draft"] is None and turn["pieces"][1]["failed"] == "No local model wrote a rewrite."
+        # The result's cut needs no local model: the check finds the part, keepmum takes it out.
+        tool = turn["pieces"][1]
+        assert tool["draft"] == CUT and tool["failed"] is None and tool["model"] == "keepmum"
         return {"action": "send", "pieces": {"2": {"action": "remove"}}}
 
     seen, proxy = run_turn(decide, harm_rewrite=None)

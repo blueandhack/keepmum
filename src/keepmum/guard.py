@@ -694,6 +694,15 @@ class Guard:
             self.vetoed += 1
         return False
 
+    def narrow(self, text: str, parts: list[str]) -> None:
+        """What later text carries of the flagged `text` is only `parts` of it: what a hand-back took
+        out (cut.py). The rest went to the cloud as it was, so a line of it again (the agent greps the
+        README it read) is no hit; and a hand-back that keeps it is none either."""
+        flat = "\n".join(_flat(scored_text(text)))
+        keep = "\n".join(line for p in parts for line in _flat(scored_text(p)))
+        with self._lock:
+            self._sources = [(keep if f == flat else f, hit) for f, hit in self._sources]
+
     def _carried(self, text: str) -> dict | None:
         """The hit of a flagged text that a line of text (20 characters or more) repeats, or None."""
         with self._lock:

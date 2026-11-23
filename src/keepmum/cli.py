@@ -856,7 +856,8 @@ def guard_local(ctx: typer.Context,
         typer.echo(json.dumps({"servers": rows, "presets": [{"id": k, "name": n, "url": u} for k, (n, u) in PRESETS.items()],
                                "picks": picks_json(), "default_pick": DEFAULT_PICK,
                                "contexts": list(CONTEXTS), "default_context": DEFAULT_CONTEXT, "splash": _splash_status(),
-                               "keep_loaded": cfg.guard_local_keep_loaded, "answer_thinking": cfg.guard_local_answer_thinking}))
+                               "keep_loaded": cfg.guard_local_keep_loaded, "answer_thinking": cfg.guard_local_answer_thinking,
+                               "answer_context": cfg.guard_local_answer_context}))
         return
     if not rows:
         typer.echo("no local servers: `keepmum guard local pull` downloads keepmum's pick to Ollama and uses it "
@@ -1167,6 +1168,9 @@ def guard_local_speed(keep_loaded: str = typer.Option(None, "--keep-loaded", hel
                                                       "loaded after a request: 5m (default), 15m, 30m, 1h, any such duration, or always."),
                       thinking: str = typer.Option(None, "--thinking", help="on (default) or off: whether a local answer may "
                                                    "think first. Off answers several times as fast; summaries and rewrites never think."),
+                      reads: str = typer.Option(None, "--reads", help="How much of the conversation a local answer reads: "
+                                                "16k, 32k (default), 64k, 128k, any size from 4k, or full (the server's context). "
+                                                "Older messages are cut or left out to fit."),
                       as_json: bool = typer.Option(False, "--json", help="Print JSON.")) -> None:
     """How fast local turns go. A model that stays loaded answers without reloading and reads a long
     prompt from its cache; an answer without thinking takes a fraction of the time."""
@@ -1177,6 +1181,14 @@ def guard_local_speed(keep_loaded: str = typer.Option(None, "--keep-loaded", hel
     from .local import DEFAULT_KEEP_LOADED, parse_keep_loaded, set_keep_alive
 
     where = "keepmum guard local speed"
+    if reads is not None:
+        from .fit import parse_reads
+
+        try:
+            reads = parse_reads(reads)[0]
+        except ValueError as e:
+            typer.echo(f"{where}: --reads: {e}", err=True)
+            raise typer.Exit(2)
     if thinking is not None and thinking not in ("on", "off"):
         typer.echo(f"{where}: --thinking: on or off", err=True)
         raise typer.Exit(2)
@@ -1195,6 +1207,8 @@ def guard_local_speed(keep_loaded: str = typer.Option(None, "--keep-loaded", hel
         if thinking is not None and (thinking == "on") != cfg.guard_local_answer_thinking:
             _update_config(cfg.path, "guard", "local_answer_thinking", None if thinking == "on" else False,
                            f"{where} --thinking {thinking}")
+        if reads is not None and reads != cfg.guard_local_answer_context:
+            _update_config(cfg.path, "guard", "local_answer_context", None if reads == "32k" else reads, f"{where} --reads {reads}")
     except (ConfigError, OSError) as e:
         typer.echo(f"{where}: {e}", err=True)
         raise typer.Exit(1)
@@ -1207,9 +1221,10 @@ def guard_local_speed(keep_loaded: str = typer.Option(None, "--keep-loaded", hel
             typer.echo(f"{where}: Splash keeps its old setting until it starts again: {e}", err=True)
         for server in cfg.guard_local_servers:  # a model Ollama has loaded now; later ones get it after each request
             set_keep_alive(server.url, server.model, keep_loaded)
-    if changed or thinking is not None:
+    if changed or thinking is not None or reads is not None:
         typer.echo("Running proxies use it from the next local turn.", err=True)
-    now = {"keep_loaded": cfg.guard_local_keep_loaded, "answer_thinking": cfg.guard_local_answer_thinking}
+    now = {"keep_loaded": cfg.guard_local_keep_loaded, "answer_thinking": cfg.guard_local_answer_thinking,
+           "answer_context": cfg.guard_local_answer_context}
     if as_json:
         typer.echo(json.dumps(now))
         return
@@ -1217,6 +1232,9 @@ def guard_local_speed(keep_loaded: str = typer.Option(None, "--keep-loaded", hel
     typer.echo("keep loaded: " + ("always" if kl == "always" else f"{kl} after the last request") +
                (" (default)" if kl == DEFAULT_KEEP_LOADED else ""))
     typer.echo("local answers: " + ("think first (default)" if now["answer_thinking"] else "no thinking: answer at once"))
+    r = now["answer_context"]
+    typer.echo("local answers read: " + ("the whole conversation, up to the server's context" if r == "full"
+                                          else f"the newest {r} tokens of the conversation") + (" (default)" if r == "32k" else ""))
 
 
 @local_app.command("context")

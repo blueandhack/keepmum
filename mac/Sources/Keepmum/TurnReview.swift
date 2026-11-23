@@ -21,8 +21,14 @@ struct PendingTurn: Decodable, Identifiable, Equatable {
         var model: String
         var drafting: Bool
         var actions: [String]
+        /// The draft's whole length (`draft` is its first 60,000 characters); nil from older engines.
+        var draftChars: Int?
+        /// A rewrite that is the result with lines cut out (keepmum's cut.py): which; nil otherwise.
+        var cut: CutInfo?
 
         var isTyped: Bool { check == "harm" }
+        /// Only the start of the draft came: too long to edit here, it goes as it is.
+        var draftPart: Bool { (draftChars ?? draft?.count ?? 0) > (draft?.count ?? 0) }
         var title: String { isTyped ? "What you typed" : "What \(source ?? "a tool") returned" }
     }
 
@@ -135,15 +141,18 @@ struct TurnReviewView: View {
     @State private var request: [String: String] = [:]
     @State private var assistError: [String: String] = [:]
     @State private var armed = false
+    /// Pieces whose cut the user opened as text, to edit it.
+    @State private var editingCut: Set<String> = []
     /// For snapshots: a pause this many seconds old.
     var previewPause: Double?
 
-    init(center: ReviewCenter, turn: PendingTurn, more: Int = 0, choices: [String: String] = [:], previewPause: Double? = nil) {
+    init(center: ReviewCenter, turn: PendingTurn, more: Int = 0, choices: [String: String] = [:], previewPause: Double? = nil,
+         selected: String? = nil) {
         self.center = center
         self.turn = turn
         self.more = more
         self.previewPause = previewPause
-        _selected = State(initialValue: turn.pieces.first?.id ?? "")
+        _selected = State(initialValue: selected ?? turn.pieces.first?.id ?? "")
         _choice = State(initialValue: choices)
     }
 
@@ -293,6 +302,9 @@ struct TurnReviewView: View {
             if edited(p) { return ("\(what): your text", "pencil", Theme.accent) }
             if p.kind != a || p.draft == nil { return ("\(what): none yet", "exclamationmark.circle", Theme.warning) }
             if p.failed != nil { return ("\(what): didn\u{2019}t pass", "exclamationmark.triangle", Theme.warning) }
+            if a == "rewrite", let cut = p.cut {
+                return ("\(cut.count) line\(cut.count == 1 ? "" : "s") out of \(cut.lines.formatted())", "checkmark.circle.fill", Theme.restored)
+            }
             return ("\(what): ready", "checkmark.circle.fill", Theme.restored)
         }
     }
@@ -349,7 +361,36 @@ struct TurnReviewView: View {
         }
     }
 
+    /// The cut is shown, not the whole text: until the user opens it to edit.
+    private func showsCut(_ p: PendingTurn.Piece, _ a: String) -> Bool {
+        a == "rewrite" && p.kind == "rewrite" && p.cut != nil && !edited(p) && !editingCut.contains(p.id) && !busy(p)
+    }
+
     @ViewBuilder private func written(_ p: PendingTurn.Piece, _ a: String) -> some View {
+        if showsCut(p, a), let cut = p.cut {
+            VStack(alignment: .leading, spacing: Space.s) {
+                CutView(cut: cut, model: p.model, maxHeight: 260)
+                HStack(spacing: Space.s) {
+                    if let failed = p.failed {
+                        Label(failed + " You can still send it, or pick another answer.", systemImage: "exclamationmark.triangle.fill")
+                            .font(.km(.caption)).foregroundStyle(Theme.warning).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Label("What is left passed the injection check", systemImage: "checkmark.circle.fill")
+                            .font(.km(.caption)).foregroundStyle(Theme.restored)
+                    }
+                    Spacer(minLength: Space.s)
+                    if !p.draftPart {
+                        PillButton(title: "Edit the Text", icon: "pencil") { editingCut.insert(p.id) }
+                            .help("Open the whole result, as it would go, to change it yourself")
+                    }
+                }
+            }
+        } else {
+            editable(p, a)
+        }
+    }
+
+    @ViewBuilder private func editable(_ p: PendingTurn.Piece, _ a: String) -> some View {
         let shape = RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
         let value = box(p)
         VStack(alignment: .leading, spacing: Space.s) {
@@ -536,6 +577,18 @@ struct TurnReviewView: View {
 }
 
 extension PendingTurn {
+    /// For snapshots: a long web page whose rewrite is its cut, the planted lines out.
+    static let sampleCut: PendingTurn = {
+        var t = sample
+        t.pieces[1].default = "rewrite"
+        t.pieces[1].kind = "rewrite"
+        t.pieces[1].draft = PendingReview.sample.proposed
+        t.pieces[1].flaggedChars = 250_296
+        t.pieces[1].draftChars = 250_024
+        t.pieces[1].cut = .sample
+        return t
+    }()
+
     /// For snapshots: what was typed and a web page, both flagged, their drafts written.
     static let sample = PendingTurn(
         id: "t1u2v3", path: "/v1/messages",

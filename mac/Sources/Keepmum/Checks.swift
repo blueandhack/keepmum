@@ -1141,8 +1141,13 @@ struct LocalSpeedSection: View {
         ("5m", "5 minutes"), ("15m", "15 minutes"), ("30m", "30 minutes"), ("1h", "1 hour"), ("always", "Always"),
     ]
 
+    static let reads: [(id: String, label: String)] = [
+        ("16k", "16k tokens"), ("32k", "32k tokens"), ("64k", "64k tokens"), ("128k", "128k tokens"), ("full", "The whole conversation"),
+    ]
+
     private var keep: String { engine.localServers?.keepLoaded ?? "5m" }
     private var thinks: Bool { engine.localServers?.answerThinking ?? true }
+    private var read: String { engine.localServers?.answerContext ?? "32k" }
 
     var body: some View {
         FormSection(title: "Speed",
@@ -1164,6 +1169,14 @@ struct LocalSpeedSection: View {
                 Switch(isOn: thinks) { on in Task { await engine.setLocalSpeed(thinking: on) } }
                     .disabled(!engine.isBundled || engine.busy)
                     .accessibilityLabel("Think before answering")
+            }
+            Hairline()
+            FormRow(title: "How much a local answer reads",
+                    detail: read == "full" ? "All of it, up to the server\u{2019}s context: a long session can take minutes to read"
+                        : "The newest \(read) tokens, the task and the instructions; older messages are cut or left out",
+                    help: "Reading is most of a local answer\u{2019}s time: on an M5 Pro, 26k tokens took 9 s, 65k took 31 s and 134k took 98 s before the first word. A server\u{2019}s prompt cache reads only what is new on the next turn.") {
+                ChoiceMenu(engine: engine, label: (Self.reads.first { $0.id == read }?.label ?? read) + (read == "32k" ? " (default)" : ""),
+                           items: Self.reads.map { r in (r.label, { await engine.setLocalSpeed(reads: r.id) }) })
             }
         }
     }

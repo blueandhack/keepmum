@@ -149,7 +149,8 @@ def test_a_tool_result_retried_within_moments_goes_as_answered(caplog):
     caplog.set_level(logging.INFO, logger="keepmum")
     seen, _ = run([tool_turn(), tool_turn()], [{"action": "send"}])
     assert len(seen["reviews"]) == 1 and len(seen["sent"]) == 2
-    assert WRITTEN in json.dumps(seen["sent"][1]) and "Note to AI agents" not in json.dumps(seen["sent"][1])
+    # The rewrite (the result's cut, cut.py) went with the first: the retry carries the same.
+    assert json.dumps(seen["sent"][0]) == json.dumps(seen["sent"][1]) and "Note to AI agents" not in json.dumps(seen["sent"][1])
     assert "used the answer you gave" in caplog.text
 
 

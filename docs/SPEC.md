@@ -279,6 +279,8 @@ keepmum/
     gemini.py       # Gemini API and Code Assist restore, whole and streamed
     gateway.py      # gateways behind keepmum, routes per gateway
     tools.py        # what each network tool may receive, servers seen, tool hashes
+    cut.py          # a flagged result with its planted lines cut out (the hand-back "rewrite")
+    fit.py          # a long conversation fitted to what the local model reads
     destinations.py # where a token with a known issuer may go in a shell command
     guard.py        # the prompt-injection check
     harm.py         # the harm check (and qwen3guard_prompt.py)

@@ -6,7 +6,7 @@ import time
 import anyio
 import httpx
 import pytest
-from test_local import ATTACK, TOKEN, Flags, answer, conversation
+from test_local import ATTACK, README, TOKEN, Flags, answer, conversation
 from typer.testing import CliRunner
 
 from keepmum import guard, review
@@ -28,7 +28,7 @@ ONE = ASKED.rstrip(". ") + "; " + ATTACK
 AUTH = {"authorization": "Bearer t"}
 
 
-def run(answer_with=None, mode="all", wait=30, timeout="stay", strategy="rewrite", reviewer=True, too_long=False,
+def run(answer_with=None, mode="all", wait=30, timeout="stay", strategy="summary", reviewer=True, too_long=False,
         harm=False, rewrite=KEPT, also=(), skills=(), harm_instructions="", assist=None, typed=None):
     """One flagged turn through a proxy that hands back with `strategy`; while it waits, a reviewer
     (if any) answers with `answer_with` ({"action": ..., "text": ...}) or not at all. With `harm`, the
@@ -50,6 +50,9 @@ def run(answer_with=None, mode="all", wait=30, timeout="stay", strategy="rewrite
                 if too_long:  # Splash at 64k context, given a 237,646-character result
                     return httpx.Response(400, json={"error": {"message": "prompt exceeds the context window",
                                                                "code": "context_length_exceeded"}})
+                if body["messages"][0]["content"].startswith("You stand between a tool and a coding agent. keepmum's "
+                                                             "injection check flagged the part"):
+                    return httpx.Response(200, json={"choices": [{"message": {"content": "none"}}]})  # the cut's question
                 return httpx.Response(200, json={"choices": [{"message": {"role": "assistant",
                                                                           "content": rewrite if harm else WRITTEN}}]})
             return answer(body, body["model"])
@@ -76,7 +79,7 @@ def run(answer_with=None, mode="all", wait=30, timeout="stay", strategy="rewrite
         async def send(content=None):
             nonlocal left
             body = ({"model": "claude-x", "max_tokens": 50, "messages": [{"role": "user", "content": content or typed or ASKED + ATTACK}]}
-                    if harm else conversation(ATTACK))
+                    if harm else conversation(README))
             r = await agent.post("/v1/messages", json=body, headers={"x-api-key": "sk-ant-x", "anthropic-version": "2023-06-01"})
             if content is None:
                 result["r"] = r
@@ -124,8 +127,19 @@ def test_approved_it_goes_as_the_local_model_wrote_it():
     r, seen, proxy = run({"action": "send"})
     assert r.json()["id"] == "up" and WRITTEN in json.dumps(seen["sent"][0]) and TOKEN not in json.dumps(seen["sent"])
     rv = seen["reviews"][0]
-    assert rv["strategy"] == "rewrite" and rv["proposed"] == WRITTEN and rv["flagged"] == ATTACK and rv["seconds_left"] > 0
+    assert rv["strategy"] == "summary" and rv["proposed"] == WRITTEN and rv["flagged"] == README and rv["seconds_left"] > 0
     assert handed(proxy)["review"] == "approved"
+
+
+def test_a_rewrite_under_review_shows_what_was_cut_and_goes_as_the_rest_was():
+    r, seen, proxy = run({"action": "send"}, strategy="rewrite")
+    rv = seen["reviews"][0]
+    assert rv["strategy"] == "rewrite" and rv["proposed"] == README.replace(ATTACK, "[removed by keepmum]")
+    assert rv["proposed_chars"] == len(rv["proposed"]) and rv["cut"]["lines"] == 7
+    [gone] = rv["cut"]["removed"]
+    assert (gone["first"], gone["last"]) == (7, 7) and gone["text"] == ATTACK + "\n" and rv["cut"]["by"] == "keepmum"
+    sent = json.dumps(seen["sent"][0])
+    assert r.json()["id"] == "up" and "Note to AI agents" not in sent and "keepmum took out 1 line" in sent
 
 
 def test_an_edit_goes_in_its_place():
@@ -538,7 +552,7 @@ def test_too_long_to_rewrite_the_notice_is_reviewed_and_sent():
     assert r.json()["id"] == "up" and "[keepmum withheld this" in sent and "Note to AI agents" not in sent
     rv = seen["reviews"][0]
     assert rv["strategy"] == "withhold" and rv["proposed"].startswith("[keepmum withheld this")
-    assert f"{len(ATTACK):,} characters" in rv["reason"] and "wrote no rewrite" in rv["reason"]
+    assert f"{len(README):,} characters" in rv["reason"] and "wrote no summary" in rv["reason"]
     assert handed(proxy)["strategy"] == "withhold" and handed(proxy)["too_long"] is True
 
 
@@ -628,7 +642,8 @@ def run_both(answers=(), reviewer=False, harm_rewrite=KEPT, messages=None, modes
 def test_both_checks_each_hand_back_their_part_and_the_turn_goes():
     r, seen, proxy = run_both()
     sent = json.dumps(seen["sent"])
-    assert r.json()["id"] == "up" and ATTACK not in sent and KEPT in sent and WRITTEN in sent
+    # The result's rewrite is its cut: its one line was the attack (cut.py).
+    assert r.json()["id"] == "up" and ATTACK not in sent and KEPT in sent and "keepmum took out 1 line" in sent
     by = {h["check"]: h for h in proxy.stats.guard_hits}
     assert set(by) == {"injection", "harm"} and all("kept" not in h["handed_back"] for h in by.values())
 
@@ -645,7 +660,7 @@ def test_both_checks_reviewed_and_sent_the_turn_goes_with_both_rewrites():
     r, seen, proxy = run_both([{"action": "send"}, {"action": "send"}], reviewer=True)
     assert [rv["check"] for rv in seen["reviews"]] == ["harm", "injection"] and r.json()["id"] == "up"
     sent = json.dumps(seen["sent"])
-    assert ATTACK not in sent and KEPT in sent and WRITTEN in sent
+    assert ATTACK not in sent and KEPT in sent and "keepmum took out 1 line" in sent
 
 
 def test_a_failed_harm_rewrite_keeps_the_turn_local_without_rewriting_the_result():
@@ -683,7 +698,7 @@ def test_the_original_tool_result_goes_as_it_was_when_the_user_chooses_it():
     r, seen, proxy = run({"action": "original"})
     sent = json.dumps(seen["sent"][0])
     assert r.json()["id"] == "up" and WRITTEN not in sent and json.dumps(ATTACK)[1:-1] in sent
-    assert "original" in seen["reviews"][0]["actions"] and seen["reviews"][0]["flagged_chars"] == len(ATTACK)
+    assert "original" in seen["reviews"][0]["actions"] and seen["reviews"][0]["flagged_chars"] == len(README)
     assert handed(proxy)["review"] == "sent the original, as you chose"
 
 

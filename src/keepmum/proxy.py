@@ -70,6 +70,12 @@ from .handback import edited as handback_edited
 from .handback import messages as handback_messages
 from .handback import notice as handback_notice
 from .handback import wrap as handback_wrap
+from .handback import SUMMARY_CHARS, cut_wrap
+from .cut import Cutter
+from .fit import budget as fit_budget
+from .fit import CHARS_PER_TOKEN as FIT_CHARS
+from .fit import context_of, fit, limit_in, over, parse_reads
+from .guard import scored_text
 from .handback import written as handback_written
 from .review import HELD as REVIEW_HELD
 from .review import MAX_WAIT, WRITTEN_ACTIONS, Piece, Review, Reviews, TurnReview
@@ -181,6 +187,14 @@ def decode_body(raw: bytes, encoding: str) -> bytes:
     if encoding == "deflate":
         return zlib.decompress(raw)
     raise ValueError(f"unsupported content-encoding {encoding!r}")
+
+
+@dataclass(frozen=True)
+class _Cutter:
+    """What wrote a cut (cut.py), where a local server is expected: the local model that named the
+    lines, or keepmum, and no URL."""
+    model: str
+    url: str
 
 
 @dataclass(frozen=True)
@@ -898,7 +912,23 @@ class Proxy:
         guard = next((g for g in self.guards if g.name == "injection"), None)
         for text, source in flagged.items():
             why: dict = {}
-            got = await self._write_locally(strategy, text, source, prompt, instructions, skills, path, why=why)
+            # keepmum's own rewrite is the cut (cut.py): the planted lines out, the rest as it was, at any
+            # length. A summary is of what the cut left, and a result too long to summarise goes as that.
+            # The user's own instructions are theirs to follow: the local model writes it all, as before.
+            c = None if instructions else await self._cut(text, path, skills)
+            if instructions:  # the local model writes it all; only the planted lines are its pieces (Guard.narrow)
+                await self._cut(text, path, ask_model=False)
+            kind, note = strategy, None
+            if c is not None and (strategy == "rewrite" or len(c.text) > SUMMARY_CHARS or c.empty):
+                if strategy == "summary":
+                    note = (f"It is {len(text):,} characters: a summary would take the local model a minute or more, "
+                            "so keepmum cut what it addresses to the agent out of it instead.")
+                    log.info("%s: the flagged result is %d characters, too long to summarise quickly; its cut goes instead",
+                             path, len(text))
+                kind, got = "rewrite", (c.text, _Cutter(c.model or "keepmum", ""))
+            else:
+                got = await self._write_locally(strategy, c.text if c is not None else text, source, prompt, instructions,
+                                                skills, path, why=why)
             if got is None and why.get("too_long"):
                 # Too long for the local model: no summary or rewrite. Under review, the user decides on
                 # keepmum's notice instead; without, the turn stays local, as when the model fails.
@@ -943,9 +973,11 @@ class Proxy:
                 return {"strategy": strategy, "model": server.model, "url": server.url,
                         "kept": "what the local model wrote was flagged too"}
             mode, wait, timeout = self._review()
+            cut = c.public() if c is not None and kind == "rewrite" else None
             if review_applies(mode, strategy) and self.reviews.present():
-                log.info("%s: holding the %s for the user's review (up to %d s)", path, strategy, wait)
-                decision = await self.reviews.ask(Review(strategy, source, path, text, out, server.model, wait), timeout)
+                log.info("%s: holding the %s for the user's review (up to %d s)", path, kind, wait)
+                decision = await self.reviews.ask(Review(kind, source, path, text, out, server.model, wait, reason=note,
+                                                         cut=cut), timeout)
                 reviews.append(_reviewed(decision, wait))
                 if decision.action == "local":
                     for t in flagged:
@@ -960,18 +992,22 @@ class Proxy:
                     done.append((text, text))
                     continue
                 if decision.action == "edit":
-                    out = decision.text
+                    out, cut = decision.text, None
                     if await self._edit_flagged(guard, out):  # the user's own text: noted if flagged, theirs to send
                         reviews[-1] = "edited; the check flagged the edit, sent as you approved it"
-            done.append((text, handback_wrap(strategy, source, out, custom=bool(instructions))))
+            if cut is not None:
+                done.append((text, cut_wrap(source, out, sum(r["last"] - r["first"] + 1 for r in cut["removed"]))))
+            else:
+                done.append((text, handback_wrap(kind, source, out, custom=bool(instructions))))
         for text, replacement in done:
             self.handbacks.add(text, replacement, strategy)
             self.handbacks.went(text, replacement)
         if server is None:  # every result was too long: what went is the notice, or the user's text
             log.info("%s: the flagged result was too long for the local model; it went on as reviewed", path)
             return {"strategy": "withhold", "too_long": True, **({"review": "; ".join(reviews)} if reviews else {})}
-        log.info("%s: the local model %s at %s wrote a %s of the flagged result; checking it", path, server.model,
-                 server.url, strategy)
+        log.info("%s: %s, and it passed", path,
+                 f"the flagged result's cut went (lines named by {server.model})" if not server.url
+                 else f"the local model {server.model} at {server.url} wrote a {kind} of the flagged result")
         return {"strategy": strategy, "model": server.model, "url": server.url,
                 **({"too_long": True} if withheld else {}), **({"review": "; ".join(reviews)} if reviews else {})}
 
@@ -1044,7 +1080,9 @@ class Proxy:
                         return {"harm": {"strategy": "turn", "kept": "what was typed is not one piece of its message"}}
                     pieces.append(Piece("", "harm", text, whole=full))
                 else:
-                    pieces.append(Piece("", "injection", text, source=source, default=tool_default))
+                    # A summary of a long result takes minutes and says little (SUMMARY_CHARS): its cut, by default.
+                    long = tool_default == "summary" and len(text) > SUMMARY_CHARS and not instructions
+                    pieces.append(Piece("", "injection", text, source=source, default="rewrite" if long else tool_default))
         stores = {"harm": self.harm_handbacks, "injection": self.handbacks}
         async with contextlib.AsyncExitStack() as stack:
             # One review of a typed text at a time: Codex's task-title request carries it too, and waits.
@@ -1112,7 +1150,9 @@ class Proxy:
                     self.harm_handbacks.add(p.whole, p.whole.replace(p.text, mine, 1), "original" if action == "original" else "rewrite")
                     self.harm_handbacks.mark_made(mine)
                 else:
+                    lines = sum(r["last"] - r["first"] + 1 for r in p.cut["removed"]) if p.cut else 0
                     replacement = (p.text if action == "original" else handback_notice("withhold", p.source) if action == "remove"
+                                   else cut_wrap(p.source, text, lines) if action == "rewrite" and p.cut and not a["edited"]
                                    else handback_wrap(action, p.source, text, custom=a["edited"] or bool(instructions)))
                     self.handbacks.add(p.text, replacement, {"remove": "withhold"}.get(action, action))
                     self.handbacks.went(p.text, replacement)
@@ -1138,7 +1178,8 @@ class Proxy:
             if piece.asked == mine:
                 piece.drafting = False
         if piece.asked == mine:
-            piece.draft, piece.kind, piece.failed, piece.model = got
+            piece.draft, piece.kind, piece.failed, piece.model, *cut = got
+            piece.cut = cut[0] if cut else None
 
     async def _write_piece(self, turn: TurnReview, piece: Piece, kind: str, request: str | None, base: str | None):
         """(text or None, kind, why it did not pass or None, model) for `_draft`. A second draft of the
@@ -1150,12 +1191,23 @@ class Proxy:
         msgs = review_assist_messages(piece, base or "", request) if request else None
         why: dict = {}
         again = piece.kind == kind and piece.draft is not None and not request
+        c = None
         if harm:
             got = await self._write_locally("rewrite", piece.text, None, None, self._harm_instructions(), skills, path,
                                             check="harm", why=why, messages=msgs, temperature=0.7 if again else None)
         else:
-            got = await self._write_locally(kind, piece.text, piece.source, turn.context, self._handback()[1], skills, path,
-                                            why=why, messages=msgs)
+            # keepmum's own rewrite is the cut (cut.py), and a summary is of what it left (as _hand_back).
+            c = None if request or self._handback()[1] else await self._cut(piece.text, path, skills)
+            if c is None and not request:  # the user's own instructions: the planted lines alone are its pieces
+                await self._cut(piece.text, path, ask_model=False)
+            if c is not None and (kind == "rewrite" or c.empty):
+                return await self._checked_cut(piece, c, path)
+            if c is not None and len(c.text) > SUMMARY_CHARS:
+                failed = (f"It is {len(piece.text):,} characters: a summary would take the local model a minute or more. "
+                          "Rewrite takes out what it addresses to the agent and keeps the rest as it was.")
+                return None, kind, failed, ""
+            got = await self._write_locally(kind, c.text if c is not None else piece.text, piece.source, turn.context,
+                                            self._handback()[1], skills, path, why=why, messages=msgs)
         if got is None:
             if harm and not request:  # no local model: keepmum's own removal, if it passes
                 guard = next((g for g in self.guards if g.name == "harm"), None)
@@ -1189,6 +1241,19 @@ class Proxy:
         except Exception as e:
             log.warning("%s: a draft for the turn's review was not checked (%s)", path, type(e).__name__)
             return out, kind, "keepmum could not check it.", server.model
+
+    async def _checked_cut(self, piece: Piece, c, path: str):
+        """A cut as a turn review's rewrite draft, checked as any hand-back is: (text, "rewrite", why it
+        did not pass or None, who named the lines, what was cut)."""
+        guard = next((g for g in self.guards if g.name == "injection"), None)
+        try:
+            hits = await anyio.to_thread.run_sync(guard.check, [("the local model", c.text, True)], True) if guard else []
+        except Exception as e:
+            log.warning("%s: a cut for the turn's review was not checked (%s)", path, type(e).__name__)
+            return c.text, "rewrite", "keepmum could not check it.", c.model or "keepmum", c.public()
+        log.info("%s: a cut of a tool result for the turn's review: %s", path, "flagged" if hits else "passed")
+        return (c.text, "rewrite", "The injection check still flags what is left." if hits else None, c.model or "keepmum",
+                c.public())
 
     async def _by_sentence(self, text: str, guard) -> str | None:
         """keepmum's own removal, for when the local model's rewrite of what was typed fails a check:
@@ -1336,6 +1401,32 @@ class Proxy:
         return {items[h["at"]][1]: items[h["at"]][0] for h in route.hits
                 if isinstance(h.get("at"), int) and 0 <= h["at"] < len(items)}
 
+    async def _cut(self, text: str, path: str, skills: str = "", ask_model: bool = True):
+        """The flagged result with what it addresses to the agent cut out (cut.py), the rest as it was:
+        the injection check's model finds the part, the local model names its lines. None without the
+        check's model. What later text carries of the result is then only what was cut (Guard.narrow)."""
+        guard = next((g for g in self.guards if g.name == "injection"), None)
+        model = getattr(guard, "model", None)
+        if guard is None or not callable(getattr(model, "score", None)):
+            return None
+
+        async def ask(system: str, user: str):
+            got = await self._write_locally("cut", user, None, None, "", "", path, temperature=0,
+                                            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
+            return (got[0], got[1].model) if got else None
+
+        started = time.monotonic()
+        try:
+            c = await Cutter(lambda t: model.score(scored_text(t)), guard.threshold, ask if ask_model else None, skills).cut(
+                text, run=anyio.to_thread.run_sync)
+        except Exception as e:
+            log.warning("%s: the flagged result could not be cut (%s)", path, type(e).__name__)
+            return None
+        guard.narrow(text, [r.text for r in c.removed])
+        log.info("%s: cut %d of %d lines out of the flagged result in %.1f s (%s; %d of %d parts flagged)", path,
+                 sum(r.last - r.first + 1 for r in c.removed), c.lines, time.monotonic() - started, c.by, c.flagged, c.parts)
+        return c
+
     async def _write_locally(self, strategy: str, text: str, source: str | None, prompt: str | None,
                              instructions: str, skills: str, path: str, check: str = "injection",
                              why: dict | None = None, messages: list | None = None,
@@ -1381,8 +1472,11 @@ class Proxy:
                 self._later(self._keep_loaded(server))
                 return out, server
             failures.append(f"{server.model} at {server.url}: no text")
-        log.warning("%s: no local model wrote a %s of the flagged result (%s); answered locally", path, strategy,
-                    "; ".join(failures) or f"no local server is set for the {check} check")
+        why_not = "; ".join(failures) or f"no local server is set for the {check} check"
+        if strategy == "cut":
+            log.info("%s: no local model named the lines to cut (%s); keepmum finds them itself", path, why_not)
+        else:
+            log.warning("%s: no local model wrote a %s of the flagged result (%s); answered locally", path, strategy, why_not)
         return None
 
     async def _after_answer(self, route: LocalRoute, flagged: dict, answer: str, path: str, model: str = "") -> None:
@@ -1501,16 +1595,30 @@ class Proxy:
         skills = self.local_skills(route.check) if callable(self.local_skills) else []
         skills = await anyio.to_thread.run_sync(skills_text, skills) if skills else ""
         failures: list[str] = []
-        think = self._speed()[1]
+        speed = self._speed()
+        think = speed[1]
+        reads = parse_reads(speed[2])[1] if len(speed) > 2 else parse_reads("32k")[1]
         for server in servers:
             ways = (["chat"] if t.api not in LOCAL_PATHS or server.api == "chat"  # Gemini: always as Chat Completions
                     or (server.api == "auto" and (server.url, t.api) in self._chat_only)
                     else ["native", "chat"] if server.api == "auto" else ["native"])
+            # What it may read ([guard] local_answer_context, and the server's own context): a conversation
+            # over it goes as Chat Completions, older messages cut or left out to fit (fit.py).
+            room = fit_budget(reads, await context_of(self.client, server.url, server.model),
+                              to_chat(body, t.api, server.model, route, "", stream).get("max_tokens") or LOCAL_MAX_TOKENS)
+            if "native" in ways and over(prepare_local(body, t.api, server.model, route, skills), room):
+                ways = ["chat"]
+            fitted, again = None, 0
             for way in ways:
                 if way == "native":
                     data, target = prepare_local(body, t.api, server.model, route, skills), server.url + LOCAL_PATHS[t.api]
                 else:
                     data, target = to_chat(body, t.api, server.model, route, skills, stream), server.url + LOCAL_CHAT_PATH
+                    fitted = fit(data["messages"], room)
+                    data["messages"] = fitted.messages
+                    if fitted.note():
+                        log.info("%s: the conversation is over what %s reads at once (%d tokens): %s", path, server.model,
+                                 room, fitted.note())
                 headers = {"content-type": "application/json", "accept-encoding": "identity"}  # NativeFilter reads it
                 if t.api == "messages" and way == "native":
                     headers["anthropic-version"] = request.headers.get("anthropic-version", "2023-06-01")
@@ -1528,10 +1636,21 @@ class Proxy:
                     break  # the next server
                 if not 200 <= resp.status_code < 300:
                     try:  # some servers (mlx_lm.server: HTTP/1.0) close the connection mid-body
-                        detail = _error_text(await resp.aread())
+                        raw = await resp.aread()
+                        detail = _error_text(raw)
                     except httpx.HTTPError:
-                        detail = ""
+                        raw, detail = b"", ""
                     await resp.aclose()
+                    if again < 3 and resp.status_code in (400, 413, 422) and too_long(raw):
+                        # Too long for it (its context is smaller than it said, or the estimate was low): as Chat
+                        # Completions, fitted to the context its error names, or to half of what it refused.
+                        named = limit_in(detail)
+                        sent = int(len(json.dumps(data, ensure_ascii=False)) / FIT_CHARS)
+                        room = min(room, sent // 2, named - (data.get("max_tokens") or LOCAL_MAX_TOKENS) - 512 if named else sent)
+                        log.info("%s: %s refused the conversation as too long; fitting it to %d tokens", path, server.model, room)
+                        again += 1
+                        ways.append("chat")
+                        continue
                     if way == "native" and len(ways) > 1 and resp.status_code in (400, 404, 405, 422, 501):
                         # It does not speak this API, or not this request's shape of it (Ollama's
                         # Responses API refuses item types it does not know): ask in Chat Completions.
@@ -1554,7 +1673,9 @@ class Proxy:
                 if failures:
                     log.warning("%s: %s; answered by the next local server", path, "; ".join(failures))
                 self.stats.note_guard(route.entries, answered_by={"model": server.model, "url": server.url,
-                                                                  "api": way, "passed_over": failures})
+                                                                  "api": way, "passed_over": failures,
+                                                                  **({"fitted": fitted.note()} if way == "chat" and fitted
+                                                                     and fitted.note() else {})})
                 self._later(self._keep_loaded(server))
                 # Gemini: as Code Assist wraps it when the request came wrapped, and as a JSON array for
                 # a streamGenerateContent asked without alt=sse.

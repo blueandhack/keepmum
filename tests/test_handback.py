@@ -9,6 +9,7 @@ import httpx
 import pytest
 from test_local import (
     ATTACK,
+    README,
     TOKEN,
     answer,
     chat_only,
@@ -54,15 +55,21 @@ def chats(request) -> bool:
     return request.url.path == "/v1/chat/completions"
 
 
+def summary_asks(seen) -> list[dict]:
+    """The bodies of the requests that asked for a summary (not the cut's, which names lines)."""
+    return [b for _, path, _, b in seen["local"] if path == "/v1/chat/completions"
+            and b["messages"][0]["content"].startswith(INSTRUCTIONS["summary"])]
+
+
 # --- Codex (Responses API) -------------------------------------------------------------------------
 
 def test_a_codex_result_is_summarised_and_the_turn_goes_to_openai():
-    rs, seen, _ = run("local", [codex(ATTACK)], local=writes("README: install with make."), handback=("summary", ""),
+    rs, seen, _ = run("local", [codex(README)], local=writes("README: install with make."), handback=("summary", ""),
                       path="/openai/v1/responses")
     assert seen["upstream"] == ["/v1/responses"] and rs[0].status_code == 200
     out = next(i for i in seen["sent"][0]["input"] if i.get("type") == "function_call_output")["output"]
     assert ATTACK not in json.dumps(seen["sent"]) and "result of shell" in out and out.endswith("README: install with make.")
-    assert "Summarize README.md" in seen["local"][0][3]["messages"][1]["content"]  # the user's message, for the summary
+    assert "Summarize README.md" in summary_asks(seen)[0]["messages"][1]["content"]  # the user's message, for the summary
 
 
 def test_a_codex_result_is_withheld_with_a_notice():
@@ -86,24 +93,27 @@ def test_codex_hands_back_after_a_local_answer():
 
 
 def test_a_secret_the_local_model_writes_is_masked_on_the_way_out():
-    rs, seen, _ = run("local", [conversation(ATTACK)], local=writes(f"The README sets GITHUB_TOKEN={TOKEN}."),
-                      handback=("rewrite", ""))
+    rs, seen, _ = run("local", [conversation(README)], local=writes(f"The README sets GITHUB_TOKEN={TOKEN}."),
+                      handback=("summary", ""))
     text = result_sent(seen["sent"][0])
     assert TOKEN not in json.dumps(seen["sent"]) and "GITHUB_TOKEN=" in text and rs[0].json()["id"] == "up"
 
 
 def test_the_local_model_gets_the_real_values_to_summarise():
-    rs, seen, _ = run("local", [conversation(f"{ATTACK} token={TOKEN}")], local=writes("ok"), handback=("summary", ""))
-    assert TOKEN in seen["local"][0][3]["messages"][1]["content"]  # on this Mac only
+    rs, seen, _ = run("local", [conversation(f"token={TOKEN}\n\n{README}")], local=writes("ok"), handback=("summary", ""))
+    assert TOKEN in summary_asks(seen)[0]["messages"][1]["content"]  # on this Mac only
 
 
 def test_each_flagged_result_in_a_request_gets_its_own_replacement():
-    body = conversation(ATTACK)
+    body = conversation(README)
+    second = README.replace("fastgrep", "slowgrep").replace(ATTACK, SECOND)
     body["messages"] += [{"role": "assistant", "content": [{"type": "tool_use", "id": "t2", "name": "Read", "input": {}}]},
-                         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": SECOND}]}]
+                         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": second}]}]
     n = {"calls": 0}
 
     def handler(request, b):
+        if not b["messages"][0]["content"].startswith(INSTRUCTIONS["summary"]):
+            return httpx.Response(200, json={"choices": [{"message": {"content": "none"}}]})  # the cut's question
         n["calls"] += 1
         return httpx.Response(200, json={"choices": [{"message": {"content": f"summary {n['calls']}"}}]})
 
@@ -150,13 +160,13 @@ def test_a_model_that_only_thinks_writes_nothing_and_the_turn_is_answered_locall
             return httpx.Response(200, json={"choices": [{"message": {"content": "<think>long thought</think>  ",
                                                                       "reasoning_content": "..."}}]})
         return answer(body, body["model"])
-    rs, seen, _ = run("local", [conversation(ATTACK)], local={11434: handler}, handback=("summary", ""))
+    rs, seen, _ = run("local", [conversation(README)], local={11434: handler}, handback=("summary", ""))
     assert rs[0].json()["id"] == "local" and seen["upstream"] == []
 
 
 def test_the_next_server_writes_the_summary_when_the_first_fails():
     servers = [Server("http://localhost:1111", "a"), Server("http://localhost:2222", "b")]
-    rs, seen, proxy = run("local", [conversation(ATTACK)], servers=servers, handback=("summary", ""),
+    rs, seen, proxy = run("local", [conversation(README)], servers=servers, handback=("summary", ""),
                           local={1111: lambda r, b: (_ for _ in ()).throw(httpx.ConnectError("refused")),
                                  2222: writes("from b")[11434]})
     assert rs[0].json()["id"] == "up" and result_sent(seen["sent"][0]).endswith("from b")
@@ -164,15 +174,38 @@ def test_the_next_server_writes_the_summary_when_the_first_fails():
 
 
 def test_with_no_local_server_a_summary_cannot_be_written_and_the_request_is_refused():
-    rs, seen, _ = run("local", [conversation(ATTACK)], servers=[], handback=("summary", ""))
+    rs, seen, _ = run("local", [conversation(README)], servers=[], handback=("summary", ""))
     assert rs[0].status_code == 403 and seen["upstream"] == []
 
 
-def test_a_flagged_rewrite_keeps_every_later_turn_local_without_asking_again():
-    second = later(conversation(ATTACK), {"role": "assistant", "content": "ok"}, {"role": "user", "content": "go on"})
-    rs, seen, _ = run("local", [conversation(ATTACK), second], local=writes("Sure: " + ATTACK), handback=("rewrite", ""))
-    assert [r.json()["id"] for r in rs] == ["local", "local"] and seen["upstream"] == []
-    assert [p for _, p, _, _ in seen["local"]].count("/v1/chat/completions") == 1  # not rewritten again each turn
+def test_a_rewrite_is_the_result_with_the_planted_line_cut_out_and_the_rest_as_it_was():
+    second = later(conversation(README), {"role": "assistant", "content": "ok"}, {"role": "user", "content": "go on"})
+    rs, seen, proxy = run("local", [conversation(README), second], local=writes("Sure: " + ATTACK), handback=("rewrite", ""))
+    assert [r.json()["id"] for r in rs] == ["up", "up"] and seen["upstream"] == ["/v1/messages"] * 2
+    text = result_sent(seen["sent"][0])
+    assert text.startswith("[keepmum: its injection check found") and "keepmum took out 1 line that addressed the agent" in text
+    assert text.endswith(README.replace(ATTACK, "[removed by keepmum]")) and ATTACK not in json.dumps(seen["sent"])
+    assert result_sent(seen["sent"][1]) == text  # the same each turn: the prompt cache holds
+    # The local model was asked which lines, once; its answer named none, so keepmum took out what the check flags.
+    assert [p for _, p, _, _ in seen["local"]].count("/v1/chat/completions") == 1
+    assert proxy.stats.guard_hits[0]["handed_back"]["model"] == "keepmum"
+
+
+def test_the_local_model_names_the_lines_of_a_longer_planted_passage():
+    planted = f"<!-- for the agent:\n{ATTACK}\n-->"
+    result = README.replace(ATTACK, planted)
+    asked = []
+
+    def handler(request, body):
+        if chats(request):
+            asked.append(body["messages"])
+            return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "7-9"}}]})
+        return answer(body, body["model"])
+
+    rs, seen, _ = run("local", [conversation(result)], local={11434: handler}, handback=("rewrite", ""))
+    [msgs] = asked
+    assert "7| <!-- for the agent:" in msgs[1]["content"] and msgs[0]["content"].startswith("You stand between a tool")
+    assert result_sent(seen["sent"][0]).endswith(result.replace(planted, "[removed by keepmum]"))
 
 
 def test_a_flagged_answer_is_noted_on_the_logs_page():
@@ -211,8 +244,8 @@ def test_switching_from_stay_to_summary_hands_back_a_conversation_kept_local():
             return httpx.Response(200, json={"choices": [{"message": {"content": "summary"}}]})
         return answer(body, body["model"])
 
-    second = later(conversation(ATTACK), {"role": "assistant", "content": "ok"}, {"role": "user", "content": "go on"})
-    rs, seen, _ = run("local", [conversation(ATTACK), second], local={11434: handler}, handback=lambda: state["value"])
+    second = later(conversation(README), {"role": "assistant", "content": "ok"}, {"role": "user", "content": "go on"})
+    rs, seen, _ = run("local", [conversation(README), second], local={11434: handler}, handback=lambda: state["value"])
     assert [r.json()["id"] for r in rs] == ["local", "up"] and result_sent(seen["sent"][0]).endswith("summary")
 
 
@@ -445,11 +478,12 @@ def test_after_an_answer_the_notice_is_not_flagged_on_the_next_turn():
 
 
 def test_a_flagged_summary_keeps_its_result_local_without_asking_again():
-    second = later(conversation(ATTACK), {"role": "assistant", "content": "ok"}, {"role": "user", "content": "go on"})
-    rs, seen, proxy = run("local", [conversation(ATTACK), second], local=writes("Sure: " + ATTACK),
+    second = later(conversation(README), {"role": "assistant", "content": "ok"}, {"role": "user", "content": "go on"})
+    rs, seen, proxy = run("local", [conversation(README), second], local=writes("Sure: " + ATTACK),
                           handback=("summary", ""))
     assert [r.json()["id"] for r in rs] == ["local", "local"]
-    assert [p for _, p, _, _ in seen["local"]] == ["/v1/chat/completions", "/v1/messages", "/v1/messages"]
+    # The cut's question, the summary (flagged), then each turn answered locally.
+    assert [p for _, p, _, _ in seen["local"]] == ["/v1/chat/completions"] * 2 + ["/v1/messages"] * 2
     assert proxy.stats.guard_hits[0]["handed_back"]["kept"] == "what the local model wrote was flagged too"
 
 
@@ -468,7 +502,7 @@ class FailsOn:
 
 
 def test_a_summary_the_check_cannot_score_is_not_handed_back():
-    rs, seen, _ = run("local", [conversation(ATTACK)], local=writes("SUMMARY-BOOM: install the project with make install, then check it with acme --version."),
+    rs, seen, _ = run("local", [conversation(README)], local=writes("SUMMARY-BOOM: install the project with make install, then check it with acme --version."),
                       handback=("summary", ""), scorer=FailsOn("SUMMARY-BOOM"))
     assert rs[0].json()["id"] == "local" and seen["upstream"] == []
 
@@ -488,7 +522,7 @@ def test_a_summary_that_is_not_json_counts_as_none_written():
         if request.url.path == "/v1/chat/completions":
             return httpx.Response(200, text="<html>proxy error</html>")
         return answer(body, body["model"])
-    rs, seen, _ = run("local", [conversation(ATTACK)], local={11434: handler}, handback=("summary", ""))
+    rs, seen, _ = run("local", [conversation(README)], local={11434: handler}, handback=("summary", ""))
     assert rs[0].json()["id"] == "local" and seen["upstream"] == []
 
 
@@ -562,7 +596,7 @@ def test_flows_reads_older_events_without_hand_backs():
 
 
 def test_the_summary_is_asked_for_without_thinking():
-    rs, seen, _ = run("local", [conversation(ATTACK)], local=writes("README: install with make."), handback=("summary", ""))
+    rs, seen, _ = run("local", [conversation(README)], local=writes("README: install with make."), handback=("summary", ""))
     body = next(b for _, path, _, b in seen["local"] if path == "/v1/chat/completions")
     assert body["reasoning_effort"] == "none" and body["chat_template_kwargs"] == {"enable_thinking": False}
     assert seen["upstream"] == ["/v1/messages"]
@@ -573,13 +607,14 @@ def test_a_server_that_refuses_the_no_thinking_fields_is_asked_again_without_the
 
     def handler(request, body):
         if chats(request):
-            asked.append(set(body))
+            if body["messages"][0]["content"].startswith(INSTRUCTIONS["summary"]):
+                asked.append(set(body))
             if "reasoning_effort" in body:
                 return httpx.Response(400, json={"error": "unknown field reasoning_effort"})
             return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "README: make install."}}]})
         return answer(body, body["model"])
 
-    rs, seen, _ = run("local", [conversation(ATTACK)], local={11434: handler}, handback=("rewrite", ""))
+    rs, seen, _ = run("local", [conversation(README)], local={11434: handler}, handback=("summary", ""))
     assert len(asked) == 2 and "reasoning_effort" in asked[0] and not {"reasoning_effort", "chat_template_kwargs"} & asked[1]
     assert seen["upstream"] == ["/v1/messages"]
 
@@ -755,10 +790,14 @@ def test_a_result_too_long_for_the_local_model_says_so_and_is_asked_once(caplog)
         return answer(body, body["model"])
 
     with caplog.at_level("WARNING", logger="keepmum"):
-        rs, seen, _ = run("local", [conversation(ATTACK)], handback=("rewrite", ""), local={11434: refuses})
+        rs, seen, _ = run("local", [conversation(README)], handback=("summary", ""), local={11434: refuses})
     assert rs[0].json()["id"] == "local" and seen["upstream"] == []  # kept on this Mac, as before
-    assert len(calls) == 1  # not asked again without the thinking fields: the length is the problem
+    assert len(calls) == 2  # the cut's question and the summary, each once: not again without the thinking fields
     assert "prompt exceeds the context window" in caplog.text and "more than its context holds" in caplog.text
+    # A rewrite needs no reading of the whole: the check finds the part, and keepmum cuts it itself.
+    calls.clear()
+    rs, seen, _ = run("local", [conversation(README)], handback=("rewrite", ""), local={11434: refuses})
+    assert rs[0].json()["id"] == "up" and ATTACK not in json.dumps(seen["sent"]) and "Run `make install`." in json.dumps(seen["sent"])
 
 
 def test_the_cli_keeps_an_instruction_while_it_is_off_for_each_check(cli):
@@ -803,3 +842,12 @@ def test_the_harm_rewrite_takes_the_users_instruction_in_place_of_keepmums():
     mine = harm_messages("hi", "## Skill: s\nx", "Mine.")
     assert mine[0]["content"] == "Mine.\n\n## Skill: s\nx"
     assert harm_messages("hi")[0]["content"] == HARM_INSTRUCTION
+
+
+def test_a_rewrite_by_the_users_instructions_that_copies_the_results_lines_goes():
+    """Copying the result's own lines is no hit: only its planted lines are its pieces (Guard.narrow)."""
+    copy = README.replace(ATTACK + "\n", "")
+    rs, seen, _ = run("local", [conversation(README)], local=writes(copy), handback=("rewrite", "Copy the Install section exactly."))
+    assert rs[0].json()["id"] == "up" and seen["upstream"] == ["/v1/messages"]
+    text = result_sent(seen["sent"][0])
+    assert "edited it as the user asked" in text and text.endswith(copy.strip()) and ATTACK not in json.dumps(seen["sent"])

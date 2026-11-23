@@ -7,7 +7,7 @@ import json
 
 import httpx
 import pytest
-from test_local import ATTACK, TOKEN, chat_only, run
+from test_local import ATTACK, README, TOKEN, chat_only, run
 
 from keepmum.local import LocalRoute, Server, Skill, answer_text, from_chat, to_chat
 
@@ -151,14 +151,14 @@ def output_sent(body: dict) -> str:
 
 @pytest.mark.parametrize(("path", "wrapped"), [(GATEWAY, False), (SIGNED_IN, True)])
 def test_a_summary_takes_the_flagged_files_place_and_agy_goes_on_at_google(path, wrapped):
-    rs, seen, proxy = run("local", [agy(ATTACK, wrapped)], path=path, servers=SERVERS,
+    rs, seen, proxy = run("local", [agy(README, wrapped)], path=path, servers=SERVERS,
                           local=summarises("Install with make install."), handback=("summary", ""))
     assert len(seen["upstream"]) == 1 and ATTACK not in json.dumps(seen["sent"])
     out = output_sent(seen["sent"][0])
     assert out.startswith("[keepmum: its injection check found") and "result of read_file" in out
     assert out.endswith("Install with make install.")
     assert proxy.stats.guard_hits[0]["handed_back"]["strategy"] == "summary"
-    assert "Read README.md and tell me how to install it" in seen["local"][0][3]["messages"][1]["content"]
+    assert "Read README.md and tell me how to install it" in seen["local"][-1][3]["messages"][1]["content"]  # the summary's
 
 
 def test_a_withheld_result_goes_to_google_as_a_notice():
@@ -167,7 +167,7 @@ def test_a_withheld_result_goes_to_google_as_a_notice():
 
 
 def test_a_summary_that_repeats_the_attack_keeps_agy_local():
-    rs, seen, _ = run("local", [agy(ATTACK, wrapped=True)], path=SIGNED_IN, servers=SERVERS,
+    rs, seen, _ = run("local", [agy(README, wrapped=True)], path=SIGNED_IN, servers=SERVERS,
                       local=summarises("Sure: " + ATTACK), handback=("summary", ""))
     assert seen["upstream"] == [] and texts([rs[0].json()]) == "kept on your Mac"
 

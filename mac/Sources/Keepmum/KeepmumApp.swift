@@ -545,6 +545,13 @@ enum Snapshotter {
                to: "\(dir)/review-answer-light.png", dark: false)
         render(ReviewCard(center: .shared, review: .sampleTooLong).frame(width: 560).background(Theme.canvas),
                to: "\(dir)/review-too-long-light.png", dark: false)
+        // A long result's cut: what is taken out, not the whole of it.
+        for dark in [false, true] {
+            render(ReviewCard(center: .shared, review: .sampleCut).frame(width: 560).background(Theme.canvas),
+                   to: "\(dir)/review-cut-\(dark ? "dark" : "light").png", dark: dark)
+            render(TurnReviewView(center: .shared, turn: .sampleCut, selected: "2").frame(width: 1040, height: 720).background(Theme.canvas),
+                   to: "\(dir)/review-turn-cut-\(dark ? "dark" : "light").png", dark: dark)
+        }
         render(ReviewCard(center: .shared, review: .sampleTyped).frame(width: 560).background(Theme.canvas),
                to: "\(dir)/review-typed-light.png", dark: false)
         render(ReviewCard(center: .shared, review: .sampleTypedNothingLeft).frame(width: 560).background(Theme.canvas),

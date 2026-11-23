@@ -243,9 +243,11 @@ final class Engine {
         /// (`keepmum guard local speed`); nil from older engines.
         var keepLoaded: String?
         var answerThinking: Bool?
+        /// How much of the conversation a local answer reads: "32k" and such, or "full"; nil from older engines.
+        var answerContext: String?
         enum CodingKeys: String, CodingKey {
             case servers, presets, picks, contexts, splash, defaultPick = "default_pick", defaultContext = "default_context",
-                 keepLoaded = "keep_loaded", answerThinking = "answer_thinking"
+                 keepLoaded = "keep_loaded", answerThinking = "answer_thinking", answerContext = "answer_context"
         }
     }
     private(set) var localServers: LocalServers?
@@ -807,9 +809,10 @@ final class Engine {
 
     /// How fast local turns go (`keepmum guard local speed`): how long a server keeps its model
     /// loaded (5m, 15m, 30m, 1h or always), and whether a local answer thinks first.
-    func setLocalSpeed(keepLoaded: String? = nil, thinking: Bool? = nil) async {
+    func setLocalSpeed(keepLoaded: String? = nil, thinking: Bool? = nil, reads: String? = nil) async {
         var args = ["guard", "local", "speed"]
         if let keepLoaded { args += ["--keep-loaded", keepLoaded] }
+        if let reads { args += ["--reads", reads] }
         if let thinking { args += ["--thinking", thinking ? "on" : "off"] }
         await act { try await self.check(args) }
         await loadLocalServers()

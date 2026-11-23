@@ -74,6 +74,9 @@
     # the context Splash starts with when keepmum runs it: 16k to 1024k, or "default" (Splash's own)
     local_splash_context = "64k"
     local_answer_thinking = true  # false: a local answer comes without the model's thinking first, several times as fast
+    # how much of the conversation a local answer reads: 16k to 1024k tokens, or "full" (the server's context);
+    # older messages are cut or left out to fit, so a long session is answered in seconds, not minutes
+    local_answer_context = "32k"
 
     [log]
     level = "info"
@@ -107,7 +110,8 @@ _SCHEMA = {
               "local_handback_instructions_off": bool, "local_handback_harm": str, "local_handback_harm_instructions": str,
               "local_handback_harm_instructions_off": bool,
               "local_handback_review": str, "local_handback_review_wait": int, "local_handback_review_timeout": str,
-              "local_keep_loaded": str, "local_splash_context": str, "local_answer_thinking": bool},
+              "local_keep_loaded": str, "local_splash_context": str, "local_answer_thinking": bool,
+              "local_answer_context": str},
 }
 LOG_LEVELS = ("debug", "info", "warning", "error")
 _HOST = re.compile(r"(?i)(?:[a-z0-9_-]+\.)*[a-z0-9-]+\.[a-z]{2,63}|localhost|\d{1,3}(?:\.\d{1,3}){3}")
@@ -195,6 +199,7 @@ class Config:
     # since Stop removes its LaunchAgent and Start writes a new one.
     guard_local_splash_context: str = "64k"
     guard_local_answer_thinking: bool = True
+    guard_local_answer_context: str = "32k"  # or "full"
     path: Path | None = None
 
 
@@ -392,6 +397,12 @@ def load(path: Path | None = None) -> Config:
         raise ConfigError(f"{path}: guard.local_splash_context: {e}")
     cfg.guard_local_splash_context = context
     cfg.guard_local_answer_thinking = guard.get("local_answer_thinking", cfg.guard_local_answer_thinking)
+    from .fit import parse_reads
+
+    try:
+        cfg.guard_local_answer_context = parse_reads(str(guard.get("local_answer_context", cfg.guard_local_answer_context)))[0]
+    except ValueError as e:
+        raise ConfigError(f"{path}: guard.local_answer_context: {e}")
     # A harm check turned on before "small" existed, without a model set, keeps the default it had.
     cfg.guard_harm_model = guard.get("harm_model", "0.6b" if cfg.guard_harm != "off" else cfg.guard_harm_model)
     if cfg.guard_harm_model not in ("small", "0.6b", "4b"):

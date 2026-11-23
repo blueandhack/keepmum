@@ -220,14 +220,14 @@ def test_speed_shows_the_defaults(home):
     assert r.exit_code == 0, r.output
     assert "keep loaded: 5m after the last request (default)" in r.output and "think first (default)" in r.output
     r = CliRunner().invoke(cli.app, ["guard", "local", "speed", "--json"])
-    assert json.loads(r.stdout) == {"keep_loaded": "5m", "answer_thinking": True}
+    assert json.loads(r.stdout) == {"keep_loaded": "5m", "answer_thinking": True, "answer_context": "32k"}
 
 
 def test_speed_sets_both_and_tells_loaded_ollama_models(home):
     cfg, told, started = home
     r = CliRunner().invoke(cli.app, ["guard", "local", "speed", "--keep-loaded", "always", "--thinking", "off", "--json"])
     assert r.exit_code == 0, r.output
-    assert json.loads(r.stdout) == {"keep_loaded": "always", "answer_thinking": False}
+    assert json.loads(r.stdout) == {"keep_loaded": "always", "answer_thinking": False, "answer_context": "32k"}
     assert told == [("http://localhost:11434", "qwen3:0.6b", "always")] and started == []
     text = cfg.read_text()
     assert 'local_keep_loaded = "always"' in text and "local_answer_thinking = false" in text
@@ -243,7 +243,17 @@ def test_speed_starts_the_splash_keepmum_runs_again(home, monkeypatch):
     assert "Splash starts again" in r.output
 
 
+def test_speed_sets_how_much_a_local_answer_reads(home):
+    cfg, _, _ = home
+    r = CliRunner().invoke(cli.app, ["guard", "local", "speed", "--reads", "full"])
+    assert r.exit_code == 0, r.output
+    assert "the whole conversation, up to the server's context" in r.output and 'local_answer_context = "full"' in cfg.read_text()
+    r = CliRunner().invoke(cli.app, ["guard", "local", "speed", "--reads", "32k"])
+    assert "the newest 32k tokens of the conversation (default)" in r.output and "local_answer_context" not in cfg.read_text()
+
+
 def test_speed_refuses_bad_values(home):
+    assert CliRunner().invoke(cli.app, ["guard", "local", "speed", "--reads", "1k"]).exit_code == 2
     assert CliRunner().invoke(cli.app, ["guard", "local", "speed", "--thinking", "maybe"]).exit_code == 2
     assert CliRunner().invoke(cli.app, ["guard", "local", "speed", "--keep-loaded", "forever"]).exit_code == 2
 

@@ -24,6 +24,10 @@ struct PendingReview: Decodable, Identifiable, Equatable {
     var deadline: Double
     /// The flagged text's whole length (`flagged` is its first 60,000 characters); nil from older engines.
     var flaggedChars: Int?
+    /// What is proposed, its whole length (`proposed` is its first 60,000 characters); nil from older engines.
+    var proposedChars: Int?
+    /// A rewrite that is the result with lines cut out (keepmum's cut.py): which; nil otherwise.
+    var cut: CutInfo?
     /// The local model is changing the text for the user: the time left stands still.
     var assisting: Bool?
     /// While paused, since when; the seconds of earlier pauses; and the hard deadline no pause goes
@@ -42,6 +46,8 @@ struct PendingReview: Decodable, Identifiable, Equatable {
     var canSendOriginal: Bool { actions?.contains("original") ?? false }
     /// The box shows only the first part of the flagged text.
     var flaggedCut: Bool { (flaggedChars ?? flagged.count) > flagged.count }
+    /// Only the start of what is proposed came: too long to edit here, it goes as it is.
+    var proposedPart: Bool { (proposedChars ?? proposed.count) > proposed.count }
     /// The result was too long for the local model: what is reviewed is keepmum's notice in its place.
     var isWithheld: Bool { strategy == "withhold" }
     /// The harm check's rewrite of what the user typed: withholding it would send nothing of the message.
@@ -51,7 +57,10 @@ struct PendingReview: Decodable, Identifiable, Equatable {
     /// A rewrite of what was typed that failed a check, or none: with no answer it stays local, whatever the timeout says.
     var failed: Bool { isTyped && reason != nil }
     var what: String {
-        isTyped ? "rewrite of what you typed, the flagged part taken out"
+        if let cut, !isTyped {
+            return "what \(source ?? "a tool") returned, \(cut.count) line\(cut.count == 1 ? "" : "s") taken out"
+        }
+        return isTyped ? "rewrite of what you typed, the flagged part taken out"
             : isAnswer ? "answer to what \(source ?? "a tool") returned, before the next turn goes to the cloud"
             : isWithheld ? "notice in place of what \(source ?? "a tool") returned, too long for the local model"
             : "\(strategy == "rewrite" ? "rewrite" : "summary") of what \(source ?? "a tool") returned"
@@ -540,7 +549,9 @@ struct ReviewCard: View {
     var more = 0
     @Environment(\.isSnapshot) private var isSnapshot
     @State private var draft: String?
-    @State private var showFlagged = true
+    @State private var showFlagged: Bool
+    /// A cut shows what it takes out; the user can open the whole text to edit it.
+    @State private var editing = false
     /// Asking the local model to change the box: what to change, the text before each change it
     /// made (newest last, for Undo), its note or error, and the request under way.
     @State private var request = ""
@@ -556,7 +567,11 @@ struct ReviewCard: View {
         self.review = review
         self.more = more
         _draft = State(initialValue: draft)
+        _showFlagged = State(initialValue: review.cut == nil)  // a cut already shows where it was
     }
+
+    /// The cut is shown, not the whole text: until the user edits it, or picks the original.
+    private var showsCut: Bool { review.cut != nil && !editing && draft == nil }
 
     /// Nothing to send as written: the box starts empty, for the user's own text.
     private var text: String { draft ?? (review.canSend ? review.proposed : "") }
@@ -581,8 +596,16 @@ struct ReviewCard: View {
             header
             VStack(alignment: .leading, spacing: Space.xs) {
                 HStack(spacing: Space.m) {
-                    Text(!review.canSend ? "What to send instead" : review.isAnswer || review.isWithheld ? "In the result's place" : "It would send").eyebrow()
+                    Text(!review.canSend ? "What to send instead" : review.isAnswer || review.isWithheld ? "In the result's place"
+                         : showsCut ? "What keepmum takes out" : "It would send").eyebrow()
                     Spacer()
+                    if showsCut && !review.proposedPart {
+                        Button { editing = true } label: {
+                            Label("Edit the text", systemImage: "pencil").font(.km(.caption))
+                        }
+                        .buttonStyle(.plain).foregroundStyle(Theme.accent)
+                        .help("Open the whole result, as it would go, to change it yourself")
+                    }
                     if edited && (review.canSend || !text.isEmpty) {
                         Button(review.canSend ? "Back to the local model\u{2019}s" : "Clear") { remember(); draft = nil; armed = false }
                             .buttonStyle(.plain).font(.km(.caption)).foregroundStyle(Theme.accent)
@@ -596,12 +619,18 @@ struct ReviewCard: View {
                         .help("Put what the check flagged, unchanged, in the box: to send it as it was, or to edit it yourself")
                     }
                 }
-                editor
+                if showsCut, let cut = review.cut {
+                    CutView(cut: cut, model: review.model)
+                } else {
+                    editor
+                }
                 if isOriginal { caution }
-                AssistBox(model: review.model.isEmpty ? nil : review.model, progress: asking == nil ? nil : 0, request: $request,
-                          placeholder: "Ask the local model to change it, such as \u{201C}keep only the install steps\u{201D}",
-                          note: assistNote, error: assistError, undoCount: undo.count, compact: true,
-                          onAsk: askModel, onStop: { asking?.cancel() }, onUndo: undoLast)
+                if !showsCut {
+                    AssistBox(model: review.model.isEmpty ? nil : review.model, progress: asking == nil ? nil : 0, request: $request,
+                              placeholder: "Ask the local model to change it, such as \u{201C}keep only the install steps\u{201D}",
+                              note: assistNote, error: assistError, undoCount: undo.count, compact: true,
+                              onAsk: askModel, onStop: { asking?.cancel() }, onUndo: undoLast)
+                }
             }
             if let answer = review.answer {
                 VStack(alignment: .leading, spacing: Space.xs) {
@@ -616,8 +645,8 @@ struct ReviewCard: View {
                     HStack(spacing: Space.xs) {
                         Image(systemName: showFlagged ? "chevron.down" : "chevron.right").font(.km(.caption))
                         Text(review.isTyped ? "In place of what you typed"
-                             : review.isAnswer || review.isWithheld ? "The flagged result" : "In place of the flagged result").eyebrow()
-                        if review.strategy == "rewrite" && !review.isTyped {
+                             : review.isAnswer || review.isWithheld || review.cut != nil ? "The flagged result" : "In place of the flagged result").eyebrow()
+                        if review.strategy == "rewrite" && !review.isTyped && review.cut == nil {
                             Text("· struck through: not in the rewrite").font(.km(.caption)).foregroundStyle(Theme.textTertiary)
                         }
                     }
@@ -648,6 +677,9 @@ struct ReviewCard: View {
                  ? "The injection check flagged what \(review.source ?? "a tool") returned. "
                    + "\(review.reason ?? "It is too long for the local model.") "
                    + "Send keepmum's notice in its place, or your own text, or keep the turn on this Mac."
+                 : review.cut != nil
+                 ? "The injection check flagged what \(review.source ?? "a tool") returned. keepmum takes out what it addresses to the agent, "
+                   + "and the rest goes to the cloud as it was." + (review.reason.map { " \($0)" } ?? "")
                  : "The injection check flagged what \(review.source ?? "a tool") returned. The local model (\(review.model)) wrote a \(review.strategy) to send in its place.")
                 .font(.km(.callout)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
             Label(center.timeout == "send" && !review.failed ? "No answer in time: sent as written" : "No answer in time: kept on this Mac",
@@ -752,6 +784,7 @@ struct ReviewCard: View {
                     .keyboardShortcut(.return, modifiers: .command)
                     .help(review.isAnswer || review.isWithheld ? "Send keepmum's notice in the result's place (⌘↩)"
                           : review.isTyped ? "Send what the local model kept of your message (⌘↩)"
+                          : review.cut != nil ? "Send the result without the lines taken out (⌘↩)"
                           : "Send what the local model wrote in the result's place (⌘↩)")
             }
         }
@@ -929,6 +962,13 @@ extension PendingReview {
         fastgrep PATTERN [PATH...]
         """,
         model: "qwen3.6-35b-a3b", actions: ["send", "edit", "withhold", "local", "original"], created: Date().timeIntervalSince1970, deadline: Date().timeIntervalSince1970 + 42)
+
+    /// A long result's cut: the planted lines out, the rest as it was.
+    static let sampleCut = PendingReview(
+        id: "c0t1a2", strategy: "rewrite", source: "WebFetch", path: "/v1/messages", flagged: sample.flagged,
+        proposed: sample.proposed, model: "qwen3.6-35b-a3b", actions: ["send", "edit", "withhold", "local", "original"],
+        created: Date().timeIntervalSince1970, deadline: Date().timeIntervalSince1970 + 42, flaggedChars: 250_296,
+        proposedChars: 250_024, cut: .sample)
 
     static let sampleAnswer = PendingReview(
         id: "d4e5f6", strategy: "answer", source: "WebFetch", path: "/v1/messages", flagged: sample.flagged,

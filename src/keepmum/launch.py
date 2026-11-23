@@ -166,7 +166,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
                   else observe.config.guard_local_handback_harm_instructions,
                   review=lambda: (observe.config.guard_local_handback_review, observe.config.guard_local_handback_review_wait,
                                   observe.config.guard_local_handback_review_timeout),
-                  speed=lambda: (observe.config.guard_local_keep_loaded, observe.config.guard_local_answer_thinking))
+                  speed=lambda: (observe.config.guard_local_keep_loaded, observe.config.guard_local_answer_thinking,
+                                 observe.config.guard_local_answer_context))
     proxy.gateways = {**cfg.gateways, **(gateways or {})}
     proxy.destinations = cfg.destinations
     switch = ModelSwitch(pipeline, proxy._scan_lock)
