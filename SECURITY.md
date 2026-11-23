@@ -18,7 +18,7 @@ Please use synthetic secrets in your report, never real ones. A minimal payload 
 
 ## What is out of scope
 
-These are known limits, documented in the README:
+These are known limits, documented in [Limitations](https://keepmum.app/docs/about/limitations/):
 
 - Detection misses on secret formats with no rule and no context the local model recognizes. Please still report them as regular issues; they become new rules.
 - Images and PDFs, which pass through unscanned.

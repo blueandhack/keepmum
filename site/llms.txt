@@ -26,7 +26,14 @@ Key facts:
 
 ## Docs
 
-- [README](https://github.com/blueandhack/keepmum/blob/main/README.md): install, use with each agent, configuration, what keepmum stores and where, and every limitation in full
+- [Install](https://keepmum.app/docs/start/install/): requirements, the Mac app, and the command line
+- [Use with your agents](https://keepmum.app/docs/start/agents/): Claude Code, Codex, the Antigravity CLI, Gemini CLI and VS Code; [the background proxy](https://keepmum.app/docs/start/background/) for every session; [in front of another gateway](https://keepmum.app/docs/start/gateways/)
+- [Choose what gets masked](https://keepmum.app/docs/masking/what-gets-masked/): personal data, your own rules and exceptions; [tools that reach the network](https://keepmum.app/docs/masking/network-tools/)
+- [Optional checks](https://keepmum.app/docs/checks/): prompt injection, harmful requests and shell commands; [local mode](https://keepmum.app/docs/checks/local/), [back to the cloud](https://keepmum.app/docs/checks/handback/), [review](https://keepmum.app/docs/checks/review/)
+- [Configuration](https://keepmum.app/docs/reference/configuration/): every key in `~/.config/keepmum/config.toml`
+- [What keepmum stores, and where](https://keepmum.app/docs/reference/storage/): every file, what stays in memory only, and the only network calls
+- [How it works](https://keepmum.app/docs/about/how-it-works/), [accuracy and speed](https://keepmum.app/docs/about/accuracy/), and [every limitation in full](https://keepmum.app/docs/about/limitations/)
+- [README](https://github.com/blueandhack/keepmum/blob/main/README.md): the short version, on GitHub
 - [Security policy](https://github.com/blueandhack/keepmum/blob/main/SECURITY.md): how to report a vulnerability
 - [Benchmarks](https://github.com/blueandhack/keepmum/tree/main/bench/results): the method and every result
 

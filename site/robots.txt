@@ -9,3 +9,4 @@ Disallow: /appcast.xml
 Disallow: /stats
 
 Sitemap: https://keepmum.app/sitemap.xml
+Sitemap: https://keepmum.app/docs/sitemap-index.xml

@@ -1,0 +1,36 @@
+---
+title: keepmum
+description: A local proxy that keeps secrets and personal data on your Mac while you use Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi or opencode.
+tableOfContents: false
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+keepmum is a local proxy that sits between your coding agent (Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi or opencode) and its model provider (Anthropic, OpenAI or Google). Before a request leaves your Mac, it finds secrets (API keys, tokens, passwords, private keys, connection strings) and, if you want, personal data (names, emails, phones, addresses, account numbers), and replaces each one with a placeholder such as `KEEPMUM_SECRET_7f3a9c2e`. When the model answers, keepmum puts the real values back, so your agent can still edit your `.env` file correctly, but the provider never sees what is in it.
+
+Detection runs entirely on your Mac. Nothing is sent anywhere except the scanned request to the provider. The name comes from "keep mum": to say nothing about a secret.
+
+```
+Claude Code ─┐                            ┌──▶ Anthropic API
+Codex       ─┤                            │
+Antigravity ─┤                            │
+Gemini CLI  ─┼─▶ keepmum (on your Mac) ───┼──▶ OpenAI API
+pi          ─┤   detect → mask            │
+opencode    ─┘                            └──▶ Google (Gemini API, Code Assist)
+  real values  ◀── restore ◀───────────────── placeholders only
+```
+
+<Aside type="caution" title="Status: alpha">
+keepmum works end to end, but it has not been audited, and things will change. Treat it as a safety layer, not a guarantee. See [Limitations](/docs/about/limitations/) and the [releases](https://github.com/blueandhack/keepmum/releases).
+</Aside>
+
+▶ [See how a request travels through keepmum](https://keepmum.app/#video) (110 seconds), or [take the 58-second tour of the app](https://keepmum.app/#tour).
+
+<CardGrid>
+	<LinkCard title="Install" description="The Mac app, with everything included, or the command line." href="/docs/start/install/" />
+	<LinkCard title="Use with your agents" description="Claude Code, Codex, the Antigravity CLI, Gemini CLI, pi, opencode and VS Code." href="/docs/start/agents/" />
+	<LinkCard title="What gets masked" description="Secrets by default, personal data if you want it, your own rules and exceptions." href="/docs/masking/what-gets-masked/" />
+	<LinkCard title="Optional checks" description="Prompt injection, harmful requests and risky shell commands: warn, block or answer locally." href="/docs/checks/" />
+	<LinkCard title="Configuration" description="Every key in ~/.config/keepmum/config.toml." href="/docs/reference/configuration/" />
+	<LinkCard title="Limitations" description="What keepmum does not cover, in full." href="/docs/about/limitations/" />
+</CardGrid>
