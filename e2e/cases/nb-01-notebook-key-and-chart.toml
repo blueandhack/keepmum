@@ -74,7 +74,8 @@ masked_none = true
 quiet = true
 answer_contains = ["7c1e9a4f-3b2d-4e8a-9f6c-0d5b2a8e1c74", "e2b8d5f1-9a4c-4f7e-8b3d-6c0a1e9f2d58"]
 files = { ".env" = { contains = "ANTHROPIC_API_KEY={{v:key}}" }, "analysis.ipynb" = { lacks = "{{v:key}}" } }
-only_new = [".env"]
+# A .gitignore that keeps the new .env out of git is the user's own good practice (Codex and pi, Nov 23).
+only_new = [".env", ".gitignore"]
 
 # The notebook is still JSON, reads the key from the environment, and its chart is the same PNG.
 [[expect.run]]
