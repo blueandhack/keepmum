@@ -509,6 +509,10 @@ def test_a_model_span_is_cut_at_a_name_and_at_escaped_breaks(rules, text, piece,
     ('"web/yarn.lock:sha512-Z4jtVdSClePIEelBxFvNUshyE0MlW0ctYN2sR+wZeJbR01ScVkrUAGoUh0TMvJJOGeIcUPajaB7Fq0mcoKtGhw==" "x"',
      "web/yarn.lock:sha512-Z4jtVdSClePIEelBxFvNUshyE0MlW0ctYN2sR+wZeJbR01ScVkrUAGoUh0TMvJJOGeIcU", "SECRET"),
     ('"go.sum:h1:kLxQiBxrJ0JAHbCXUGC7/dwLyB1GRmqHQFMDA9Jan1Q=" "x"', "go.sum:h1:kLxQiBxrJ0JAHbCXUGC7/dwLyB1GRmqHQFMDA9Jan1Q", "SECRET"),
+    # The span begun inside the file's name (lock-01, Claude Code on DeepSeek, Nov 22).
+    ('"web/yarn.lock:679591c564c3bffaae8454cf0b3df370c3d6911c" \\\n"app/pnpm-lock.yaml:sha512-oUsDOBFZUiRsM8zLYKVcbn5+WFP/'
+     'jHgeuFJxpG6IqImr/82h9QvLAULpMO5F6CNwZGa/prr0ATL0DUwGU+R0ow==" \\\n"api/poetry.lock:sha256:df8a"',
+     ".yaml:sha512-oUsDOBFZUiRsM8zLYKVcbn5+WFP/jHgeuFJxpG6IqImr/82h9QvLAULpMO5F6CNwZGa/prr0ATL0D", "SECRET"),
     ("go.sum:3:golang.org/x/crypto v0.31.0 h1:68RbgsSwMRnuFwGRYM5pbHUGTV0kGOXOutW9t/kK3sk=",
      "go.sum:3:golang.org/x/crypto", "SECRET"),
 ])

@@ -1,12 +1,13 @@
 name: Site
 
-# Publishes site/ to GitHub Pages (keepmum.app). Static files, with one step: the newest release in
+# Publishes site/ to GitHub Pages (keepmum.app), with the docs built into site/docs/ (docs-site/).
+# Static files, with one step: the newest release in
 # mac/appcast.xml (version and build time) goes under the download buttons, so pushing the feed
 # updates the site too.
 on:
   push:
     branches: [main]
-    paths: ["site/**", "mac/appcast.xml", "mac/appcast-github.xml", ".github/scripts/site_release.py", ".github/workflows/site.yml"]
+    paths: ["site/**", "docs-site/**", "mac/docs/**", "mac/appcast.xml", "mac/appcast-github.xml", ".github/scripts/site_release.py", ".github/workflows/site.yml"]
   workflow_dispatch:
 
 permissions:
@@ -27,7 +28,20 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0  # each docs page's "Last updated" is its last commit
       - run: python3 .github/scripts/site_release.py
+      # keepmum.app/docs: Starlight, from the Markdown in docs-site/, built into site/docs/.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+      - name: The docs
+        working-directory: docs-site
+        run: |
+          npm ci
+          npm run build
       # keepmum.app/appcast.xml for installed apps when the Worker is gone or skips them: the signed
       # copy of the feed whose downloads come straight from GitHub (mac/appcast.py). While the Worker
       # runs, it answers that path and this file is never served. Unsigned, it would be refused.

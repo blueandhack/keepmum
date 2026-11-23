@@ -1,0 +1,69 @@
+/* keepmum.app's look for the docs: its two fonts (served from site/fonts, bundled by the build, no
+   third-party requests) and its warm palette (site/style.css). Coral is only for marks and large
+   type; link text uses the darker --number on light, a light coral on dark, both above 4.5:1. */
+
+@font-face {
+	font-family: 'Bricolage Grotesque';
+	src: url('../../../site/fonts/bricolage-grotesque.woff2') format('woff2');
+	font-weight: 400 800;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'JetBrains Mono';
+	src: url('../../../site/fonts/jetbrains-mono.woff2') format('woff2');
+	font-weight: 400 500;
+	font-display: swap;
+}
+
+:root {
+	/* Wider than Starlight's 45rem: the checks' tables have six columns. */
+	--sl-content-width: 52rem;
+	--sl-font:'Bricolage Grotesque', -apple-system, 'Helvetica Neue', sans-serif;
+	--sl-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+	/* Dark */
+	--sl-color-accent-low: #4a1d10;
+	--sl-color-accent: #e4572e;
+	--sl-color-accent-high: #f6b49e;
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #f3ece9;
+	--sl-color-gray-2: #c9bdb8;
+	--sl-color-gray-3: #9a8c86;
+	--sl-color-gray-4: #6b5e59;
+	--sl-color-gray-5: #4a3f3b;
+	--sl-color-gray-6: #2a1e1a;
+	--sl-color-black: #1a0f0b;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #fbe3da;
+	--sl-color-accent: #a53a17;
+	--sl-color-accent-high: #6e2610;
+	--sl-color-white: #1a0f0b;
+	--sl-color-gray-1: #2a1e1a;
+	--sl-color-gray-2: #4a3f3b;
+	--sl-color-gray-3: #6b5e59;
+	--sl-color-gray-4: #9a8c86;
+	--sl-color-gray-5: #d8ccc7;
+	--sl-color-gray-6: #efe7e4;
+	--sl-color-gray-7: #f6f2f0;
+	--sl-color-black: #ffffff;
+}
+
+.site-title {
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+h1#_top {
+	letter-spacing: -0.015em;
+}
+
+/* Screenshots of the Mac app: light, so give them an edge on the dark theme. */
+.sl-markdown-content img {
+	border-radius: 12px;
+	border: 1px solid var(--sl-color-hairline);
+}

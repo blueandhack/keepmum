@@ -49,3 +49,8 @@ e2e/keys.env
 htmlcov/
 bench/data/gguf/
 bench/data/ft/
+
+# Docs (docs-site/): dependencies, Astro's cache, and the build, which goes into site/docs/
+docs-site/node_modules/
+docs-site/.astro/
+site/docs/

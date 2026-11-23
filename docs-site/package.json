@@ -1,0 +1,15 @@
+{
+  "name": "keepmum-docs",
+  "private": true,
+  "type": "module",
+  "description": "keepmum's docs at keepmum.app/docs: Starlight, built into site/docs.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.43.1",
+    "astro": "7.4.13"
+  }
+}
