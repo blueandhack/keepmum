@@ -102,6 +102,18 @@ test("an update is counted with the path from the version Sparkle names", async 
   assert.deepEqual(rows(), ["path 0.1.0a6>0.1.0a7 1", "update 0.1.0a7 1"]);
 });
 
+test("a developer's own build counts nothing, and the dashboard leaves out what it counted before", async () => {
+  const res = await get("/appcast.xml?v=0.0.1&first=day,week,new&os=27&chip=arm64", { "user-agent": "Keepmum/0.0.1 Sparkle/2.10.1" });
+  assert.equal(res.status, 200);
+  await get("/update/v0.1.0a7/Keepmum-0.1.0a7.dmg", { "user-agent": "Keepmum/0.0.1 Sparkle/2.10.1" });
+  assert.deepEqual(rows(), []);
+  env.DB.raw.prepare("INSERT INTO counts (day, kind, version, n) VALUES ('2026-11-20T09', 'daily', '0.0.1', 1), ('2026-11-20T09', 'path', '0.0.1>0.1.0a7', 1)").run();
+  await get("/appcast.xml?v=0.1.0a7&first=day", { "user-agent": SPARKLE });
+  const data = await (await get("/stats.json")).json();
+  assert.ok(!data.counts.some((r) => r.version === "0.0.1" || r.version.startsWith("0.0.1>")));
+  assert.ok(data.counts.some((r) => r.kind === "daily" && r.version === "0.1.0a7"));
+});
+
 test("an update fetched without Sparkle counts no path, and a mismatched file name is not ours", async () => {
   await get("/update/v0.1.0a7/Keepmum-0.1.0a7.dmg", { "user-agent": SAFARI });
   const odd = await get("/update/v0.1.0a7/Keepmum-0.1.0a6.dmg", { "user-agent": SPARKLE });

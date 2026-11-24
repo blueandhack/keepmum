@@ -33,6 +33,10 @@ const REPO = "blueandhack/keepmum";
 const FEED = `https://raw.githubusercontent.com/${REPO}/main/mac/appcast.xml`;
 const RELEASES = `https://github.com/${REPO}/releases`;
 const VERSION = "[0-9A-Za-z.+-]{1,32}";
+// The version mac/build-app.sh gives a build that is not a release: a developer's own copy, counted
+// as a Mac in use every day it ran (Nov 2026). Nothing from it is counted, and the dashboard leaves
+// out what it counted before.
+export const DEV = "0.0.1";
 
 export default {
   async fetch(request, env, ctx) {
@@ -42,7 +46,7 @@ export default {
       const feed = await getFeed();
       if (!feed) return new Response("The update feed is unavailable; try again later.\n", { status: 502 });
       ctx.waitUntil(watchFeed(env, feed));
-      if (counted && fromApp(request)) ctx.waitUntil(count(env, checkRows(url)));
+      if (counted && fromApp(request) && appVersion(url) !== DEV) ctx.waitUntil(count(env, checkRows(url)));
       return new Response(request.method === "HEAD" ? null : feed, {
         headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "no-store" },
       });
@@ -58,7 +62,7 @@ export default {
     const update = url.pathname.match(new RegExp(`^/update/v(${VERSION})/(Keepmum-(${VERSION})\\.dmg)$`));
     if (update && update[1] === update[3]) {
       const from = fromVersion(request);
-      if (counted) ctx.waitUntil(count(env, [["update", update[1]], ...(from ? [["path", `${from}>${update[1]}`]] : [])]));
+      if (counted && from !== DEV) ctx.waitUntil(count(env, [["update", update[1]], ...(from ? [["path", `${from}>${update[1]}`]] : [])]));
       return Response.redirect(`${RELEASES}/download/v${update[1]}/${update[2]}`, 302);
     }
     const file = url.pathname.match(/^\/video\/([A-Za-z0-9._-]{1,100}\.(?:mp4|webm|vtt))$/);
@@ -292,7 +296,8 @@ export async function snapshotGitHub(env) {
 
 async function statsData(env, ctx) {
   const [counts, releases, versions] = await Promise.all([
-    env.DB.prepare("SELECT day, kind, version, n FROM counts ORDER BY day").all(),
+    env.DB.prepare("SELECT day, kind, version, n FROM counts WHERE version != ?1 AND version NOT LIKE ?2 ORDER BY day")
+      .bind(DEV, `${DEV}>%`).all(),
     env.DB.prepare("SELECT day, version, n FROM releases ORDER BY day").all(),
     env.DB.prepare("SELECT version, build, published, seen FROM versions ORDER BY build").all(),
   ]);
