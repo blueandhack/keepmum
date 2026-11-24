@@ -87,3 +87,15 @@ def test_openai_stream_events_keepmum_does_not_expect_pass_as_they_came():
     part = {"type": "response.content_part.done", "item_id": "m", "part": {"type": "output_text", "text": f"use {ph}"}}
     assert TOKEN in (s.feed(f"data: {json.dumps(part)}\n\n".encode()) + s.close()).decode()
     assert restore_item("not an item", vault) == "not an item"
+
+
+def test_opencodes_image_and_video_tools_keep_placeholders():
+    """opencode 2.4.1 offers generate_image and generate_video: the prompt, and the files or URLs
+    they name, go to an image or video model's service in a background job keepmum does not see.
+    A value keeps its placeholder there, in the prompt and in a path alike."""
+    vault, ph = setup()
+    for tool, args in (("generate_image", {"prompt": f"A poster with the key {ph}", "images": [f"shots/{ph}.png"]}),
+                       ("generate_video", {"prompt": f"Show {ph} on screen", "start": f"{ph}.png", "references": [f"{ph}.mp3"]})):
+        counts = Counter()
+        out = restore_tool(tool, args, vault, DEFAULT_POLICY, counts)
+        assert TOKEN not in json.dumps(out) and json.dumps(out).count(ph) == json.dumps(args).count(ph), tool

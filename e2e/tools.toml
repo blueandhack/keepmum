@@ -105,3 +105,5 @@
 "question" = "asks the user questions: restored"
 "skill" = "loads a skill by id: restored"
 "experimental_image_generate" = "makes an image from a prompt at a service that may be reached around keepmum: placeholders kept"
+"generate_image" = "makes or edits an image (2.4.1): its prompt, and the local images or URLs it names, go to an image model's service in a background job, and the image is written to a path: placeholders kept (restore.DEFAULT_POLICY)"
+"generate_video" = "makes a video (2.4.1): its prompt, and the images, videos and audio it names (local files uploaded, or URLs), go to a video model's service in a background job, and the video is written to a path: placeholders kept (restore.DEFAULT_POLICY)"

@@ -46,6 +46,10 @@ DEFAULT_POLICY = {
     "call_mcp_tool": "keep",
     # opencode 2.x: an image made from a prompt by a service, which may be reached around keepmum.
     "experimental_image_generate": "keep",
+    # opencode 2.4: generate_image (kept above, as Antigravity's) and generate_video send the prompt,
+    # and the images, videos and audio they name (local files, uploaded, or URLs), to an image or
+    # video model's service, in a background job keepmum does not see.
+    "generate_video": "keep",
     # Codex 0.169, in code mode (`tools.image_gen__imagegen`): the prompt and any images it names go
     # to OpenAI's image service. A path it names keeps its placeholder too, so an image whose name
     # was masked cannot be edited that way: what a provider's tool gets matters more.
