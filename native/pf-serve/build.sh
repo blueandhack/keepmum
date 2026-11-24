@@ -9,7 +9,9 @@
 # from magpie's b85475e (pf-v4: on the CPU the model file is mapped, not read into memory), and
 # patches/weights-shared-gpu.patch, keepmum's own (the same on Metal: the GPU takes the mapped file
 # as its buffer; pf-serve's own memory 1.75 GB -> 0.21 GB, start 550 -> 240 ms, the same spans;
-# PF_NOMAP=1 copies the weights as before); privacy-filter.cpp (MIT) is fetched at
+# PF_NOMAP=1 copies the weights as before), and patches/window-16k.patch, keepmum's own (a text is
+# run in 16384-token windows, not 4096, so a long one repeats less context: 18K tokens 830 -> 520
+# ms on an M5 Pro, peak memory 0.21 -> 0.32 GB; PF_WINDOW sets another); privacy-filter.cpp (MIT) is fetched at
 # PF_COMMIT with its pinned ggml submodule. cmake and ninja run through uvx, so nothing is
 # installed system-wide. Windows and Linux targets (Vulkan, CPU) come later; magpie's
 # build.sh shows how.
@@ -17,7 +19,7 @@ set -euo pipefail
 
 MAGPIE_COMMIT=642d430ecb076319b51930f4c13576ce25a8a534
 PF_REPO=https://github.com/localai-org/privacy-filter.cpp
-PF_COMMIT=735a6c28607ee82afc3a670383f41b55266a3b9a
+PF_COMMIT=8e0213a8d59d6659251b9ee68795878f1042b18c
 
 here=$(cd "$(dirname "$0")" && pwd)
 dest=${1:-${XDG_DATA_HOME:-$HOME/.local/share}/keepmum/bin}

@@ -48,8 +48,10 @@ LABEL_TYPES = {
 
 START_TIMEOUT = 120.0  # the first start after a build compiles Metal kernels
 # Unloaded after this long without a request, as the checks' models are (guard.IDLE_S): it holds
-# about 0.2 GB of its own while loaded (the weights are pages of its file, in macOS's cache:
-# native/pf-serve/patches/weights-shared-gpu.patch), and starts again in about 0.25 s on an M5 Pro.
+# about 0.2 GB of its own while loaded, up to 0.3 GB after a long text (the weights are pages of
+# its file, in macOS's cache: native/pf-serve/patches/weights-shared-gpu.patch; a long text's
+# working memory grows with its length up to the 16K-token window: window-16k.patch), and starts
+# again in about 0.25 s on an M5 Pro.
 IDLE_S = 600.0
 
 

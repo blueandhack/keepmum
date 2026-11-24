@@ -1,0 +1,27 @@
+diff --git a/src/pf.cpp b/src/pf.cpp
+index 072eee8..742d8a3 100644
+--- a/src/pf.cpp
++++ b/src/pf.cpp
+@@ -13,7 +13,11 @@ struct pf_ctx {
+     pf::model            m;
+     pf::tokenizer        tok;
+     pf::ner::label_table lt;   // owns the category-name strings pf_entity points at
+-    int32_t              max_forward_tokens = 4096;
++    // 16384, not 4096: a longer text is run in windows that each repeat 1024 tokens of context
++    // on both sides, so 4096-token windows ran about 1.8x the tokens of an 18K-token text.
++    // Attention is banded past 2048 tokens, so a longer window costs time in proportion.
++    // PF_WINDOW sets another.
++    int32_t              max_forward_tokens = 16384;
+     bool                 loaded = false;
+     std::string          error;
+ };
+@@ -30,6 +34,9 @@ pf_ctx * pf_load(const char * gguf_path, const char * device, int n_threads) {
+     } else {
+         ctx->lt = pf::ner::build_label_table(ctx->m.file.labels);
+         ctx->loaded = true;
++        if (const char * w = std::getenv("PF_WINDOW")) {
++            if (std::atoi(w) > 0) ctx->max_forward_tokens = std::atoi(w);
++        }
+     }
+     return ctx;
+ }

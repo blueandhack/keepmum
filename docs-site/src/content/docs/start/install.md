@@ -8,7 +8,7 @@ description: Requirements, the Mac app with everything included, and the command
 - A Mac with Apple silicon, and macOS 14 or later
 - Claude Code, Codex, the Antigravity CLI (`agy`), Gemini CLI, pi or opencode
 - For the command line only (the Mac app bundles all of it): Python 3.12+, [uv](https://docs.astral.sh/uv/), and Xcode or its command line tools (to build pf-serve)
-- 1.6 GB of disk for the local model. While agents are working it takes about 0.2 GB of memory of its own, and macOS keeps its 1.6 GB file in its cache, which it lets go when memory is short; after 10 minutes without a request it unloads, and loads again in about a quarter of a second. Neither with `keepmum model off`. The [optional checks](/docs/checks/) add their own while in use: 0.4 GB (injection) and 0.4, 1.1 or 4.9 GB (harm)
+- 1.6 GB of disk for the local model. While agents are working it takes about 0.2 GB of memory of its own (up to 0.3 GB after a long text), and macOS keeps its 1.6 GB file in its cache, which it lets go when memory is short; after 10 minutes without a request it unloads, and loads again in about a quarter of a second. Neither with `keepmum model off`. The [optional checks](/docs/checks/) add their own while in use: 0.4 GB (injection) and 0.4, 1.1 or 4.9 GB (harm)
 
 ## The Mac app (everything included)
 
