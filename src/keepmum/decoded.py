@@ -38,7 +38,9 @@ _HEX_TOKEN = re.compile(r"(?:[0-9a-fA-F]{2}){1,4}")
 _OD_C = re.compile(r"(?:^|(?<=[\s\"'`]))[0-7]{7}(?=  )")
 _PLAIN_HEX = re.compile(r"(?<![0-9A-Za-z])(?:[0-9a-fA-F]{2}){16,}(?![0-9A-Za-z])")
 _PLAIN_HEX_LINE = re.compile(r"(?:[0-9a-fA-F]{2}){8,}")
-_B64_RUN = re.compile(r"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/_-]{20,}={0,2}(?![A-Za-z0-9+/=_-])")
+# A run may follow an `=`: `URL=<base64>`, a name set to it (k8s-01 on opencode, Nov 24: the database
+# URL in it went out encoded).
+_B64_RUN = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{20,}={0,2}(?![A-Za-z0-9+/=_-])")
 _B64_LINE = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
 _SPACED_HEX = re.compile(r"(?<![0-9A-Za-z])(?:[0-9a-fA-F]{2}[ \t]*[\r\n]?[ \t]*(?=[0-9a-fA-F]{2}(?![0-9A-Za-z]))[ \t]?){7,}"
                          r"[0-9a-fA-F]{2}(?![0-9A-Za-z])")

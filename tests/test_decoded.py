@@ -131,6 +131,20 @@ def test_a_value_masked_before_is_found_encoded():
     assert out.startswith("blob: KEEPMUM_")
 
 
+def test_base64_after_a_name_and_an_equals_sign_is_read():
+    """`print("URL=" + base64.b64encode(url))` (k8s-01 on opencode, Nov 24): the run began after an
+    `=`, which the inline pass took for padding, so the database URL in it went out encoded. Only the
+    Privacy Filter caught pieces of it, and not the password's."""
+    url = "postgres://orders:" + "ylSiqO9upB54pPd8hi" + "@db.internal:5432/orders"
+    encoded = base64.b64encode(url.encode()).decode()
+    key = base64.b64encode(f"{TOKEN}".encode()).decode()
+    text = f"URL={encoded}\nKEY={key}\nLOG=aW5mbw==\n"
+    assert any(url in d for _, _, d in blocks(text)) and any(TOKEN in d for _, _, d in blocks(text))
+    out = Redactor(Pipeline(RulesDetector()), Vault(bytes(range(32)))).redact_text(text)
+    assert out.startswith("URL=KEEPMUM_") and "\nKEY=KEEPMUM_" in out and out.endswith("\nLOG=aW5mbw==\n")
+    assert encoded[:20] not in out and key[:20] not in out
+
+
 @pytest.mark.parametrize("text", [
     "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
     "commit a3f9c2e17b4d9e8f0a1b2c3d4e5f60718293a4b5",
