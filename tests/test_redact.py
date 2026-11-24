@@ -727,6 +727,8 @@ def test_a_name_set_to_nothing_and_a_path_through_a_commit_are_no_secrets():
 
     rules = RulesDetector()
     assert not rules.detect("- aws_iam_access_key.ci: ARN=None; region=None")
+    assert not rules.detect("k8s/secret.yaml: kind=Secret name=orders-env")  # a name set to a word (k8s-01 on agy)
+    assert rules.detect("api_token.txt: Xk9mPq2vLw7RtZab4")  # a file printed with its name before it: still a value
     assert [s.source for s in rules.detect("secret_key: NAME=Xk9mPq2vLw7RtZab")] == ["rules:secret-assignment"]
     assert is_path("537a48f3f5c063/Misc/NEWS") and not is_path("wJalrXUtnFEMI/K7MDENG/bPxRfiCY")
     assert not is_path("a1b2c3d4e5f6/x7Kq9Lm2")  # one named piece beside the hash is not enough

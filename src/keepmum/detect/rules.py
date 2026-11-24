@@ -119,9 +119,10 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
         if c == "<" and text.startswith("</", i):  # a closing tag ends it: a .docx's XML (doc-03, Nov 18)
             break
         i += 1
-    if _EMPTY_ASSIGNMENT.fullmatch(text[start:i]):
-        # Another name set to nothing, printed by a script: `aws_iam_access_key.ci: ARN=None`
-        # (cloud-01 on Codex, Nov 24). No value is in it.
+    if (m := _EMPTY_ASSIGNMENT.fullmatch(text[start:i])) and _plain_word(m.group(1)):
+        # Another name set to nothing, or to a plain word, printed by a script: `aws_iam_access_key.ci:
+        # ARN=None` (cloud-01 on Codex), `k8s/secret.yaml: kind=Secret` (k8s-01 on agy, Nov 24). No
+        # value is in it.
         return None
     if _VARIABLE.fullmatch(text[start:i].replace("\\", "").rstrip("$")):
         # A variable's name, escaped for a pattern: `re.search(r'_authToken=\$\{NPM_TOKEN\}$', npmrc)`
@@ -132,8 +133,14 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
 
 # An object or list opening where a value would: `{'name':`, `[\"a\",`, its first key or item quoted.
 _NESTED = re.compile(r"""[{\[]\s*(?P<q>\\*['"])[\w.-]*(?P=q)\s*[:,\]}]""")
-# `NAME=None`, `name=null`: a name set to an empty literal, where a value would be.
-_EMPTY_ASSIGNMENT = re.compile(r"[A-Za-z_][\w.-]{0,40}=(?:None|null|NULL|Null|nil|undefined|N/A|)")
+# `NAME=None`, `kind=Secret`: a name set to an empty literal or a plain word, where a value would be.
+_EMPTY_ASSIGNMENT = re.compile(r"[A-Za-z_][\w.-]{0,40}=([A-Za-z/]{0,16})")
+
+
+def _plain_word(value: str) -> bool:
+    """value is empty, an empty literal (None, null, N/A) or a plain word: letters, at most two capitals,
+    as public_shape takes a word (a token made of letters has capitals all through it)."""
+    return value in ("", "N/A") or value.isalpha() and sum(c.isupper() for c in value) <= 2
 # `$NAME` or `${NAME}`: a variable the value comes from, not the value.
 _VARIABLE = re.compile(r"\$\{[A-Za-z_]\w*\}|\$[A-Z_][A-Z0-9_]*")  # not `$ecr3tPass`: a password may start with `$`
 
