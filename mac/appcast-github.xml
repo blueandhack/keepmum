@@ -7,6 +7,69 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Releases of the keepmum Mac app</description>
     <language>en</language>
     <item>
+      <title>keepmum 0.1.0a15</title>
+      <pubDate>Tue, 24 Nov 2026 16:46:04 GMT</pubDate>
+      <sparkle:version>10015</sparkle:version>
+      <sparkle:shortVersionString>0.1.0a15</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/blueandhack/keepmum/releases/tag/v0.1.0a15</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown">The fifteenth alpha of keepmum masks far fewer things that are not secrets, and closes three ways a real value could still reach a provider. Local mode now handles long tool results and long conversations: a flagged result has only the planted lines cut out, instead of being rewritten whole. keepmum also starts faster after a restart.
+
+&gt; **Alpha.** keepmum works end to end, but it has not been audited and things will change. Treat it as a safety layer, not a guarantee, and see [Limitations](https://keepmum.app/docs/about/limitations/).
+
+## Install
+
+1. Download `Keepmum-0.1.0a15.dmg` below, open it, and drag Keepmum into Applications.
+2. Open Keepmum and follow **Setup**.
+
+**From 0.1.0a2 through 0.1.0a14:** Keepmum updates itself if you allowed update checks (Settings › Updates › Check now). **From 0.1.0a1:** quit Keepmum and drag the new version into Applications, once.
+
+Needs a Mac with Apple silicon and macOS 14 or later. The app is signed and notarized by Apple.
+
+To check the download: `shasum -a 256 -c Keepmum-0.1.0a15.dmg.sha256`
+
+## Fewer false masks
+
+Almost every false mask the live tests found came from a guess: the Privacy Filter model, the entropy check, or the generic `password = …` and "the key is …" rules. Format rules (`ghp_…`, `sk_live_…`, `AKIA…`) and values keepmum masked before are exact. Guesses now follow three rules:
+
+- **None in the model's own text.** Its commands, edits and replies hold real values only where keepmum restored them, and those are masked again exactly. A guess there only took its grep patterns, the hashes it quoted and the request ids it named for secrets.
+- **None at what the provider already has:** a value an earlier request sent unmasked, or one the model wrote, including in base64. Masking it later changed a message already sent, and the prompt cache with it.
+- **A guess never hides an exact find, or stands in for one.** A guess that took `STRIPE_SECRET_KEY:&lt;value&gt;` gives way to the exact find of the value, so the name is no longer masked.
+
+Also no longer masked: grep patterns, lockfile checksums (`go.sum`, `yarn.lock`), a database URL in a command, an escaped line break, a string literal's prefix (`b'…'`), a name set to `None`, a path through a commit hash, and base64 of a plain word or of keepmum's own placeholders. See [How it works](https://keepmum.app/docs/about/how-it-works/).
+
+## Values that could still leave
+
+- **A secret found further down a request** was masked from there on, but earlier messages in the same request went out with it in the clear. keepmum now finds every value in a request before sending any of it.
+- **Base64 after a name and `=`.** A script that printed `URL=` and a database URL in base64 sent it encoded, password and all: keepmum read base64 on its own or after a space or quote, but not after `=`. It now does.
+- **An email's local part on its own.** Once an email is masked, a script that splits it and prints `margaret.thornbury` no longer sends the name. The domain stays visible, and so do role mailboxes like `support`.
+- **The injection check read at most 16 windows** of a long result, so a line planted halfway into a 250,000-character result was never scored. It now reads every window, and stops at the first hit.
+- **opencode 2.4's `generate_video`** sends its prompt and the files it names to a video service; real values now keep their placeholders there, as they already did for `generate_image`.
+
+## Local mode
+
+- **A cut, not a rewrite.** When the injection check flags a tool result, it scores the result in parts, the local model names the planted lines, and keepmum takes out just those; every other character goes as it was. A 25,000-character result is cut in under a second, and a 1,000,000-character one in 12 s; the old rewrite could not read a result longer than the model's context.
+- **Long conversations.** A turn the local model answers reads at most 32k tokens of the conversation by default (**Local models › Speed**, or `keepmum guard local speed --reads`). Long messages keep their start and end, and the oldest turns go first. A long session used to be refused; a 440 KB one now answers in 15 s.
+- **Reviews show the cut**, struck through with line numbers, instead of two long texts to compare.
+- A summary is of what the cut left, and a result over 48,000 characters goes as its cut.
+
+## Faster
+
+- **The Privacy Filter's results survive a restart.** The first request of a resumed session sent the whole conversation to the model again (4.5 s for a 433-message session); it now takes 0.2 s. Only positions and scores are kept, never text, in `~/Library/Caches/keepmum`.
+- **Long texts** run through the Privacy Filter in 16K-token windows: an 18K-token text in 535 ms instead of 827 ms.
+- **Splash keeps its prompt cache across restarts** (Splash 1.3.2 or later): a new chat on an agent's system prompt starts in 0.64 s instead of 2.8 s.
+
+## The app and docs
+
+- The **Tools** page shows what each network tool says it does, and marks a tool whose description changed.
+- **Full documentation** is at [keepmum.app/docs](https://keepmum.app/docs/), including how to put keepmum in front of [DeepSeek](https://keepmum.app/docs/start/gateways/) for Claude Code, pi, opencode and Codex.
+- The commands check no longer reports a download piped into a script the model wrote inline (`curl … | python3 -c '…'`) as running it.
+- **Check Automatically** at first launch now checks for an update right away, instead of at the next scheduled check.
+
+This release was checked with the unit tests, the scripted suite on all five agents, and the live suite on real models: a full run on all five agents on Nov 24 (213 of 215 passed, no leaks; the two false masks it found are fixed), reruns of every case the fixes touched, and runs on DeepSeek for Claude Code, Codex, pi and opencode.</description>
+      <enclosure url="https://github.com/blueandhack/keepmum/releases/download/v0.1.0a15/Keepmum-0.1.0a15.dmg" length="40316121" type="application/octet-stream" sparkle:edSignature="kF9XYDOJ+2x0Nw+2RYLXt0k1R9RbWjRI6+sOoWakOIU5qXht106JIiAtTXmJSa/+67Kum/12x3Ak6e5gOkVYCw=="></enclosure>
+    </item>
+    <item>
       <title>keepmum 0.1.0a14</title>
       <pubDate>Sun, 22 Nov 2026 09:06:32 GMT</pubDate>
       <sparkle:version>10014</sparkle:version>
@@ -569,6 +632,6 @@ Feedback and bug reports are welcome in [Issues](https://github.com/blueandhack/
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 60tTHnWL3j/3NQLd3RCjgWJ0W8Jx8z3PK7coOFZy4xNy+pr2/FkQOz99ohycbi7uP8+nlEH6r9WO6OF04TQxDw==
-length: 60178
+edSignature: +yPllzfnh526pLadQrcbkoYbDOvmWBL2roiXwrdajQd4fiVwwArmJhO8KMCTYRr+JPvPp8Sa8QR8oVvKavCEDg==
+length: 66815
 -->
