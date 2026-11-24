@@ -77,6 +77,7 @@
 "manage_subagents" = "lists or stops sub-agents: no values"
 "swarm" = "manages agy's worker agents on this Mac (add, with a brief posted to the swarm's board; status, models, model, kill, title), each in this repository or its own copy of it; a worker's own requests go through keepmum, as invoke_subagent's do: restored (offered from Nov 12, 2026, without a new agy release)"
 "ask_question" = "asks the user multiple-choice questions: restored"
+"update_steps" = "the checklist of steps the user sees (titles and statuses, replaced whole each call); no disk or network: restored as text (offered from Nov 23, 2026, without a new agy release)"
 "call_mcp_tool" = "calls an MCP server's tool (ServerName, ToolName, Arguments): decided as mcp__<server>__<tool> (tools.call_name), its result credited to that server"
 "list_resources" = "lists an MCP server's resources (ServerName): decided as that server's tool"
 "read_resource" = "reads a resource from the MCP server its ServerName names: decided as that server's tool"
