@@ -79,11 +79,26 @@ _SCRIPT_HEREDOC = re.compile(
     r"\b(?:python[0-9.]*|ruby|node|perl|php)\b[^\n]*?<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)^\s*\2\s*$", re.M | re.S)
 
 
+# A pipe into an interpreter given its script inline (`| python3 -c '…'`, `| perl -ne '…'`, `| node -e
+# '…'`): what comes down the pipe is that script's data, not a script. pi read a web page with
+# `curl -s https://www.python.org/downloads/ | python3 -c 'import sys,re; s=sys.stdin.read(); …'`,
+# and it was "a download run as a script" (wf-03, Nov 24). Still one when the script runs its input
+# (exec, eval, a subprocess), and a shell, or an interpreter with no script of its own (`| python3`,
+# `| python3 -`), runs what it reads.
+_INLINE_FILTER = re.compile(r"""(\|\s*)(?:/\S*/)?(?:python[0-9.]*|perl|ruby|node|php)\s+(?:-[^-\s]\S*\s+)*?-[a-zA-Z]*[cer]\s+"""
+                            r"""('[^']*'|"(?:[^"\\]|\\.)*")""")
+_RUNS_INPUT = re.compile(r"\b(?:exec|eval|compile|Function|system|popen|subprocess|spawn|execSync|child_process|runpy)\b|`")
+
+
+def _as_filter(m: re.Match) -> str:
+    return m.group(0) if _RUNS_INPUT.search(m.group(2)) else m.group(1) + "filter"
+
+
 def check(text: str) -> list[str]:
     """The rules a command line breaks, as ids."""
     while (printed := _PRINTED.sub(r"\1''", text)) != text:  # every argument in turn
         text = printed
-    hits = [rid for rid, _, rx in RULES if rx.search(text)]
+    hits = [rid for rid, _, rx in RULES if rx.search(_INLINE_FILTER.sub(_as_filter, text))]
     shell = _SCRIPT_HEREDOC.sub(lambda m: m.group(0)[:m.start(3) - m.start(0)] + m.group(2), text)
     if _NETWORK_RE.search(shell):
         hits += [rid for rid, _, rx in SENDS if rx.search(shell)]
