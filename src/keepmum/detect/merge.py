@@ -6,13 +6,15 @@ import re
 
 from . import PRIORITY, Span
 
-# The detectors that guess: the model, entropy, and a generic `name = value` or `--name value` for any
-# name that sounds secret. A format rule (`ghp_…`, `sk_live_…`, `AKIA…`) knows, and so do a block
+# The detectors that guess: the model, entropy, a generic `name = value` or `--name value` for any
+# name that sounds secret, and prose that names a key or password before a value ("the old key is
+# revoked/disabled", in a runbook the model wrote: rotate-01 on opencode, Nov 23). A format rule (`ghp_…`, `sk_live_…`, `AKIA…`) knows, and so do a block
 # whose decoded text a format rule matched (`decoded`) and a value masked before (`known`). Guesses are
 # right most of the time and wrong on ids, hashes, images and patterns: each of the 13 false masks the
 # live runs of Nov 22-23 found. A guess never hides an exact find, or stands in for it: where both
 # found a value, the exact find's span is the one masked.
-GUESSING = frozenset({"pf-serve", "rules:entropy", "rules:secret-assignment", "rules:secret-flag"})
+GUESSING = frozenset({"pf-serve", "rules:entropy", "rules:secret-assignment", "rules:secret-flag",
+                      "rules:key-in-prose", "rules:password-in-prose"})
 
 
 def guessed(span: Span) -> bool:

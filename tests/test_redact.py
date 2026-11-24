@@ -679,3 +679,18 @@ def test_a_guess_gives_way_over_a_string_literals_prefix():
         r = Redactor(Pipeline(RulesDetector(), _Flags(lit[len(prefix):].rstrip("'\"")), pii=False), Vault(bytes(32)))
         out = r.redact_text(lit)
         assert key not in out and out.replace(r.vault.placeholder("SECRET", key), "KEY") == lit.replace(key, "KEY")
+
+
+def test_prose_naming_a_key_is_a_guess_too():
+    """rotate-01 on opencode (Nov 23): in a runbook the model wrote, "confirm the old key is
+    revoked/disabled" was masked by the key-in-prose rule. Prose that names a key is a guess: none in
+    the model's own text, and in what the user typed it still masks."""
+    line = "5. Verify Stripe requests succeed, then confirm the old key is revoked/disabled in the Dashboard."
+    r = Redactor(Pipeline(RulesDetector(), None, pii=False), Vault(bytes(32)))
+    out = r.redact_responses_request(_responses({"type": "custom_tool_call", "call_id": "p", "name": "patch",
+                                                 "input": f"*** Begin Patch\n+{line}\n*** End Patch"}))
+    assert "revoked/disabled" in json.dumps(out) and not r.counts
+    r = Redactor(Pipeline(RulesDetector(), None, pii=False), Vault(bytes(32)))
+    out = r.redact_request(_turn({"role": "assistant", "content": "ok"},
+                                 {"role": "user", "content": "the staging key is Xk9mPq2vLw7RtZab4"}))
+    assert "Xk9mPq2vLw7RtZab4" not in json.dumps(out) and r.counts["SECRET"] == 1
