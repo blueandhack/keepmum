@@ -101,11 +101,17 @@ final class Updates: NSObject {
            defaults.object(forKey: Self.newKey) == nil {
             defaults.set(true, forKey: Self.newKey) // never checked: the first check counts as a new Mac
         }
+        var checkNow = false
         if !UserDefaults.standard.bool(forKey: Self.promptedKey) {
-            updater.automaticallyChecksForUpdates = askToCheckAutomatically()
+            checkNow = askToCheckAutomatically()
+            updater.automaticallyChecksForUpdates = checkNow
             UserDefaults.standard.set(true, forKey: Self.promptedKey)
         }
         controller.startUpdater()
+        // Said yes: the first check now, in the background, not when Sparkle's schedule comes round,
+        // so a Mac tried once and quit is counted as new too: no install since 0.1.0a7 had been
+        // (worker/, Nov 24). It is the check the user just agreed to, and nothing more.
+        if checkNow { updater.checkForUpdatesInBackground() }
     }
 
     func setAutomaticallyChecks(_ on: Bool) {
