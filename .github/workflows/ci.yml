@@ -20,7 +20,7 @@ jobs:
       UV_PYTHON: "3.15"  # the newest Python; keepmum supports 3.12 and later (pyproject.toml)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - run: uv sync --frozen
       # The tests, measured: statement and branch coverage over src/keepmum, which fails the job below
       # fail_under in pyproject.toml. sys.monitoring keeps it fast (branches need Python 3.14 or later).
@@ -59,7 +59,7 @@ jobs:
       AGY_SHA512: 1030d89ce9e5cb39509e272cb89b71fde0e0d5d6527b7392525d5ef2683da54fb49230449107486d91c02ded39a678faaa649b2041304a6cf82a3a332d5819d9
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - run: uv sync --frozen
       - name: Install the agents
         run: |
