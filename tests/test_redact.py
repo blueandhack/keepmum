@@ -694,3 +694,26 @@ def test_prose_naming_a_key_is_a_guess_too():
     out = r.redact_request(_turn({"role": "assistant", "content": "ok"},
                                  {"role": "user", "content": "the staging key is Xk9mPq2vLw7RtZab4"}))
     assert "Xk9mPq2vLw7RtZab4" not in json.dumps(out) and r.counts["SECRET"] == 1
+
+
+def test_an_emails_local_part_on_its_own_is_masked_and_its_domain_is_not():
+    """data-01 on Codex with DeepSeek (Nov 23): a script split the masked email and printed
+    `['margaret.thornbury', 'gmail.com']`; the local part, which spells her name, went out."""
+    r = Redactor(Pipeline(RulesDetector(), None, pii=True), Vault(bytes(32)))
+    first = r.redact_text("T-1001,Margaret Thornbury,margaret.thornbury@gmail.com,open")
+    assert "margaret.thornbury" not in first
+    r.vault.placeholder("EMAIL", "support@acme-corp.com")  # the email rule leaves role addresses; masked some other way
+    out = r.redact_text("email_parts ['margaret.thornbury', 'gmail.com']\nby_box {'support': 1, 'Margaret.Thornbury': 2}")
+    assert "margaret.thornbury" not in out.lower() and "'gmail.com'" in out  # any case; the domain stays
+    assert "'support'" in out  # a role's mailbox names no one
+    assert "margaret.thornbury2" in r.redact_text("user margaret.thornbury2 logged in")  # another token
+    # Restored as it was written.
+    ph = r.vault.placeholder("EMAIL", "margaret.thornbury")
+    assert ph in out and r.vault.value(ph) == "margaret.thornbury"
+
+
+def test_an_emails_local_part_is_left_when_emails_are_let_through():
+    r = Redactor(Pipeline(RulesDetector(), None, pii=True), Vault(bytes(32)))
+    r.redact_text("write to margaret.thornbury@gmail.com")
+    r.detector.pass_types = frozenset({"EMAIL"})
+    assert "margaret.thornbury" in r.redact_text("parts: margaret.thornbury gmail.com")

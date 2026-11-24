@@ -70,6 +70,14 @@ AGENT_NOTICE = re.compile(r"Claude requested permissions to (?:edit|write to|wri
 # Characters of a secret in a row that make a decoded dump, or a cut-off run, hold it (Redactor._holds_a_piece,
 # Redactor._known_pieces).
 SECRET_PIECE = 12
+# An email's local part that names no one: a role or a mailbox, not a person (`support@acme.com`).
+ROLE_MAILBOXES = frozenset({
+    "info", "support", "admin", "contact", "sales", "hello", "team", "help", "noreply", "no-reply", "billing",
+    "office", "mail", "security", "abuse", "postmaster", "webmaster", "root", "user", "test", "careers", "jobs",
+    "press", "privacy", "legal", "accounts", "service", "orders", "notifications", "alerts", "feedback",
+})
+EMAIL_PART = 4  # the shortest local part masked on its own
+_LOCAL_TOKEN = re.compile(r"(?<![\w.%+-])[A-Za-z0-9._%+-]+")  # a token an email's local part could be
 # A line's number in front of it, as grep -n, cat -n and agents' read tools print one: `12:`, `     3→`, `3: `.
 _LINE_NUMBER = re.compile(r"^\s*\d+(?:[:\t→|]\s?| {1,2})")
 _KEYLIKE_TOKEN = re.compile(r"(?<![A-Za-z0-9+/_.-])[A-Za-z0-9+/_.-]{12,}(?![A-Za-z0-9+/_.-])")
@@ -380,6 +388,7 @@ class Redactor:
                       and not (released and released(value, self.vault.sources_of(value), kind))]
         spans += self._encoded(text, spans, known, blocks)
         spans += self._known_pieces(text, spans)
+        spans += self._email_parts(text, spans)
         spans = merge(narrow(spans, text))
         spans = [s for s in spans if not (guessed(s) and encodes_nothing(text[s.start:s.end]))]
         if authored:
@@ -560,6 +569,42 @@ class Redactor:
             value = pieces.get(run[:SECRET_PIECE])
             if value is not None and run in value:
                 out.append(Span(a, b, "SECRET", 1.0, "known"))
+        return out
+
+    def _email_locals(self) -> frozenset[str]:
+        """The local parts of the emails the vault holds, lowercase. Built again only when the vault changes."""
+        version = (len(self.vault), self.vault.mark(), getattr(self.detector, "generation", None))
+        if getattr(self, "_email_version", None) != version:
+            passed = getattr(self.detector, "pass_types", frozenset())
+            released = getattr(self.detector, "lets_through", None)
+            parts = set()
+            if "EMAIL" not in passed:
+                for value in list(self.vault._values.values()):
+                    if not isinstance(value, str) or "@" not in value or self.vault.kind_of(value) != "EMAIL":
+                        continue
+                    if released and released(value, self.vault.sources_of(value), "EMAIL"):
+                        continue
+                    local = value.rsplit("@", 1)[0].strip().lower()
+                    if len(local) >= EMAIL_PART and local not in ROLE_MAILBOXES and "keepmum_" not in local:
+                        parts.add(local)
+            self._email_set, self._email_version = frozenset(parts), version
+        return self._email_set
+
+    def _email_parts(self, text: str, spans: list[Span]) -> list[Span]:
+        """The local part of an email masked before, on its own, in any case: a script that split the
+        address printed `['margaret.thornbury', 'gmail.com']`, and the name went out while the email
+        stayed masked (data-01 on Codex with DeepSeek, Nov 23). Only a whole token counts. The domain
+        is no person and stays; so does a role's mailbox (`support`)."""
+        parts = self._email_locals()
+        if not parts:
+            return []
+        out = []
+        for m in _LOCAL_TOKEN.finditer(text):
+            a, b = m.span()
+            while b > a and text[b - 1] == ".":  # the end of a sentence
+                b -= 1
+            if b - a >= EMAIL_PART and text[a:b].lower() in parts and not any(s.start < b and a < s.end for s in spans):
+                out.append(Span(a, b, "EMAIL", 1.0, "known"))
         return out
 
     def redact_text(self, text: str) -> str:
