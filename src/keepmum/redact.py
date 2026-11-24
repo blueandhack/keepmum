@@ -251,6 +251,34 @@ def encodes_nothing(value: str) -> bool:
     return False
 
 
+def _b64_text(value: str) -> str:
+    """value read as base64, standard or URL-safe, if it is that and decodes to text; else ""."""
+    import base64
+    import binascii
+
+    if len(value) < 8:
+        return ""
+    for altchars in (None, b"-_"):
+        try:
+            return base64.b64decode(value + "=" * (-len(value) % 4), altchars=altchars, validate=True).decode("utf-8").strip()
+        except (ValueError, binascii.Error, UnicodeDecodeError):
+            continue
+    return ""
+
+
+def _decodes_into(line: str, own: str) -> bool:
+    """line is base64 of text in `own`: the model's own string encoded by a command it ran
+    (`printf 'info' | base64`: k8s-01 on Claude Code, Nov 24)."""
+    import base64
+    import binascii
+
+    try:
+        text = base64.b64decode(line + "=" * (-len(line) % 4), validate=True).decode("utf-8")
+    except (ValueError, binascii.Error, UnicodeDecodeError):
+        return False
+    return len(text.strip()) >= 3 and text.strip() in own
+
+
 def _blanked(text: str, masked) -> str:
     """`text` as it went: each of the `masked` (start, end) ranges a NUL."""
     pos, out = 0, []
@@ -394,7 +422,8 @@ class Redactor:
         if authored:
             spans = [s for s in spans if not guessed(s)]
         elif self._sent or self.wrote:
-            spans = [s for s in spans if not (guessed(s) and self._provider_has(text[s.start:s.end]))]
+            spans = [s for s in spans if not (guessed(s) and (self._provider_has(v := text[s.start:s.end])
+                                                              or self._provider_has(_b64_text(v))))]
         if self._checksums:
             spans = [s for s in spans if not (set(s.source.split("|")) <= _GUESSED and self._a_checksum(text[s.start:s.end]))]
         return spans, seen
@@ -495,6 +524,10 @@ class Redactor:
         for start, end, decoded in (encoded(text) if blocks is None else blocks):
             if any(s.start <= start and end <= s.end and not guessed(s) for s in spans):
                 continue  # already masked, by an exact find: a guess may be dropped, or give way
+            if self._provider_has(decoded.strip()):
+                # The model's own text, encoded on this Mac: `printf 'postgres://orders:x@db' | base64`, a
+                # test string it wrote (k8s-01 on Claude Code, Nov 24). The provider has it as it is.
+                continue
             kinds = [s.type for s in rules.detect(decoded) if s.source not in GUESSES]
             if known is not None:
                 kinds += [self.vault.kind_of(m.group()) for m in known.finditer(decoded)]
@@ -517,7 +550,7 @@ class Redactor:
         if not lines:
             return False
         own = "\n".join(self.authored)
-        return all(line in own for line in lines)
+        return all(line in own or _decodes_into(line, own) for line in lines)
 
     def _holds_a_piece(self, decoded: str) -> bool:
         """decoded holds SECRET_PIECE characters in a row of a secret keepmum masked before: a dump of

@@ -717,3 +717,42 @@ def test_an_emails_local_part_is_left_when_emails_are_let_through():
     r.redact_text("write to margaret.thornbury@gmail.com")
     r.detector.pass_types = frozenset({"EMAIL"})
     assert "margaret.thornbury" in r.redact_text("parts: margaret.thornbury gmail.com")
+
+
+def test_a_name_set_to_nothing_and_a_path_through_a_commit_are_no_secrets():
+    """cloud-01 on Codex (Nov 24): `aws_iam_access_key.ci: ARN=None` from a script's printout.
+    wf-03 on pi (Nov 24): pi wrapped a page and cut a link at its commit hash, leaving
+    `537a48f3f5c063/Misc/NEWS.d/…` at the start of a line. A real value after a name still masks."""
+    from keepmum.detect.rules import is_path
+
+    rules = RulesDetector()
+    assert not rules.detect("- aws_iam_access_key.ci: ARN=None; region=None")
+    assert [s.source for s in rules.detect("secret_key: NAME=Xk9mPq2vLw7RtZab")] == ["rules:secret-assignment"]
+    assert is_path("537a48f3f5c063/Misc/NEWS") and not is_path("wJalrXUtnFEMI/K7MDENG/bPxRfiCY")
+    assert not is_path("a1b2c3d4e5f6/x7Kq9Lm2")  # one named piece beside the hash is not enough
+    line = '  Python 2.7.17   Oct. 19, 2019   Downlo\n537a48f3f5c063/Misc/NEWS.d/2.7.17rc1.rst">Release notes'
+    assert "537a48f3f5c063" in Redactor(Pipeline(RulesDetector(), None, pii=False), Vault(bytes(32))).redact_text(line)
+
+
+def test_the_models_own_string_encoded_on_this_mac_is_its_own():
+    """k8s-01 on Claude Code (Nov 24): it ran `printf 'postgres://orders:x@db' | base64` to test its
+    encoding; the decoded block was masked, and the output scored by the injection check. Both are its
+    own text. A real value restored into such a command still masks: it went out masked."""
+    import base64
+
+    url = "postgres://orders:x@db"
+    out = base64.b64encode(url.encode()).decode()
+    cmd = f"printf 'info' | base64; printf '{url}' | base64"
+    r = Redactor(Pipeline(RulesDetector(), None, pii=False), Vault(bytes(32)))
+    body = r.redact_request(_turn({"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": cmd}}]},
+                                  {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": f"aW5mbw==\n{out}"}]}))
+    assert out in json.dumps(body) and not r.counts and r.tool_results == []
+
+    real = "postgres://orders:I705gxxHJzPmZWUKXk@db.internal:5432/orders"
+    r = Redactor(Pipeline(RulesDetector(), None, pii=False), Vault(bytes(32)))
+    r.redact_text(f"DATABASE_URL={real}")  # masked before; the model's command gets it restored
+    enc = base64.b64encode(real.encode()).decode()
+    body = r.redact_request(_turn({"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "Bash",
+                                                                     "input": {"command": f"printf '{real}' | base64"}}]},
+                                  {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": enc}]}))
+    assert enc not in json.dumps(body) and "I705gxxHJzPmZWUKXk" not in json.dumps(body)

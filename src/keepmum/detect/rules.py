@@ -119,6 +119,10 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
         if c == "<" and text.startswith("</", i):  # a closing tag ends it: a .docx's XML (doc-03, Nov 18)
             break
         i += 1
+    if _EMPTY_ASSIGNMENT.fullmatch(text[start:i]):
+        # Another name set to nothing, printed by a script: `aws_iam_access_key.ci: ARN=None`
+        # (cloud-01 on Codex, Nov 24). No value is in it.
+        return None
     if _VARIABLE.fullmatch(text[start:i].replace("\\", "").rstrip("$")):
         # A variable's name, escaped for a pattern: `re.search(r'_authToken=\$\{NPM_TOKEN\}$', npmrc)`
         # checks that .npmrc names the variable (git-01 on opencode, Nov 23). The reference, not a value.
@@ -128,6 +132,8 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
 
 # An object or list opening where a value would: `{'name':`, `[\"a\",`, its first key or item quoted.
 _NESTED = re.compile(r"""[{\[]\s*(?P<q>\\*['"])[\w.-]*(?P=q)\s*[:,\]}]""")
+# `NAME=None`, `name=null`: a name set to an empty literal, where a value would be.
+_EMPTY_ASSIGNMENT = re.compile(r"[A-Za-z_][\w.-]{0,40}=(?:None|null|NULL|Null|nil|undefined|N/A|)")
 # `$NAME` or `${NAME}`: a variable the value comes from, not the value.
 _VARIABLE = re.compile(r"\$\{[A-Za-z_]\w*\}|\$[A-Z_][A-Z0-9_]*")  # not `$ecr3tPass`: a password may start with `$`
 
@@ -206,8 +212,18 @@ _PATH_OF_WORDS = re.compile(rf"\.{{0,2}}/?(?:{_WORDISH}(?:[-_.]{_WORDISH})*/)+{_
 
 def is_path(value: str) -> bool:
     """value is a path of named pieces, with or without an extension (bench/results/PHASE0); not a
-    key that happens to hold a slash (wJalrXUtnFEMI/K7MDENG/…, whose pieces mix case at random)."""
-    return "/" in value and bool(_PATH_OF_WORDS.fullmatch(value))
+    key that happens to hold a slash (wJalrXUtnFEMI/K7MDENG/…, whose pieces mix case at random). A
+    piece may be a hash, as in a link to a commit's file (`…/blob/537a48f3…/Misc/NEWS.d/…`, cut at
+    the hash when pi wrapped the page: wf-03, Nov 24), with two named pieces beside it."""
+    if "/" not in value:
+        return False
+    if _PATH_OF_WORDS.fullmatch(value):
+        return True
+    named = _HASH_PIECE.sub("h", value)
+    return named != value and sum(1 for x in named.split("/") if x and x != "h") >= 2 and bool(_PATH_OF_WORDS.fullmatch(named))
+
+
+_HASH_PIECE = re.compile(r"(?<![^/])[0-9a-f]{7,64}(?![^/])")  # a whole piece of lowercase hex
 
 
 # An absolute path on this Mac (or a Linux box), from a root folder, as tools print them: a workspace,
