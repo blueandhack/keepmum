@@ -134,8 +134,9 @@ def of(exchanges) -> Usage:
         if ex.method != "POST" or ex.status != 200:
             continue
         events = _events(ex.reply.decode("utf-8", "replace"))
-        hit = _anthropic(events) if ex.target in ("anthropic", "deepseek") else _responses(events) \
-            if ex.target in ("openai", "chatgpt") else None
+        # DeepSeek answers in the format it was asked in: Messages, or Responses for Codex.
+        responses = ex.target in ("openai", "chatgpt") or ex.target == "deepseek" and ex.path.split("?")[0].endswith("/responses")
+        hit = _responses(events) if responses else _anthropic(events) if ex.target in ("anthropic", "deepseek") else None
         if hit:
             total.add(*hit)
     return total

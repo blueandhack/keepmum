@@ -481,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--cheap", action="store_true", help="--auth keys: each agent's smallest model")
     r.add_argument("--provider", choices=["deepseek"],
                    help="--auth keys: DeepSeek (KEEPMUM_DEEPSEEK_API_KEY) through keepmum as a gateway, for the "
-                        "agents that speak the Messages API (Claude Code, pi, opencode)")
+                        "agents that speak the Messages API (Claude Code, pi, opencode) or the Responses API (Codex)")
     r.add_argument("--agent-arg", action="append", default=[], help="extra argument for the agent, repeatable")
     r.add_argument("--keep", action="store_true", help="keep transcripts and requests (values shown as {{v:name}})")
     r.add_argument("-j", "--jobs", type=int, default=1,
@@ -527,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
             if not agent.available():
                 reason = f"{agent.binary} is not installed"
             elif args.mode == "live" and args.auth == "keys" and args.provider == "deepseek" and not agent.deepseek:
-                reason = f"{agent.name} does not speak the Messages API, DeepSeek's format keepmum scans"
+                reason = f"{agent.name} speaks neither the Messages nor the Responses API, DeepSeek's formats keepmum scans"
             elif args.mode == "live" and args.auth == "keys" and not agent.key_auth:
                 reason = f"{agent.name} signs in with Google, not an OpenAI or Anthropic key"
             elif case.mcp and args.mode not in agent.mcp_modes:

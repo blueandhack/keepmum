@@ -37,12 +37,13 @@ AUTH = {"mode": "login", "cheap": False, "provider": None}
 KEY_VARS = {"openai": "KEEPMUM_OPENAI_API_KEY", "anthropic": "KEEPMUM_CLAUDE_API_KEY",
             "deepseek": "KEEPMUM_DEEPSEEK_API_KEY"}
 # `--provider deepseek`: DeepSeek through keepmum, as a gateway in front of its Anthropic-format
-# endpoint (keepmum scans no Chat Completions, DeepSeek's other format, and refuses it). Claude
-# Code, pi and opencode speak that format; Codex only OpenAI's Responses API, agy only Google's.
+# endpoint (keepmum scans no Chat Completions, DeepSeek's other format, and refuses it), which Claude
+# Code, pi and opencode speak, and its Responses API, which Codex speaks (DeepSeek's Codex guide,
+# api-docs.deepseek.com, Nov 2026). agy speaks only Google's.
 DEEPSEEK_MODELS = ("deepseek-v4-pro", "deepseek-flash")  # (default, --cheap)
 # Provider keys never reach an agent unless its run sets one: a key in the user's shell (or a
 # template value) would decide which account an agent uses, and its shell commands could read it.
-_PROVIDER_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", *KEY_VARS.values())
+_PROVIDER_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "DEEPSEEK_API_KEY", *KEY_VARS.values())
 
 
 def keys() -> bool:
@@ -118,6 +119,7 @@ class Codex(Agent):
         return "openai" if keys() or codex_auth_mode() == "apikey" else "chatgpt"
 
     KEY_MODELS = ("gpt-6.1-sol", "gpt-6-luna")  # --auth keys: (default, --cheap)
+    deepseek = True
 
     def command(self, ws, port, prompt, real_home, out, model, extra, mcp=None, mode="live"):
         from keepmum.clients import codex_args
@@ -137,6 +139,11 @@ class Codex(Agent):
                         "http_headers": {"x-keepmum-client": "codex"}}
             env["OPENAI_API_KEY"] = api_key("openai")
             model = model or self.KEY_MODELS[AUTH["cheap"]]
+            if deepseek():  # DeepSeek's Responses API, through keepmum's gateway route for it (Codex adds /responses)
+                provider.update(base_url=f"http://127.0.0.1:{port}/gateway/deepseek", env_key="DEEPSEEK_API_KEY")
+                env.pop("OPENAI_API_KEY")
+                env["DEEPSEEK_API_KEY"] = api_key("deepseek")
+                model = deepseek_model(None if model in self.KEY_MODELS else model)
         argv = [shutil.which(self.binary), "exec", "--json", "--skip-git-repo-check", "--ephemeral",
                 "--ignore-user-config", "-s", "workspace-write", "-C", str(ws), "-o", str(out / "final.txt"),
                 *codex_args(port, provider), *servers, *(["-m", model] if model else []), *extra, prompt]
