@@ -438,7 +438,7 @@ class OpenCode(Agent):
     name, binary, api = "opencode", "opencode", "anthropic"
     NETWORK = frozenset({"webfetch", "websearch"})  # sent from this Mac, or by the provider
     deepseek = True
-    MODEL = "anthropic/claude-opus-4-5"
+    MODEL = "anthropic/claude-opus-5-5"  # scripted: one models.dev lists as current (4-5 deprecated, Nov 23: opencode refused it)
     LIVE_MODEL = "openai/gpt-6.1-sol"
     KEY_MODELS = ("openai/gpt-6.1-sol", "openai/gpt-6-luna")  # --auth keys, OpenAI: (default, --cheap)
 

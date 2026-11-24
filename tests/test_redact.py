@@ -668,3 +668,14 @@ def test_a_guess_at_what_the_model_wrote_is_none_but_a_value_restored_into_it_st
                                                                      "input": {"command": f"echo ADMIN_PASS:{pw} > creds"}}]},
                                  {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": f"saved {pw}"}]}))
     assert pw not in json.dumps(out)
+
+
+def test_a_guess_gives_way_over_a_string_literals_prefix():
+    """rotate-01 on opencode (Nov 23): the model's script held `needle=b'sk_live_…'`, the model flagged
+    `b'sk_live_…`, and the placeholder took the `b'` with it. The format rule's span is the one masked."""
+    key = "sk_" "live_51HxQz8wSPedxSdC6KOqnWj0rEyw"
+    for lit in (f"needle=b'{key}'", f'key = r"{key}"', f"f'{key}'"):
+        prefix = lit[:lit.index(key)].rstrip("'\"").rstrip("bBrRuUfF")
+        r = Redactor(Pipeline(RulesDetector(), _Flags(lit[len(prefix):].rstrip("'\"")), pii=False), Vault(bytes(32)))
+        out = r.redact_text(lit)
+        assert key not in out and out.replace(r.vault.placeholder("SECRET", key), "KEY") == lit.replace(key, "KEY")

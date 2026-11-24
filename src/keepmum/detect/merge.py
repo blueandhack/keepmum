@@ -47,7 +47,9 @@ def narrow(spans: list[Span], text: str) -> list[Span]:
 
 # What a guess may add around a value a format rule found exactly, and still be about that value:
 # the user and colon before a password, the host, port and database after it.
-_BEFORE = re.compile(r"(?:[\w.+%-]*:|s?[/|#]|['\"=])?")  # also `s/` of a sed expression (rotate-01)
+# Also `s/` of a sed expression (rotate-01), and a string literal's prefix: `b'sk_live_…'` in a Python
+# script (rotate-01 on opencode, Nov 23).
+_BEFORE = re.compile(r"(?:[\w.+%-]*:|s?[/|#]|[bBrRuUfF]{0,2}['\"]|=)?")
 _AFTER = re.compile(r"(?:@(?:[\w.-]+(?::\d+)?(?:/[\w./-]*)?)?|[/|#]\w*/?|['\"])?")  # the @ alone too (git-01), a sed's /…/
 
 
