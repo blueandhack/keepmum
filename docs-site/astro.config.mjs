@@ -21,6 +21,8 @@ export default defineConfig({
 			logo: { src: './src/assets/logo.svg', alt: 'keepmum' },
 			favicon: '/favicon.svg',
 			social: [{ icon: 'github', label: 'GitHub', href: repo }],
+			// keepmum.app's home in the header, beside GitHub: the logo goes to the docs' front page.
+			components: { SocialIcons: './src/components/SocialIcons.astro' },
 			editLink: { baseUrl: `${repo}/edit/main/docs-site/` },
 			lastUpdated: true,
 			customCss: ['./src/styles/keepmum.css'],
