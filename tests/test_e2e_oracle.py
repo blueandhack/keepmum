@@ -85,3 +85,20 @@ def test_the_workspace_the_case_expects(tmp_path):
     (tmp_path / ".git" / "HEAD").write_text("x")
     (tmp_path / "a.txt").write_text("a")
     assert set(snapshot(tmp_path)) == {"a.txt"}
+
+
+def test_a_piece_of_a_masked_encoded_value_is_no_false_mask():
+    """k8s-01 on Claude Code (Nov 24): it printed a Secret's values cut short to check them, and keepmum
+    masked each as a piece of the base64 it had masked whole. A piece of a value that encodes a declared
+    one is that value; a short or unrelated one is still a false mask."""
+    import base64
+
+    pw = "I705gxxHJzPmZWUKXk"
+    url = f"postgres://orders:{pw}@db.internal:5432/orders"
+    whole = base64.b64encode(url.encode()).decode()
+    c = case(values={"pw": Value("pw", pw, "SECRET", must_mask=False)}, expect={"masked_none": True})
+    masked = {"KEEPMUM_SECRET_00000001": ("SECRET", whole), "KEEPMUM_SECRET_00000002": ("SECRET", whole[:24]),
+              "KEEPMUM_SECRET_00000003": ("SECRET", "kind=Secret")}
+    found, _ = run(c, masked=masked)
+    flagged = {w for cls, w in found if cls == "false-mask"}
+    assert len(flagged) == 1 and "kind=Secret" in next(iter(flagged))

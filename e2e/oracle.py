@@ -295,9 +295,14 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
     # unless `may_mask` (regexes) allows it. The model then worked from a placeholder, not the text.
     if case.expect.get("masked_none"):
         allowed = [re.compile(p) for p in case.expect.get("may_mask", [])]
+        # Values keepmum masked that encode a declared one: a Secret's base64 of DATABASE_URL.
+        encoded = [w for _, w in masked.values() if w not in declared and _encodes(w, declared)]
         for ph, (kind, value) in sorted(masked.items(), key=lambda x: x[1]):
             # A long piece of a declared value is that value: half a key printed (`head -c 20`, k8s-01 on pi).
-            piece = len(value) >= 12 and any(value in d for d in declared) or _dumps_a_piece(value, declared)
+            # So is a long piece of one encoded: a Secret's values printed cut short to check them, keepmum
+            # masking each as a piece of the base64 it masked whole (k8s-01 on Claude Code, Nov 24).
+            piece = (len(value) >= 12 and any(value in d for d in declared) or _dumps_a_piece(value, declared)
+                     or len(value) >= 12 and any(value in w and value != w for w in encoded))
             if value not in declared and not piece and not _encodes(value, declared) and not any(a.search(value) for a in allowed):
                 out.append(Finding("false-mask", f"{value[:80]!r} was masked as {kind}, in a case with nothing to mask", ph))
     vault = Vault(salt)
