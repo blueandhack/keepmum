@@ -29,7 +29,10 @@ jobs:
           # keepmum ships an .app in a DMG, not a .pkg, and signs its feed (SURequireSignedFeed), the
           # advisory's own mitigation. Its fix, 2.11, is a beta for now: move to 2.11.0 when it is
           # released (Package.swift, sparkle-tools.sh), then drop this.
-          extra-args: --ignore GHSA-gcjm-h3jh-p2vc
+          # GHSA-g36m-r6gw-cj73 (anyio 4.5.0 through 4.16.0, Nov 19): run_process()/open_process() given
+          # one Path run it through the shell. keepmum calls neither; the only caller in the app is anyio's
+          # own to_process, with a list. No fixed version yet: update anyio when there is, then drop this.
+          extra-args: --ignore GHSA-gcjm-h3jh-p2vc --ignore GHSA-g36m-r6gw-cj73
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
