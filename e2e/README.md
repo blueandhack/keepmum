@@ -44,6 +44,25 @@ under the name it reads (Codex through its provider's `env_key`, so no key is wr
 file). Claude Code gets a config folder of its own and opencode a data folder of its own, so no
 login is there to prefer; a key in the user's shell (`OPENAI_API_KEY`) reaches no agent in any mode.
 
+`op run` asks to unlock 1Password. To stop typing the password, either:
+
+- **Touch ID.** In the 1Password app, turn on Settings → Security → Touch ID and Settings → Developer →
+  Integrate with 1Password CLI. An unlock lasts in that terminal until 10 minutes pass without an `op`
+  command, and 12 hours at most.
+- **A service account** (no prompt at all). Create one on 1Password.com with read access to the
+  `Develop` vault only, and keep its token (`ops_…`, shown once) in the login keychain:
+
+  ```sh
+  # with the token on the clipboard; the -w prompt keeps only 128 characters, and a token is ~850
+  security add-generic-password -U -a "$USER" -s op-keepmum-e2e -w "$(pbpaste)" && pbcopy </dev/null
+  OP_SERVICE_ACCOUNT_TOKEN=$(security find-generic-password -s op-keepmum-e2e -w) \
+    op run --env-file e2e/keys.env -- .venv/bin/python -m e2e run --mode live --auth keys --cheap
+  ```
+
+  `op run` in `release-check.sh` uses the token too when `OP_SERVICE_ACCOUNT_TOKEN` is set
+  for `mac/release.sh`. Anything running as the user can read the keys through it unasked: keep its
+  access to that one vault. `DecodeSACredentials … unexpected end of JSON input` means a cut-off token.
+
 Every live run reports what it cost: each result line ends with its cost, and the end of the run
 (and `summary.md`) has a table per agent, from the token usage each provider reported in its
 replies, priced in `e2e/cost.py`. On a login it is what the same run would cost on an API key.
