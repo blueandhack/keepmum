@@ -480,6 +480,22 @@ def test_a_guess_at_a_checksum_with_its_label_or_cut_short_is_none(guess):
     assert not r.counts and guess in out
 
 
+def test_a_guess_that_starts_inside_a_digest_label_is_no_secret():
+    """deploy-01 on Claude Code (Nov 25): in `FROM python:3.12-slim@sha256:<hex>` the model took `256:<hex>`,
+    its span starting inside the label, so the checksum the request shows was not recognized."""
+    digest = "2f7e1b0d3f1a6c5e4b8a9d0c7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f"
+    dockerfile = f"FROM python:3.12-slim@sha256:{digest}\nWORKDIR /app\n"
+
+    class Inside:
+        def detect(self, text):
+            i = text.find("256:" + digest)
+            return [Span(i, i + 4 + len(digest), "SECRET", 0.97, "pf-serve")] if i >= 0 else []
+
+    r = Redactor(Pipeline(RulesDetector(), Inside(), pii=False), Vault(bytes(32)))
+    out = json.dumps(r.redact_request(_checking("docker build .", dockerfile)))
+    assert not r.counts and digest in out
+
+
 # --- Guesses: none in the model's own text, none at a value already sent (Redactor._spans) -------------
 
 UUID = "9b2e4c71-5d0a-4f3e-8c6b-2a7d1e9f0c35"
@@ -728,6 +744,9 @@ def test_a_name_set_to_nothing_and_a_path_through_a_commit_are_no_secrets():
     rules = RulesDetector()
     assert not rules.detect("- aws_iam_access_key.ci: ARN=None; region=None")
     assert not rules.detect("k8s/secret.yaml: kind=Secret name=orders-env")  # a name set to a word (k8s-01 on agy)
+    assert not rules.detect("aws_iam_access_key.ci: arn=(none), region=(none)")  # in brackets (cloud-01, Nov 25)
+    assert not rules.detect("secret_key: value=<nil>")
+    assert rules.detect("secret_key: value=(Xk9mPq2vLw7RtZab4)")  # a value in brackets is still one
     assert rules.detect("api_token.txt: Xk9mPq2vLw7RtZab4")  # a file printed with its name before it: still a value
     assert [s.source for s in rules.detect("secret_key: NAME=Xk9mPq2vLw7RtZab")] == ["rules:secret-assignment"]
     assert is_path("537a48f3f5c063/Misc/NEWS") and not is_path("wJalrXUtnFEMI/K7MDENG/bPxRfiCY")

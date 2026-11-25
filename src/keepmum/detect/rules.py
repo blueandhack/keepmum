@@ -119,7 +119,7 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
         if c == "<" and text.startswith("</", i):  # a closing tag ends it: a .docx's XML (doc-03, Nov 18)
             break
         i += 1
-    if (m := _EMPTY_ASSIGNMENT.fullmatch(text[start:i])) and _plain_word(m.group(1)):
+    if (m := _EMPTY_ASSIGNMENT.fullmatch(text[start:i])) and _plain_word(next(g for g in m.groups() if g is not None)):
         # Another name set to nothing, or to a plain word, printed by a script: `aws_iam_access_key.ci:
         # ARN=None` (cloud-01 on Codex), `k8s/secret.yaml: kind=Secret` (k8s-01 on agy, Nov 24). No
         # value is in it.
@@ -134,7 +134,8 @@ def assignment_value(text: str, start: int, opening: str, key: str, limit: int =
 # An object or list opening where a value would: `{'name':`, `[\"a\",`, its first key or item quoted.
 _NESTED = re.compile(r"""[{\[]\s*(?P<q>\\*['"])[\w.-]*(?P=q)\s*[:,\]}]""")
 # `NAME=None`, `kind=Secret`: a name set to an empty literal or a plain word, where a value would be.
-_EMPTY_ASSIGNMENT = re.compile(r"[A-Za-z_][\w.-]{0,40}=([A-Za-z/]{0,16})")
+# The word may be in brackets: `arn=(none)`, `<nil>` (cloud-01 on Codex, Nov 25).
+_EMPTY_ASSIGNMENT = re.compile(r"[A-Za-z_][\w.-]{0,40}=(?:\(([A-Za-z/]{0,16})\)|<([A-Za-z/]{0,16})>|([A-Za-z/]{0,16}))")
 
 
 def _plain_word(value: str) -> bool:

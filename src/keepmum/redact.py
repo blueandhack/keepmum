@@ -219,8 +219,9 @@ def _gemini_results(contents) -> dict[int, str]:
 _CHECKSUM = re.compile(r"(?i)(?:\bh1:|\bsha(?:1|224|256|384|512)[-:]|\bintegrity\\?[\"']?\s*[:=]?\s*\\?[\"']?(?:sha\d+-)?"
                        r"|\bchecksum\\?[\"']?\s*[:=]\s*\\?[\"']?)([A-Za-z0-9+/_-]{16,})={0,2}")
 CHECKSUMS = 4096  # checksum values kept, the newest
-# A checksum's label at the start of a guessed span (`sha512-oUsD…`, `h1:68Rb…`), and anything before it.
-_CHECKSUM_LABEL = re.compile(r"(?i)^.*?(?:h1:|sha(?:1|224|256|384|512)[-:])")
+# A checksum's label at the start of a guessed span (`sha512-oUsD…`, `h1:68Rb…`), and anything before it; or
+# the end of one the span began inside (`256:2f7e…` of `slim@sha256:2f7e…`: deploy-01 on Claude Code, Nov 25).
+_CHECKSUM_LABEL = re.compile(r"(?i)^(?:.*?(?:h1:|sha(?:1|224|256|384|512)[-:])|(?:1|224|256|384|512)[-:])")
 # What only guessed a value (the model, entropy) or knew it from such a guess before: not a format rule's find.
 _GUESSED = frozenset({"rules:entropy", "pf-serve", "known"})
 _ONLY_PLACEHOLDERS = re.compile(r"\s*(?:KEEPMUM_[A-Z]+_[0-9a-f]{8,12}\s*)+")
