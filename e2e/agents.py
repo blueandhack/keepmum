@@ -287,8 +287,9 @@ class Antigravity(Agent):
         # Headless agy denies every command no rule allows. This rule holds for this session only
         # (--settings is never saved). Live, --sandbox restricts the terminal, as Claude Code's does.
         # Scripted, the commands are the case's own, and agy's sandbox, in a HOME of its own, would
-        # refuse every write to the workspace.
-        settings = json.dumps({"permissions": {"allow": ["command(*)", *(["mcp(*)"] if mcp else [])]}})
+        # refuse every write to the workspace. Reading a file outside the workspace asks too, and headless it
+        # is denied: a chart the model saved to /tmp and read back ended nb-01 with no answer (Nov 25).
+        settings = json.dumps({"permissions": {"allow": ["command(*)", "read_file(*)", *(["mcp(*)"] if mcp else [])]}})
         argv = [shutil.which(self.binary), "-p", prompt, "--output-format", "stream-json", "--mode", "accept-edits",
                 *(["--sandbox"] if mode == "live" else []), "--settings", settings,
                 *(["--model", model] if model else []), *extra]
