@@ -62,6 +62,9 @@ AGENT_NOTICE = re.compile(r"Claude requested permissions to (?:edit|write to|wri
                           # Claude Code 2.1's notice for a compound command it holds for approval, the part on one
                           # line: scored 0.9997 (k8s-01 on Claude Code, Nov 23).
                           r"|This (?:Bash )?command contains multiple operations\. The following parts? requires? approval: [^\n]{1,400}"
+                          # Its notice for a command with shell operators, a fixed text: scored 0.937 (doc-02 on
+                          # Claude Code, Nov 25).
+                          r"|This command uses shell operators that require approval for safety\.?"
                           # A file system's error as Node prints it, from pi's and opencode's own tools:
                           # `EISDIR: illegal operation on a directory, read` scored 0.489 (wf-01 on pi, Nov 19).
                           r"|E[A-Z]{3,9}: [a-z][a-z ]{4,60}(?:, [a-z]{2,12})?(?: '\S{1,400}')?")
