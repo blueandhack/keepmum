@@ -207,9 +207,17 @@ def _blob_text(m: re.Match) -> str:
     return "[data]"
 
 
+# A carriage return in blank space, alone (not a CRLF's): what a page's source keeps of its line breaks when
+# its tags are stripped. Read as a line break: the second model scored the python.org downloads table 0.135
+# with 19 of them, 0.0000012 with line breaks (wf-03 on pi, Nov 25). One that touches text stays: a CR that
+# moves the cursor back can hide text in a terminal, and as written it is part of an attack's shape (three
+# llmail attacks were set aside with every CR a line break; none with this).
+_BLANK_CR = re.compile(r"(?<=[ \t\r\n])\r(?=[ \t\r])")
+
+
 def scored_text(text: str) -> str:
-    """What the checks score of a tool result: the output inside Codex's wrapper, and each long blob of
-    base64 or hex as its text or a mark. Random base64 made the injection model jumpy: a kubeconfig's
+    """What the checks score of a tool result: the output inside Codex's wrapper, a carriage return in
+    blank space as a line break (_BLANK_CR), and each long blob of base64 or hex as its text or a mark. Random base64 made the injection model jumpy: a kubeconfig's
     certificate, key and token scored 0.25-0.55 with line numbers and 0.0 without them, and a 26-character
     output scored 0.914 in Codex's wrapper (cloud-01, nb-01, Nov 19). Masking still sees the text whole."""
     stripped = text.strip()
@@ -220,7 +228,7 @@ def scored_text(text: str) -> str:
             doc = None
         if isinstance(doc, dict) and isinstance(doc.get("output"), str) and _CODEX_WRAPPER_KEYS & set(doc):
             text = doc["output"]
-    return _BLOB.sub(_blob_text, text)
+    return _BLOB.sub(_blob_text, _BLANK_CR.sub("\n", text))
 
 
 class GuardError(RuntimeError):
@@ -491,7 +499,7 @@ def flagged_file() -> Path:
 
 
 # What a flagged row keeps of its hit: never the text.
-FLAGGED_KEPT = ("check", "source", "score", "chars", "categories", "carried")
+FLAGGED_KEPT = ("check", "source", "score", "chars", "categories", "carried", "second")
 
 
 class FlaggedStore:
@@ -668,7 +676,8 @@ class Guard:
             else:
                 s = _score(self.model, scored, self.threshold_for(len(scored)))
                 # Set aside by the second model, it is no hit of its own; it may still repeat a flagged piece.
-                if s < self.threshold_for(len(scored)) or not self._confirmed(scored):
+                second = self._second(scored) if s >= self.threshold_for(len(scored)) else None
+                if s < self.threshold_for(len(scored)) or not second["stands"]:
                     carried = self._carried(scored) if self.carry else None
                     if carried is None:
                         continue
@@ -676,6 +685,8 @@ class Guard:
             hit = {"check": self.name, "source": source, "score": s, "chars": len(scored), "earlier": False}
             if carried is not None:
                 hit["carried"] = True  # it repeats part of a result flagged before
+            elif second is not None and second["second"] is not None:
+                hit["second"] = second["second"]  # what the second opinion said: its score, "failed" or "missing"
             categories = getattr(self.model, "categories", None)
             if carried is not None:
                 hit["categories"] = list(carried.get("categories") or [])
@@ -696,24 +707,26 @@ class Guard:
             hit_keys.add(key)
         return hits
 
-    def confirming(self) -> bool:
-        """The second model is on and in place: a new hit needs its agreement."""
-        return self.confirm is not None and bool(self._confirm_on()) and getattr(self.confirm, "available", lambda: True)()
-
-    def _confirmed(self, text: str) -> bool:
-        """Whether a new hit stands: the second model agrees, or is off, missing or failing."""
-        if not self.confirming():
-            return True
+    def _second(self, text: str) -> dict:
+        """The second opinion on a new hit: whether it stands, and `second`, what the hit keeps of it
+        (the second model's score; "failed" or "missing" when a hit stood without it; None when the
+        second opinion is off). A hit that stood without it says so: a false alarm the second model
+        would have set aside is told from one it agreed with (wf-03 on pi, Nov 25)."""
+        if self.confirm is None or not self._confirm_on():
+            return {"stands": True, "second": None}
+        if not getattr(self.confirm, "available", lambda: True)():
+            return {"stands": True, "second": "missing"}
         try:
             c = _score(self.confirm, text, self.confirm_threshold)
         except Exception as e:  # a hit stands without its second opinion
-            logging.getLogger("keepmum").warning("%s check: the second model failed, the hit stands: %s", self.name, e)
-            return True
+            logging.getLogger("keepmum").warning("%s check: the second model failed, the hit stands: %s: %s",
+                                                 self.name, type(e).__name__, e)
+            return {"stands": True, "second": "failed"}
         if c >= self.confirm_threshold:
-            return True
+            return {"stands": True, "second": round(c, 6)}
         with self._lock:
             self.vetoed += 1
-        return False
+        return {"stands": False, "second": round(c, 6)}
 
     def narrow(self, text: str, parts: list[str]) -> None:
         """What later text carries of the flagged `text` is only `parts` of it: what a hand-back took

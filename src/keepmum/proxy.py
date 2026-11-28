@@ -1854,8 +1854,11 @@ class Proxy:
                     else f"a {h['source'] or 'tool'} result")
             done = ("sent to the agent as a refusal" if guard.name == "commands" else "request not sent") \
                 if action == "blocked" else "sent to the local model instead" if action == "local" else "sent (warn)"
-            log.warning("%s: %s check flagged %s (score %.2f, %d chars%s): %s", path, guard.name, what, h["score"],
-                        h["chars"], ", flagged before" if h["earlier"] else "", done)
+            second = h.get("second")
+            second = ("" if second is None else f", second opinion {second:.4f}" if isinstance(second, (int, float))
+                      else f", second opinion {second}")
+            log.warning("%s: %s check flagged %s (score %.2f, %d chars%s%s): %s", path, guard.name, what, h["score"],
+                        h["chars"], second, ", flagged before" if h["earlier"] else "", done)
         threshold = getattr(guard, "threshold", None)
         about = {"mode": guard.mode, "path": path,
                  "model": getattr(getattr(guard, "model", None), "label", None) or getattr(guard, "label", None),
@@ -1865,7 +1868,7 @@ class Proxy:
             client, provider = origin or (None, None)
             self.audit.append("guard", client=client, provider=provider, path=path, check=guard.name, action=action,
                               hits=[{k: (round(v, 3) if k == "score" else v) for k, v in h.items()
-                                     if k in ("source", "score", "chars", "earlier", "categories")} for h in hits])
+                                     if k in ("source", "score", "chars", "earlier", "categories", "second")} for h in hits])
         return entries
 
     def _restore(self, data: dict, counts: Counter, api: str = "messages", policy: ToolPolicy | None = None) -> dict:

@@ -525,7 +525,9 @@ class Stats:
                               "check": h.get("check", "injection"),
                               "source": h.get("source"), "score": round(h["score"], 3), "chars": h["chars"],
                               "categories": h.get("categories"), "earlier": h.get("earlier", False),
-                              "action": action, "client": client, "provider": provider, **(about or {})})
+                              "action": action, "client": client, "provider": provider, **(about or {}),
+                              # The second opinion (Guard._second): its score, or why the hit stood without it.
+                              **({"second": h["second"]} if "second" in h else {})})
                 text, prompt = (shown[i] if shown and i < len(shown) else (None, None))
                 if text or prompt:
                     self.check_texts[self._check_seq] = {"text": text, "prompt": prompt}
