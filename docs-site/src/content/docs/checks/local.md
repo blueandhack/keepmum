@@ -43,7 +43,7 @@ The recommended one passed every test run, writes about 85 tokens a second on an
 
 Hugging Face lets downloads go faster signed in: `keepmum guard local splash --hf-token` reads a token on stdin and saves it where Splash's downloader looks (`~/.cache/huggingface/token`, as `hf auth login` does), and Splash uses it from its next start. Do it first: a download that stops starts over.
 
-Splash frees its memory after 5 minutes without a request (`--idle`), as Ollama does, and loads it again in about 4 seconds when one comes; started, it is ready in about 10. `--stop` stops it and removes the LaunchAgent. Without `--start`, keepmum prints the command to run it in a terminal yourself. In the Mac app, Add server › Splash, then Start on its row; Stop stops it.
+Splash frees its memory after 5 minutes without a request (`--idle`), as Ollama does, and loads it again in about 4 seconds when one comes; started, it is ready in about 10. `--stop` stops it and removes the LaunchAgent. When a newer Splash is installed (`brew upgrade splash`), the old one goes on running until it stops, so keepmum looks every 10 minutes and starts it again on the new version, at a moment when it is answering no request. Without `--start`, keepmum prints the command to run it in a terminal yourself. In the Mac app, Add server › Splash, then Start on its row; Stop stops it.
 
 ## Context size
 

@@ -240,6 +240,70 @@ def restart(**changes) -> dict | None:
     return m
 
 
+# A Splash Homebrew installed runs from its version's folder (/opt/homebrew/Cellar/splash/1.7.2/…), and
+# `brew upgrade` puts the new one in another and removes the old: the Splash keepmum runs goes on with
+# the old one, loaded, until it stops (Nov 27, 2026: 1.7.2 ran on after 1.7.3 was in place).
+_CELLAR = re.compile(r"/Cellar/splash/([^/\s]+)/")
+WATCH_S = 600.0  # how often the engine looks for a newer Splash (watch_upgrades)
+
+
+def running_pid() -> int | None:
+    """The process of the Splash keepmum runs, as launchd says, or None."""
+    r = _launchctl("print", f"{_domain()}/{LABEL}")
+    m = re.search(r"^\s*pid = (\d+)", r.stdout, re.M) if r.returncode == 0 else None
+    return int(m.group(1)) if m else None
+
+
+def _program(pid: int) -> str | None:
+    """The executable a process runs, the first word of its command line."""
+    try:
+        r = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (r.stdout.split() or [None])[0]
+
+
+def superseded() -> str | None:
+    """What replaced the Splash keepmum runs, when one did: the installed version ("1.7.3"), or "a new
+    Splash" when the files it runs from are gone. None when it runs the installed one, or keepmum
+    cannot tell (it runs none, or not from Homebrew's folders)."""
+    if managed() is None or (pid := running_pid()) is None:
+        return None
+    program, exe = _program(pid), find()
+    if not program or not exe:
+        return None
+    now, installed = _CELLAR.search(program), _CELLAR.search(os.path.realpath(exe))
+    if now and installed:
+        return installed.group(1) if now.group(1) != installed.group(1) else None
+    return "a new Splash" if program.startswith("/") and not os.path.exists(program) else None
+
+
+def busy(port: int, timeout: float = 2.0) -> bool | None:
+    """Whether the Splash on `port` is answering a request now; None if it does not say."""
+    import httpx
+
+    try:
+        r = httpx.get(f"http://127.0.0.1:{port}/status", timeout=timeout)
+        active = r.json().get("active_requests") if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return None
+    return bool(active) if isinstance(active, list) else None
+
+
+def restart_if_upgraded() -> str | None:
+    """Start the Splash keepmum runs again when a newer one is installed, and it is not answering a
+    request (a restart would cut it off): it then reloads its model, ready in about 10 s. Returns what
+    replaced it, or None if nothing was done (the next look tries again)."""
+    new = superseded()
+    if new is None:
+        return None
+    m = managed()
+    if not m or not m["port"] or busy(m["port"]) is not False:
+        return None
+    restart()
+    return new
+
+
 def context_info(url: str, timeout: float = 2.0) -> dict | None:
     """What a Splash at `url` says of its context: the limit it runs with, the model's own window,
     and its cache's bytes a token; None if nothing answers or it does not say."""

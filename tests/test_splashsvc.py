@@ -285,6 +285,43 @@ def test_restart_keeps_what_it_does_not_change(mac):
     assert splashsvc.managed() == {"model": SPEC, "port": 8001, "idle": "off", "context": 131072}
 
 
+def test_a_newer_splash_installed_starts_the_one_keepmum_runs_again_when_idle(mac, monkeypatch):
+    # `brew upgrade splash` put 1.7.3 in place and removed 1.7.2, which went on running (Nov 27, 2026).
+    running = {"program": "/opt/homebrew/Cellar/splash/1.7.2/libexec/python/bin/python3", "busy": False}
+    monkeypatch.setattr(splashsvc, "running_pid", lambda: 4242)
+    monkeypatch.setattr(splashsvc, "_program", lambda pid: running["program"])
+    monkeypatch.setattr(splashsvc.os.path, "realpath", lambda p: "/opt/homebrew/Cellar/splash/1.7.3/bin/splash")
+    monkeypatch.setattr(splashsvc, "busy", lambda port: running["busy"])
+    restarts = []
+    monkeypatch.setattr(splashsvc, "restart", lambda **kw: restarts.append(kw))
+    assert splashsvc.superseded() is None and splashsvc.restart_if_upgraded() is None  # keepmum runs no Splash
+    splashsvc.start(SPEC, 8000)
+    assert splashsvc.superseded() == "1.7.3"
+    running["busy"] = True  # answering a request: a restart would cut it off, so the next look tries again
+    assert splashsvc.restart_if_upgraded() is None and restarts == []
+    running["busy"] = None  # it did not say
+    assert splashsvc.restart_if_upgraded() is None and restarts == []
+    running["busy"] = False
+    assert splashsvc.restart_if_upgraded() == "1.7.3" and len(restarts) == 1
+    # on the installed one, nothing to do
+    running["program"] = "/opt/homebrew/Cellar/splash/1.7.3/libexec/python/bin/python3"
+    assert splashsvc.superseded() is None
+    # not from Homebrew's folders: only files that are gone tell
+    monkeypatch.setattr(splashsvc.os.path, "realpath", lambda p: "/usr/local/bin/splash")
+    running["program"] = str(mac[0] / "gone" / "python3")
+    assert splashsvc.superseded() == "a new Splash"
+    running["program"] = "/bin/sh"
+    assert splashsvc.superseded() is None
+
+
+def test_the_running_splash_pid_is_launchds(monkeypatch):
+    out = "app.keepmum.splash = {\n\tstate = running\n\tprogram = /opt/homebrew/bin/splash\n\tpid = 58614\n}"
+    monkeypatch.setattr(splashsvc, "_launchctl", lambda *a: subprocess.CompletedProcess(a, 0, out, ""))
+    assert splashsvc.running_pid() == 58614
+    monkeypatch.setattr(splashsvc, "_launchctl", lambda *a: subprocess.CompletedProcess(a, 113, "", ""))
+    assert splashsvc.running_pid() is None
+
+
 def test_context_info_reads_splash_status(monkeypatch):
     import httpx
 

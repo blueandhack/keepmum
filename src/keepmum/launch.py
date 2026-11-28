@@ -149,6 +149,8 @@ def build_proxy(cfg: Config, pii: bool | None = None, rules_only: bool = False, 
     harm_model.guard = harm
     if mode == "serve" and cfg.guard_injection != "off":
         _update_injection_model(audit, confirm=cfg.guard_injection_confirm)
+    if mode == "serve":
+        watch_splash()
     history = History()
     from .local import servers_for, skills_for
 
@@ -212,6 +214,35 @@ def _update_injection_model(audit, confirm: bool = True) -> threading.Thread | N
     t = threading.Thread(target=update, name="injection-model-update", daemon=True)
     t.start()
     return t
+
+
+_splash_watch: threading.Thread | None = None
+
+
+def watch_splash(every: float | None = None) -> threading.Thread:
+    """While the engine runs, look every splashsvc.WATCH_S (10 min) for a newer Splash than the one
+    keepmum runs (`brew upgrade splash`), and start it again on the new one when it is idle. Only one
+    such thread a process; it does nothing while keepmum runs no Splash."""
+    global _splash_watch
+    from . import splashsvc
+
+    if _splash_watch is not None and _splash_watch.is_alive():
+        return _splash_watch
+    every = splashsvc.WATCH_S if every is None else every
+
+    def watch() -> None:
+        log = logging.getLogger("keepmum")
+        while True:
+            time.sleep(every)
+            try:
+                if new := splashsvc.restart_if_upgraded():
+                    log.info("Splash started again on the newly installed %s", new)
+            except Exception as e:  # a convenience: the next look tries again
+                log.warning("could not start Splash again on its new version: %s", e)
+
+    _splash_watch = threading.Thread(target=watch, name="splash-upgrade-watch", daemon=True)
+    _splash_watch.start()
+    return _splash_watch
 
 
 def bypass_risks(cwd: Path, port: int | None = None) -> list[str]:
