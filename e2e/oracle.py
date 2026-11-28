@@ -352,8 +352,10 @@ def judge(case: Case, salt: bytes, exchanges: list[Exchange], before: dict[str, 
     if case.expect.get("quiet"):
         for h in keepmum.get("hits", []):
             what = "what the user typed" if h.get("check") == "harm" else f"a {h.get('source') or 'tool'} result"
+            second = h.get("second")
+            second = "" if second is None else f", second opinion {second}"
             out.append(Finding("false-alarm", f"the {h.get('check')} check flagged {what} ({h.get('chars')} chars, "
-                                              f"score {h.get('score')}): {h.get('action')}", "keepmum"))
+                                              f"score {h.get('score')}{second}): {h.get('action')}", "keepmum"))
     # A check that warns (lets the request through): keepmum recorded it, and the user saw its note.
     for check in case.expect.get("warned", []):
         if check not in keepmum.get("warned", []):

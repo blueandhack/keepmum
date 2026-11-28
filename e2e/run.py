@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -168,6 +169,17 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
     if mode == "scripted" and "timeout" not in case.raw:
         case.timeout = SCRIPTED_TIMEOUT  # a scripted run takes seconds: a hang should not cost five minutes
     started = time.monotonic()
+    # keepmum's own warnings in the run (a check that failed, a second model that did not start): kept
+    # with a failing run, as keepmum.log. keepmum logs no values; they go through case.shown as the rest.
+    engine_log: list[str] = []
+    wall = time.time()  # a log record's time is the wall clock's
+
+    class _Kept(logging.Handler):
+        def emit(self, record):
+            engine_log.append(f"{record.created - wall:7.2f}s {record.levelname} {record.getMessage()}")
+
+    kept_handler = _Kept(logging.WARNING)
+    logging.getLogger("keepmum").addHandler(kept_handler)
     os.environ["HOME"] = str(khome)  # keepmum's own: salt, config, audit log
     proxy = None
     proxies = []  # every keepmum the run had: more than one after a restart (restart_after)
@@ -285,7 +297,9 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
                   "scan_s": round(sum(scans) / 1000, 2), "scan_max_ms": round(max(scans), 1) if scans else 0}
         keepmum = {"unresolved": sum(p.stats.unresolved for p in proxies), "timing": timing,
                    "restarted": restarted.is_set(),
-                   "hits": [{k: h.get(k) for k in ("check", "action", "source", "score", "chars")} for h in hits],
+                   # `second`: the injection check's second opinion, its score, or "failed"/"missing" when the
+                   # hit stood without it.
+                   "hits": [{k: h.get(k) for k in ("check", "action", "source", "score", "chars", "second")} for h in hits],
                    "warned": sorted({h.get("check") for h in hits if h.get("action") == "warned"}),
                    # The Tools page: the network tools the agent offered, each with what it says it does.
                    "tools": [s for p in proxies if p.tools is not None for s in p.tools.snapshot(p.policy)],
@@ -306,11 +320,14 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
             s.stop()
         # The checks' models run in llama-server, started on their first check and otherwise
         # stopped only after a while unused: stop them with the run, or each run leaves one behind.
+        # The injection check's second model too (Nov 27: left running, one was behind every run that
+        # flagged anything, for ten minutes).
         for g in (g for p in proxies for g in p.guards):
-            for model in (g.model, getattr(g.model, "_model", None)):  # the harm check wraps its model
+            for model in (g.model, getattr(g.model, "_model", None), getattr(g, "confirm", None)):  # harm wraps its model
                 with contextlib.suppress(Exception):
                     getattr(model, "unload", lambda: None)()
         os.environ["HOME"] = REAL_HOME
+        logging.getLogger("keepmum").removeHandler(kept_handler)
     after = oracle.snapshot(ws)
     outputs = []
     for want in case.expect.get("run", []):
@@ -374,6 +391,8 @@ def run_one(case, agent, mode: str, rep: int, model: str | None, extra: list[str
                 "reply": case.shown(ex.reply.decode("utf-8", "replace"))}) + "\n" for ex in local))
         if mcp_log:
             (d / "mcp.jsonl").write_text(case.shown(mcp_log))
+        if engine_log:
+            (d / "keepmum.log").write_text(case.shown("\n".join(engine_log) + "\n"))
         (d / "workspace.json").write_text(json.dumps({case.shown(k): case.shown(v.decode("utf-8", "replace"))
                                                       for k, v in after.items()}, indent=1))
         result["kept"] = str(d)
